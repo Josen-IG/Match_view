@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, date
 import time
 import os
+from pathlib import Path
 
 # --- Módulo de vídeo (video_track.py). Si falta o faltan dependencias,
 # la app sigue funcionando; solo la pantalla de Vídeo avisa del problema.
@@ -598,7 +599,7 @@ elif st.session_state.pagina == "video":
             if ruta_video and os.path.isfile(ruta_video):
                 with st.spinner("Buscando el saque inicial (primeros 15 min, ~1-3 min en CPU)..."):
                     try:
-                        sugerido = suggest_kickoff(ruta_video)
+                        sugerido = suggest_kickoff(Path(ruta_video))
                     except VideoProcessingError as err:
                         st.error(str(err))
                         sugerido = None
@@ -627,7 +628,7 @@ elif st.session_state.pagina == "video":
         if ruta_video and os.path.isfile(ruta_video):
             with st.spinner("Detectando la paleta de camisetas (muestras de todo el vídeo)..."):
                 try:
-                    st.session_state.video_paleta = detect_shirt_colors(ruta_video)
+                    st.session_state.video_paleta = detect_shirt_colors(Path(ruta_video))
                 except VideoProcessingError as err:
                     st.error(str(err))
         else:
@@ -716,7 +717,7 @@ elif st.session_state.pagina == "video":
                     estado.write(mensaje)
                 try:
                     informe = analyze_video_full(
-                        ruta_video, os.environ["GROQ_API_KEY"],
+                        Path(ruta_video), os.environ["GROQ_API_KEY"],
                         color_local=color_local_elegido,
                         color_visitante=color_visitante_elegido,
                         team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],

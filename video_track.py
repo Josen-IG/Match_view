@@ -142,9 +142,9 @@ def _run(command: list[str]) -> str:
     return result.stdout.strip()
 
 
-def video_duration(video_path: Path) -> float:
+def video_duration(video_path: Path | str) -> float:
     """Duración del vídeo en segundos (ffprobe)."""
-    video_path = video_path.expanduser().resolve()
+    video_path = Path(video_path).expanduser().resolve()
     if not video_path.is_file():
         raise FileNotFoundError(f"No existe el vídeo: {video_path}")
     output = _run([
@@ -165,7 +165,7 @@ def video_duration(video_path: Path) -> float:
 
 
 def export_clip(
-    video_path: Path,
+    video_path: Path | str,
     start_seconds: float,
     end_seconds: float,
     output_dir: Path | None = None,
@@ -175,7 +175,7 @@ def export_clip(
 
     Los tiempos son ABSOLUTOS del vídeo (no relativos al saque inicial).
     """
-    video_path = video_path.expanduser().resolve()
+    video_path = Path(video_path).expanduser().resolve()
     duration = video_duration(video_path)
     start = max(0.0, min(float(start_seconds), duration))
     end = max(start, min(float(end_seconds), duration))
@@ -328,7 +328,7 @@ def _clasificar_color(hsv, ref_local, ref_visitante) -> str:
 
 
 def detect_shirt_colors(
-    video_path: Path,
+    video_path: Path | str,
     yolo_model: str = DEFAULT_YOLO_MODEL,
     imgsz: int = 640,
     max_frames: int = 20,
@@ -346,7 +346,7 @@ def detect_shirt_colors(
     import cv2
     from ultralytics import YOLO
 
-    video_path = video_path.expanduser().resolve()
+    video_path = Path(video_path).expanduser().resolve()
     duration = video_duration(video_path)
     update = progress or (lambda _m, _v: None)
     try:
@@ -432,7 +432,7 @@ def detect_shirt_colors(
 # Sugerencia automática del saque inicial
 # ---------------------------------------------------------------------------
 def suggest_kickoff(
-    video_path: Path,
+    video_path: Path | str,
     yolo_model: str = DEFAULT_YOLO_MODEL,
     imgsz: int = 640,
     max_scan_minutes: float = 15,
@@ -450,7 +450,7 @@ def suggest_kickoff(
     import cv2
     from ultralytics import YOLO
 
-    video_path = video_path.expanduser().resolve()
+    video_path = Path(video_path).expanduser().resolve()
     duration = video_duration(video_path)
     limite = min(duration, float(max_scan_minutes) * 60.0)
     update = progress or (lambda _m, _v: None)
@@ -516,7 +516,7 @@ def suggest_kickoff(
 # Tracking continuo
 # ---------------------------------------------------------------------------
 def _track_video(
-    video_path: Path,
+    video_path: Path | str,
     yolo_model: str,
     sample_fps: int,
     imgsz: int,
@@ -537,6 +537,7 @@ def _track_video(
     imagen), no de campo: con cámara que sigue al balón no hay correspondencia
     fija con el campo.
     """
+    video_path = Path(video_path).expanduser().resolve()
     import numpy as np
     import cv2
     from ultralytics import YOLO
@@ -952,8 +953,9 @@ def _dedup_y_limitar(candidatos: list[dict], max_candidates: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Fotogramas para Groq
 # ---------------------------------------------------------------------------
-def _extraer_fotogramas(video_path: Path, timestamps_video: list[float]) -> list[tuple[float, str]]:
+def _extraer_fotogramas(video_path: Path | str, timestamps_video: list[float]) -> list[tuple[float, str]]:
     """Extrae fotogramas en los instantes ABSOLUTOS dados. Devuelve [(t, base64_jpeg)]."""
+    video_path = Path(video_path).expanduser().resolve()
     import cv2
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -1053,7 +1055,7 @@ def _clasificar_candidato(client, model: str, frames: list[tuple[float, str]],
 # Función principal (interna: devuelve resultados + resumen)
 # ---------------------------------------------------------------------------
 def _analizar_impl(
-    video_path: Path,
+    video_path: Path | str,
     api_key: str,
     color_local: str,
     color_visitante: str,
@@ -1074,7 +1076,7 @@ def _analizar_impl(
     camera_mode: str,
     progress: ProgressCallback | None,
 ) -> dict:
-    video_path = video_path.expanduser().resolve()
+    video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
         raise ValueError("El muestreo debe estar entre 1 y 10 fps.")
     if not 1 <= max_candidates <= 20:
@@ -1210,7 +1212,7 @@ def _analizar_impl(
 
 
 def analyze_video(
-    video_path: Path,
+    video_path: Path | str,
     api_key: str,
     color_local: str = "#1E88E5",
     color_visitante: str = "#E53935",
@@ -1250,7 +1252,7 @@ def analyze_video(
 
 
 def analyze_video_full(
-    video_path: Path,
+    video_path: Path | str,
     api_key: str,
     color_local: str = "#1E88E5",
     color_visitante: str = "#E53935",
