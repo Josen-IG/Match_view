@@ -4,6 +4,31 @@ from datetime import datetime, date
 import time
 import os
 
+# --- Módulo de vídeo (video_track.py). Si falta o faltan dependencias,
+# la app sigue funcionando; solo la pantalla de Vídeo avisa del problema.
+try:
+    from video_track import (
+        analyze_video_full, suggest_kickoff, detect_shirt_colors,
+        parse_mmss, format_mmss, VideoProcessingError,
+        DEFAULT_YOLO_MODEL, DEFAULT_GROQ_MODEL,
+        DEFAULT_MIN_CONFIDENCE, DEFAULT_MAX_CANDIDATES,
+        DEFAULT_SAMPLE_FPS, EVENT_NAMES_ES,
+    )
+    VIDEO_DISPONIBLE = True
+    VIDEO_ERROR = ""
+except Exception as _video_err:  # noqa: BLE001 - el vídeo es opcional
+    analyze_video_full = None
+    suggest_kickoff = None
+    detect_shirt_colors = None
+    parse_mmss = None
+    format_mmss = None
+    VideoProcessingError = RuntimeError
+    DEFAULT_YOLO_MODEL, DEFAULT_GROQ_MODEL = "yolo11s.pt", "qwen/qwen3.8-27b"
+    DEFAULT_MIN_CONFIDENCE, DEFAULT_MAX_CANDIDATES, DEFAULT_SAMPLE_FPS = 0.65, 15, 10
+    EVENT_NAMES_ES = {}
+    VIDEO_DISPONIBLE = False
+    VIDEO_ERROR = str(_video_err)
+
 st.set_page_config(page_title="Match View - Regional Preferente Navarra", layout="wide")
 
 # --- 1. CARGA DE PLANTILLAS DESDE EL EXCEL ---
@@ -54,9 +79,20 @@ POSICIONES = ["POR", "DEF", "MED", "DEL"]
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "pagina" not in st.session_state:
-    st.session_state.pagina = "alineaciones"  # "alineaciones", "partido", "final"
+    st.session_state.pagina = "alineaciones"  # "alineaciones", "partido", "final", "video"
 if "eventos" not in st.session_state:
     st.session_state.eventos = []
+# Estado de la pantalla de Vídeo (análisis YOLO + Groq, video_track.py)
+if "video_informe" not in st.session_state:
+    st.session_state.video_informe = None
+if "video_seleccionado" not in st.session_state:
+    st.session_state.video_seleccionado = None
+if "video_paleta" not in st.session_state:
+    st.session_state.video_paleta = None
+if "video_kickoff_text" not in st.session_state:
+    st.session_state.video_kickoff_text = "00:00"
+if "video_anadidos" not in st.session_state:
+    st.session_state.video_anadidos = set()
 if "inicio_tiempo" not in st.session_state:
     st.session_state.inicio_tiempo = None
 if "tiempo_acumulado" not in st.session_state:
@@ -119,6 +155,59 @@ FORMACIONES_COORDS = {
     "1-3-5-2": [(8,50), (20,25), (20,50), (20,75), (34,15), (34,32), (32,50), (34,68), (34,85), (46,35), (46,65)],
     "1-5-3-2": [(8,50), (20,15), (20,32), (20,50), (20,68), (20,85), (34,30), (34,50), (34,70), (46,35), (46,65)]
 }
+
+# --- 3b. VÍDEO: jugadas de video_track.py -> eventos de match.py ---
+# El guardado desde vídeo es MANUAL: nada se añade al CSV sin pulsar
+# "Añadir a eventos". Zona: en cámara de seguimiento es "Sin especificar"
+# (la posición en imagen no es posición en el campo); en cámara fija amplia
+# video_track.py la calcula como aproximación Z1-Z9.
+MAPEO_VIDEO_EVENTO = {
+    "goal": ("Tiro", "Gol", 0.35),
+    "shot": ("Tiro", "A puerta", 0.18),
+    "shot_on_target": ("Tiro", "A puerta", 0.18),
+    "shot_off_target": ("Tiro", "Fuera", 0.10),
+    "pass": ("Ataque", "Pase", 0.04),
+    "key_pass": ("Ataque", "Pase clave", 0.12),
+    "cross": ("Ataque", "Centro", 0.08),
+    "corner": ("ABP", "Córner", 0.04),
+    "foul": ("Falta", "Cometida", 0.04),
+    "card": ("Disciplina", "Tarjeta", 0.04),
+    "duel": ("Defensa", "Duelo", 0.04),
+    "recovery": ("Defensa", "Recuperación", 0.04),
+    "loss": ("Posesión", "Pérdida", 0.04),
+    "transition": ("Ataque", "Transición", 0.06),
+    "counterattack": ("Ataque", "Contraataque", 0.08),
+    "area_entry": ("Ataque", "Entrada al área", 0.10),
+    "set_piece": ("ABP", "Balón parado", 0.04),
+    "gk_distribution": ("Posesión", "Distribución portero", 0.02),
+    # "uncertain": no se puede añadir (no hay jugada clara)
+}
+
+def video_resultado_a_evento(resultado, dp):
+    """Convierte un corte clasificado en un dict de evento de match.py."""
+    mapeo = MAPEO_VIDEO_EVENTO.get(resultado["event"])
+    if mapeo is None:
+        return None
+    evento, detalle, xt = mapeo
+    segundos = float(resultado["seconds"])
+    return {
+        "ID": len(st.session_state.eventos) + 1,
+        "Temporada": dp["temporada"],
+        "Competicion": dp["competicion"],
+        "Fecha": str(dp["fecha"]),
+        "Descripcion": dp["descripcion"],
+        "Periodo": "1ª Parte" if segundos < 2700 else "2ª Parte",
+        "Minuto": f"{int(segundos // 60):02d}:{int(segundos % 60):02d}",
+        "Equipo": resultado["team"],
+        "Zona": resultado["zone"],
+        "Evento": evento,
+        "Detalle": detalle,
+        "Jugador": "Vídeo IA",
+        "Segundo_Video": round(segundos, 1),
+        "X": resultado["ball_x"],
+        "Y": resultado["ball_y"],
+        "xT": xt,
+    }
 
 # --- 4. PANTALLA 1: MENÚ PRINCIPAL (ALINEACIONES Y CONFIGURACIÓN) ---
 if st.session_state.pagina == "alineaciones":
@@ -309,6 +398,10 @@ elif st.session_state.pagina == "partido":
         if st.button("🏁 Finalizar Partido", type="primary", use_container_width=True):
             st.session_state.pagina = "final"
             st.rerun()
+        st.write("")
+        if st.button("🎥 Vídeo", use_container_width=True):
+            st.session_state.pagina = "video"
+            st.rerun()
 
     st.divider()
 
@@ -373,10 +466,14 @@ elif st.session_state.pagina == "partido":
 elif st.session_state.pagina == "final":
     dp = st.session_state.datos_partido
 
-    col_b1, col_b2 = st.columns([1, 4])
+    col_b1, col_b1b, col_b2 = st.columns([1, 1.2, 3])
     with col_b1:
         if st.button("⬅️ Volver al Partido", use_container_width=True):
             st.session_state.pagina = "partido"
+            st.rerun()
+    with col_b1b:
+        if st.button("🎥 Analizar Vídeo", use_container_width=True):
+            st.session_state.pagina = "video"
             st.rerun()
     with col_b2:
         st.markdown(f"### 📊 Menú Final y Post-Partido: {dp['eq_local']} vs {dp['eq_visitante']} ({dp['descripcion']})")
@@ -442,3 +539,264 @@ elif st.session_state.pagina == "final":
                 st.session_state.eventos = []
                 st.session_state.pagina = "alineaciones"
                 st.rerun()
+
+# --- 7. PANTALLA 4: VÍDEO (análisis YOLO + Groq) ---
+elif st.session_state.pagina == "video":
+    dp = st.session_state.datos_partido
+
+    col_v1, col_v2, col_v3 = st.columns([1, 1.2, 3])
+    with col_v1:
+        if st.button("⬅️ Partido", use_container_width=True):
+            st.session_state.pagina = "partido"
+            st.rerun()
+    with col_v2:
+        if st.button("📊 Final / CSV", use_container_width=True):
+            st.session_state.pagina = "final"
+            st.rerun()
+    with col_v3:
+        st.markdown(f"### 🎥 Análisis de Vídeo: {dp['eq_local']} vs {dp['eq_visitante']}")
+
+    st.divider()
+
+    if not VIDEO_DISPONIBLE:
+        st.error("⚠️ El módulo de vídeo no está disponible en este equipo.")
+        st.caption(f"Detalle: {VIDEO_ERROR}")
+        st.info("Instala las dependencias en PowerShell: "
+                "py -m pip install ultralytics opencv-python-headless groq")
+        st.stop()
+
+    st.caption("Cámara que sigue al balón (VEO o móvil): el tracking es relativo "
+               "(trayectoria, proximidad, velocidad, agrupación). La zona Z1-Z9 solo "
+               "se calcula como aproximación si eliges cámara fija amplia; en "
+               "seguimiento queda 'Sin especificar'. Los primeros minutos son "
+               "calentamiento: no se analizan.")
+
+    # --- Ruta del vídeo ---
+    ruta_video = st.text_input(
+        "Ruta local del vídeo del partido completo",
+        value=st.session_state.get("video_path", ""),
+        key="video_path_input",
+        placeholder=r"C:\Videos\partido_jornada1.mp4",
+    )
+    st.session_state.video_path = ruta_video
+
+    # --- Saque inicial (manual manda; sugerencia automática opcional) ---
+    st.markdown("##### 🕐 Saque inicial (inicio del partido)")
+    c_k1, c_k2, c_k3 = st.columns([1.2, 1.4, 3])
+    with c_k1:
+        st.session_state.video_kickoff_text = st.text_input(
+            "Saque inicial (MM:SS)", value=st.session_state.video_kickoff_text,
+            key="video_kickoff_input",
+            help="Minuto:segundo del saque inicial en el vídeo. "
+                 "Todo lo anterior es calentamiento y no se analiza.",
+        )
+    with c_k2:
+        st.write("")
+        if st.button("🔍 Sugerir inicio", use_container_width=True,
+                     help="Busca el primer momento con balón en el centro y "
+                          "formación 11+11. Es una sugerencia: el valor manual manda."):
+            if ruta_video and os.path.isfile(ruta_video):
+                with st.spinner("Buscando el saque inicial (primeros 15 min, ~1-3 min en CPU)..."):
+                    try:
+                        sugerido = suggest_kickoff(ruta_video)
+                    except VideoProcessingError as err:
+                        st.error(str(err))
+                        sugerido = None
+                if sugerido is not None:
+                    # Actualizar tanto el texto como la clave del widget, si no el
+                    # rerun restauraría el valor anterior del input.
+                    st.session_state.video_kickoff_text = format_mmss(sugerido)
+                    st.session_state.video_kickoff_input = format_mmss(sugerido)
+                    st.success(f"Saque inicial sugerido: {format_mmss(sugerido)}. "
+                               "Revísalo y corrígelo si hace falta.")
+                    st.rerun()
+                else:
+                    st.warning("No se encontró un saque inicial claro. Ponlo a mano (MM:SS).")
+            else:
+                st.warning("Primero escribe una ruta de vídeo válida.")
+    with c_k3:
+        st.write("")
+        st.caption("Ejemplo: si el saque inicial es a los 4:32 del vídeo, escribe 04:32. "
+                   "Todos los cortes se calculan relativos a ese inicio.")
+
+    # --- Colores de camiseta: paleta detectada + asignación manual ---
+    st.markdown("##### 🎨 Colores de camiseta (asignación manual)")
+    st.caption("Los colores de la pantalla de Alineaciones son solo el valor inicial. "
+               "Detecta la paleta del vídeo y asigna tú qué color es cada equipo.")
+    if st.button("🎨 Detectar colores de camiseta"):
+        if ruta_video and os.path.isfile(ruta_video):
+            with st.spinner("Detectando la paleta de camisetas (muestras de todo el vídeo)..."):
+                try:
+                    st.session_state.video_paleta = detect_shirt_colors(ruta_video)
+                except VideoProcessingError as err:
+                    st.error(str(err))
+        else:
+            st.warning("Primero escribe una ruta de vídeo válida.")
+    paleta = st.session_state.video_paleta
+    opciones_color = [dp["color_local"], dp["color_visitante"]]
+    if paleta:
+        for item in paleta:
+            if item["hex"] not in opciones_color:
+                opciones_color.append(item["hex"])
+        cols_paleta = st.columns(len(paleta))
+        for col, item in zip(cols_paleta, paleta):
+            with col:
+                st.markdown(
+                    f'<div style="background:{item["hex"]}; height:36px; border-radius:6px; '
+                    f'border:1px solid #888;"></div>'
+                    f'<div style="text-align:center; font-size:12px;">{item["hex"]} · {item["share"]:.0%}</div>',
+                    unsafe_allow_html=True,
+                )
+    c_c1, c_c2 = st.columns(2)
+    with c_c1:
+        color_local_elegido = st.selectbox(
+            f"Color {dp['eq_local']} (local)", opciones_color,
+            index=opciones_color.index(dp["color_local"]),
+            key="video_color_local",
+        )
+    with c_c2:
+        color_visitante_elegido = st.selectbox(
+            f"Color {dp['eq_visitante']} (visitante)", opciones_color,
+            index=opciones_color.index(dp["color_visitante"]),
+            key="video_color_visitante",
+        )
+
+    # --- Parámetros de análisis ---
+    st.markdown("##### ⚙️ Parámetros de análisis")
+    st.caption("CPU Ryzen 7 (sin GPU): un partido de 90 min tarda más que en tiempo real. "
+               "Prueba primero con 10 minutos. YOLO11s es el equilibrio; 11n es más rápido "
+               "y 11m más preciso pero más lento.")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        sample_fps = st.slider("Muestreo (fps)", 1, 10, DEFAULT_SAMPLE_FPS,
+                               help="Fotogramas por segundo analizados. 10 fps por defecto.")
+        max_candidatos = st.slider("Máx. candidatos", 1, 20, DEFAULT_MAX_CANDIDATES)
+    with p2:
+        min_conf = st.slider("Confianza mínima", 0.50, 0.90, DEFAULT_MIN_CONFIDENCE, 0.05,
+                             help="Solo se corta clip si Groq confía al menos esto.")
+        yolo_modelo = st.selectbox("Modelo YOLO", ["yolo11s.pt", "yolo11n.pt", "yolo11m.pt"], index=0)
+    with p3:
+        camera_mode_txt = st.selectbox(
+            "Tipo de cámara",
+            ["Seguimiento (VEO / móvil)", "Fija amplia (todo el campo en plano)"],
+            index=0,
+            help="Seguimiento: la cámara sigue al balón; el tracking es relativo y la "
+                 "zona queda 'Sin especificar'. Fija amplia: se calcula Z1-Z9 por aproximación.",
+        )
+        alcance_txt = st.selectbox(
+            "Alcance", ["Primeros 10 minutos (prueba)", "Partido completo"], index=0,
+        )
+    groq_modelo = st.text_input("Modelo Groq (visión)", value=DEFAULT_GROQ_MODEL,
+                                help="Modelo multimodal de Groq. Verificado en 2026: "
+                                     "qwen/qwen3.8-27b. Si Groq lo retira, cambiar aquí.")
+    groq_ok = bool(os.environ.get("GROQ_API_KEY"))
+    if groq_ok:
+        st.success("GROQ_API_KEY configurada (desde entorno).")
+    else:
+        st.warning("GROQ_API_KEY no está configurada. En PowerShell: "
+                   '$env:GROQ_API_KEY = "tu_clave" y abre Streamlit desde esa misma terminal.')
+
+    # --- Analizar ---
+    if st.button("▶️ Analizar vídeo", type="primary", use_container_width=True):
+        if not ruta_video or not os.path.isfile(ruta_video):
+            st.error("Escribe una ruta de vídeo válida.")
+        elif not groq_ok:
+            st.error("Falta GROQ_API_KEY (ver aviso de arriba).")
+        else:
+            try:
+                kickoff_s = parse_mmss(st.session_state.video_kickoff_text)
+            except (ValueError, TypeError):
+                st.error("El saque inicial debe ser MM:SS, por ejemplo 04:32.")
+                kickoff_s = None
+            if kickoff_s is not None:
+                barra = st.progress(0.0)
+                estado = st.empty()
+                def _progreso(mensaje, fraccion):
+                    barra.progress(min(1.0, max(0.0, float(fraccion))))
+                    estado.write(mensaje)
+                try:
+                    informe = analyze_video_full(
+                        ruta_video, os.environ["GROQ_API_KEY"],
+                        color_local=color_local_elegido,
+                        color_visitante=color_visitante_elegido,
+                        team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
+                        sample_fps=sample_fps, max_candidates=max_candidatos,
+                        min_confidence=min_conf, yolo_model=yolo_modelo,
+                        groq_model=groq_modelo,
+                        max_minutes=10.0 if alcance_txt.startswith("Primeros") else None,
+                        kickoff_offset=kickoff_s,
+                        camera_mode=("seguimiento" if camera_mode_txt.startswith("Seguimiento")
+                                     else "fija_amplia"),
+                        progress=_progreso,
+                    )
+                    st.session_state.video_informe = informe
+                    st.session_state.video_seleccionado = None
+                    estado.write("✅ Análisis completado.")
+                except VideoProcessingError as err:
+                    st.error(str(err))
+                except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo del análisis
+                    st.error(f"Error inesperado durante el análisis: {err}")
+
+    # --- Resultados ---
+    informe = st.session_state.video_informe
+    if informe:
+        resultados = informe.get("results", [])
+        st.divider()
+        st.markdown("#### 📋 Cortes detectados")
+        st.caption(f"Saque inicial: {format_mmss(informe['kickoff_offset_s'])} · "
+                   f"Partido analizado: {format_mmss(informe['match_duration_s'])} · "
+                   f"Muestras YOLO: {informe['samples_analyzed']}")
+        # Posesión por tramos
+        tramos = informe.get("possession_by_period", [])
+        if tramos:
+            st.markdown("**Posesión por tramos:**")
+            st.dataframe(pd.DataFrame(tramos), use_container_width=True, hide_index=True)
+        con_clip = [r for r in resultados if r["clip_path"]]
+        sin_clip = [r for r in resultados if not r["clip_path"]]
+        if not resultados:
+            st.warning("YOLO no encontró señales claras de jugada en el tramo analizado.")
+        for idx, res in enumerate(con_clip):
+            nombre = EVENT_NAMES_ES.get(res["event"], res["event"])
+            etiqueta = (f"{format_mmss(res['seconds'])} | {nombre} "
+                        f"({int(res['confidence'] * 100)}%) - {res['summary']}")
+            if st.button(etiqueta, key=f"video_btn_{idx}", use_container_width=True):
+                st.session_state.video_seleccionado = res
+                st.rerun()
+        # Clip seleccionado
+        sel = st.session_state.video_seleccionado
+        if sel is not None and sel.get("clip_path"):
+            st.divider()
+            nombre_sel = EVENT_NAMES_ES.get(sel["event"], sel["event"])
+            st.markdown(f"##### ▶️ {format_mmss(sel['seconds'])} | {nombre_sel} "
+                        f"({int(sel['confidence'] * 100)}%)")
+            st.write(sel["summary"])
+            st.video(sel["clip_path"])
+            st.caption(f"Equipo: {sel['team']} · Zona: {sel['zone']} · "
+                       f"Balón en plano X={sel['ball_x']}, Y={sel['ball_y']} · "
+                       f"YOLO: {sel['yolo_people']} personas, balón {'sí' if sel['yolo_ball'] else 'no'}")
+            st.caption(f"Señales: {sel['reason']}")
+            clave = f"{sel['seconds']}_{sel['event']}"
+            if clave in st.session_state.video_anadidos:
+                st.success("✅ Ya añadido a eventos.")
+            else:
+                if st.button("➕ Añadir a eventos", type="primary", key="video_add_btn"):
+                    evento = video_resultado_a_evento(sel, dp)
+                    if evento is None:
+                        st.warning("Esta jugada no se puede añadir a eventos.")
+                    else:
+                        st.session_state.eventos.append(evento)
+                        st.session_state.video_anadidos.add(clave)
+                        st.success(f"Añadido: {evento['Evento']} - {evento['Detalle']} "
+                                   f"({evento['Minuto']}, {evento['Equipo']}). "
+                                   "No se guarda en el CSV hasta que lo descargues en Final.")
+                        st.rerun()
+        # Descartados / inciertos
+        if sin_clip:
+            with st.expander(f"⚠️ Candidatos descartados / inciertos ({len(sin_clip)})", expanded=False):
+                st.caption("Groq no vio una jugada clara o la confianza fue baja. "
+                           "Se muestran para que veas por qué no se cortó el clip.")
+                for res in sin_clip:
+                    nombre = EVENT_NAMES_ES.get(res["event"], res["event"])
+                    st.write(f"- {format_mmss(res['seconds'])} | {nombre} "
+                             f"({int(res['confidence'] * 100)}%) - {res['summary']} "
+                             f"[{res['reason']}]")
