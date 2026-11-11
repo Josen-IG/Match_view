@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro de Jugadores - Fútbol Base</title>
+    <style>
+        body {
+            background-color: #002b5b;
+            color: white;
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            color: white;
+        }
+
+        form {
+            background-color: #004b8d;
+            padding: 20px;
+            border-radius: 10px;
+            width: 80%;
+            margin: auto;
+        }
+
+        .section-title {
+            background-color: #003a73;
+            text-align: center;
+            font-weight: bold;
+            font-size: 20px;
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        label {
+            display: block;
+            margin-top: 10px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 8px;
+            margin-top: 4px;
+            border: none;
+            border-radius: 5px;
+        }
+
+        .button-container {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        button {
+            background-color: #a9a9a9;
+            color: black;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background-color: #888;
+        }
+
+        .table-container {
+            width: 90%;
+            margin: 30px auto;
+            overflow-x: auto;
+            background-color: #003a73;
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            color: white;
+            text-align: center;
+        }
+
+        th, td {
+            border: 1px solid #005fa3;
+            padding: 8px;
+            white-space: nowrap;
+        }
+
+        th {
+            background-color: #004b8d;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Registro de Jugadores - Fútbol Base</h1>
+
+    <form id="playerForm">
+
+        <!-- DATOS PERSONALES -->
+        <div class="section-title">DATOS PERSONALES</div>
+        <label>Nombre:</label>
+        <input type="text" name="nombre">
+
+        <label>Edad:</label>
+        <input type="number" name="edad">
+
+        <label>Posición principal:</label>
+        <input type="text" name="posicion_principal">
+
+        <label>Equipo actual:</label>
+        <input type="text" name="equipo_actual">
+
+
+        <!-- ASPECTOS TÉCNICOS -->
+        <div class="section-title">ASPECTOS TÉCNICOS</div>
+        <label>Control de balón:</label>
+        <input type="number" name="control_balon" min="1" max="10">
+
+        <label>Pase:</label>
+        <input type="number" name="pase" min="1" max="10">
+
+        <label>Tiro:</label>
+        <input type="number" name="tiro" min="1" max="10">
+
+        <label>Regate:</label>
+        <input type="number" name="regate" min="1" max="10">
+
+        <label>Primer toque:</label>
+        <input type="number" name="primer_toque" min="1" max="10">
+
+
+        <!-- ASPECTOS TÁCTICOS -->
+        <div class="section-title">ASPECTOS TÁCTICOS</div>
+        <label>Visión de juego:</label>
+        <input type="number" name="vision_juego" min="1" max="10">
+
+        <label>Ubicación en el campo:</label>
+        <input type="number" name="ubicacion" min="1" max="10">
+
+        <label>Lectura del juego:</label>
+        <input type="number" name="lectura_juego" min="1" max="10">
+
+
+        <!-- ASPECTOS FÍSICOS -->
+        <div class="section-title">ASPECTOS FÍSICOS</div>
+        <label>Velocidad:</label>
+        <input type="number" name="velocidad" min="1" max="10">
+
+        <label>Fuerza:</label>
+        <input type="number" name="fuerza" min="1" max="10">
+
+        <label>Resistencia:</label>
+        <input type="number" name="resistencia" min="1" max="10">
+
+        <label>Salto:</label>
+        <input type="number" name="salto" min="1" max="10">
+
+
+        <!-- ASPECTOS MENTALES Y ACTITUDES -->
+        <div class="section-title">ASPECTOS MENTALES Y ACTITUDES</div>
+        <label>Concentración:</label>
+        <input type="number" name="concentracion" min="1" max="10">
+
+        <label>Actitud competitiva:</label>
+        <input type="number" name="actitud_competitiva" min="1" max="10">
+
+        <label>Trabajo en equipo:</label>
+        <input type="number" name="trabajo_equipo" min="1" max="10">
+
+        <label>Comunicación:</label>
+        <input type="number" name="comunicacion" min="1" max="10">
+
+
+        <!-- ESTADÍSTICAS DE RENDIMIENTO -->
+        <div class="section-title">ESTADÍSTICAS DE RENDIMIENTO</div>
+        <label>Goles:</label>
+        <input type="number" name="goles">
+
+        <label>Asistencias:</label>
+        <input type="number" name="asistencias">
+
+        <label>Tarjetas amarillas:</label>
+        <input type="number" name="amarillas">
+
+        <label>Tarjetas rojas:</label>
+        <input type="number" name="rojas">
+
+        <label>Minutos jugados:</label>
+        <input type="number" name="minutos">
+
+
+        <!-- SEGUIMIENTO -->
+        <div class="section-title">SEGUIMIENTO</div>
+        <label>Observaciones del entrenador:</label>
+        <input type="text" name="observaciones">
+
+        <label>Fecha de evaluación:</label>
+        <input type="date" name="fecha">
+
+        <div class="button-container">
+            <button type="submit">Agregar jugador</button>
+            <button type="button" id="downloadBtn">Descargar CSV</button>
+        </div>
+
+    </form>
+
+    <div class="table-container">
+        <table id="playerTable">
+            <thead></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script>
+        const form = document.getElementById('playerForm');
+        const table = document.getElementById('playerTable');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const players = [];
+
+        form.addEventListener('submit', e => {
+            e.preventDefault();
+            const formData = new FormData(form);
+            const player = {};
+            formData.forEach((value, key) => player[key] = value);
+            players.push(player);
+            updateTable();
+            form.reset();
+        });
+
+        function updateTable() {
+            const keys = Object.keys(players[0] || {});
+            const thead = table.querySelector('thead');
+            const tbody = table.querySelector('tbody');
+            thead.innerHTML = "";
+            tbody.innerHTML = "";
+
+            if (keys.length) {
+                const headerRow = document.createElement('tr');
+                keys.forEach(k => {
+                    const th = document.createElement('th');
+                    th.textContent = k.replaceAll('_', ' ').toUpperCase();
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+
+                players.forEach(player => {
+                    const row = document.createElement('tr');
+                    keys.forEach(k => {
+                        const td = document.createElement('td');
+                        td.textContent = player[k];
+                        row.appendChild(td);
+                    });
+                    tbody.appendChild(row);
+                });
+            }
+        }
+
+        downloadBtn.addEventListener('click', () => {
+            if (players.length === 0) {
+                alert("No hay jugadores registrados.");
+                return;
+            }
+            const keys = Object.keys(players[0]);
+            const csv = [keys.join(','), ...players.map(p => keys.map(k => p[k]).join(','))].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'jugadores.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+    </script>
+
+</body>
+</html>

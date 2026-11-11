@@ -1,3 +1,8 @@
 streamlit
 pandas
-openpyxl
+numpy
+plotly
+scipy
+groq
+ultralytics
+lap>=0.5.12
