@@ -123,10 +123,42 @@ y (solo en fija amplia) si cruza la línea de gol o entra al área.
 | Pase clave | Mismo equipo, balón largo que acaba en el área o en zona del portero | 0,65 |
 | Entrada al área | Del tercio medio al tercio final (fija amplia) o a zona del portero | 0,60 |
 | Pase | Balón rápido que recorre distancia, mismo equipo | 0,65 |
+| Pase (por trayectoria) | Cambio de portador del mismo equipo con vuelo (aunque el balón no sea rápido: la mayoría de los pases de centro del campo) | 0,70 |
+| Pase clave (por trayectoria) | Pase por trayectoria largo (≥12 alturas) o que acaba en zona del portero | 0,70 |
 
 La confianza nunca pasa de 0,80: sin ver la jugada no se puede asegurar
 un gol o un córner. La posesión por tramos (15') se sigue calculando del
 tracking y se muestra en la pantalla de Vídeo.
+
+## Estadísticas e informe del partido (analista profesional)
+
+Cada análisis, además de los cortes, calcula estadísticas del tracking y
+escribe un informe junto a los clips, en la carpeta `<video>_clips`:
+
+- **`<video>_informe.md`**: resumen con tablas (posesión por tramos,
+  eventos por equipo, pases, tiros, territorio y balón) y lista de cortes.
+- **`<video>_eventos.csv`**: una fila por corte (minuto, evento, equipo,
+  confianza, resumen, zona, clip).
+- **`<video>_estadisticas.csv`**: una fila por métrica, con la columna de
+  cada equipo.
+
+**Pases por trayectoria**: un pase es un cambio de portador —el balón sale
+de un jugador y, tras un vuelo sin portador (0,2-4 s, balón rápido), llega
+a un compañero; si llega a un rival es un pase fallido. Con eso se calculan
+pases intentados/completados, precisión, distancia media y **secuencias**
+(cadenas de pases seguidos del mismo equipo, con menos de 8 s entre ellos:
+número de secuencias, la más larga y la media). El clasificador usa estos
+pases para etiquetar pases que no son rápidos (regla 11b).
+
+**Territorio**: en seguimiento no hay posición en el campo, así que el
+tercio de ataque es un proxy: % de muestras con el balón más cerca de la
+portería rival que de la propia (según la posición de cada portero).
+
+**Balón**: distancia recorrida (en alturas de jugador), velocidad media y
+máxima, y % de muestras con balón detectado (cobertura del tracking).
+
+En la pantalla de Vídeo de `match.py` se muestra la tabla de estadísticas
+y hay botones para descargar el informe (.md) y los dos CSV.
 
 ## Cómo probar
 
@@ -148,10 +180,15 @@ python -m py_compile match.py        -> OK
 
 Y prueba de funciones puras (sin vídeo ni GPU): `parse_mmss("04:32") = 272.0`,
 `zona_desde_xy(83, 18) = Z9 - Ataque Der`, deduplicación de candidatos y
-posesión por tramos correctas, y 33/33 checks del clasificador por tracking
+posesión por tramos correctas, 33/33 checks del clasificador por tracking
 con muestras sintéticas (gol, tiro, córner, falta, centro, contraataque,
 duelo, pase clave, entrada al área, gol/tiro con portero, pase atrás no es
-tiro, colores de porteros/árbitro, árbitro excluido de posesión y agrupación).
+tiro, colores de porteros/árbitro, árbitro excluido de posesión y agrupación)
+y 32/32 checks de pases por trayectoria, secuencias, estadísticas, informe
+y regla 11b del clasificador (pase completado/fallido, vuelo largo no es
+pase, secuencias por equipo, posesión 50/50, eventos y tiros contados,
+precisión de pase, informe md/csv, pase lento etiquetado como pase 0,70 y
+pase largo como pase clave).
 El análisis completo con vídeo real aún no se ha probado: hace falta un vídeo
 de partido.
 

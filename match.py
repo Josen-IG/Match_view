@@ -772,6 +772,72 @@ elif st.session_state.pagina == "video":
         if tramos:
             st.markdown("**Posesión por tramos:**")
             st.dataframe(pd.DataFrame(tramos), use_container_width=True, hide_index=True)
+        # Estadísticas del partido (pases por trayectoria, tiros, territorio)
+        est = informe.get("estadisticas")
+        if est:
+            st.markdown("#### 📊 Estadísticas del partido")
+            pases_e = est.get("pases", {})
+            tiros_e = est.get("tiros", {})
+            filas_est = []
+            for etiqueta, clave, campo in (
+                    ("Pases intentados", "pases", "total"),
+                    ("Pases completados", "pases", "completados"),
+                    ("Precisión de pase (%)", "pases", "precision_pct"),
+                    ("Secuencias", "pases", "secuencias"),
+                    ("Secuencia más larga (pases)", "pases", "secuencia_max_pases"),
+                    ("Goles", "tiros", "goles"),
+                    ("Tiros a puerta", "tiros", "tiros_a_puerta"),
+                    ("Tiros fuera", "tiros", "tiros_fuera"),
+                    ("Duelos", None, None),
+                    ("Recuperaciones", None, None),
+                    ("Transiciones", None, None),
+                    ("Centros", None, None),
+                    ("Córners", None, None),
+                    ("Balón parado", None, None),
+                    ("Distribuciones de portero", None, None)):
+                if clave == "pases":
+                    filas_est.append({"Métrica": etiqueta,
+                                      dp["eq_local"]: pases_e["local"][campo],
+                                      dp["eq_visitante"]: pases_e["visitante"][campo]})
+                elif clave == "tiros":
+                    filas_est.append({"Métrica": etiqueta,
+                                      dp["eq_local"]: tiros_e["local"][campo],
+                                      dp["eq_visitante"]: tiros_e["visitante"][campo]})
+                else:
+                    mapa = {"Duelos": "duelos", "Recuperaciones": "recuperaciones",
+                            "Transiciones": "transiciones", "Centros": "centros",
+                            "Córners": "corners", "Balón parado": "balon_parado",
+                            "Distribuciones de portero": "distribuciones_portero"}
+                    sub = est.get(mapa[etiqueta], {})
+                    filas_est.append({"Métrica": etiqueta,
+                                      dp["eq_local"]: sub.get("local", 0),
+                                      dp["eq_visitante"]: sub.get("visitante", 0)})
+            filas_est.append({"Métrica": "Territorio de ataque (%)",
+                              dp["eq_local"]: est["territorio"]["local_pct"],
+                              dp["eq_visitante"]: est["territorio"]["visitante_pct"]})
+            filas_est.append({"Métrica": "Posesión (%)",
+                              dp["eq_local"]: est["posesion"]["local_pct"],
+                              dp["eq_visitante"]: est["posesion"]["visitante_pct"]})
+            st.dataframe(pd.DataFrame(filas_est), use_container_width=True, hide_index=True)
+            st.caption(f"Balón: {est['balon']['distancia_recorrida_bh']} alturas recorridas · "
+                       f"velocidad media {est['balon']['velocidad_media_bh']} alturas/s · "
+                       f"máxima {est['balon']['velocidad_max_bh']} · "
+                       f"detectado en el {est['balon']['muestras_con_balon_pct']}% de las muestras.")
+            # Descargar informe (markdown + CSV) generado junto a los clips
+            st.markdown("**Informe completo:**")
+            c_d1, c_d2, c_d3 = st.columns(3)
+            for col, clave, etiqueta, nombre in (
+                    (c_d1, "informe_md", "⬇️ Informe (.md)", "informe.md"),
+                    (c_d2, "eventos_csv", "⬇️ Eventos (.csv)", "eventos.csv"),
+                    (c_d3, "estadisticas_csv", "⬇️ Estadísticas (.csv)", "estadisticas.csv")):
+                ruta_inf = informe.get(clave)
+                with col:
+                    if ruta_inf and os.path.isfile(ruta_inf):
+                        with open(ruta_inf, "rb") as fh:
+                            st.download_button(etiqueta, data=fh.read(),
+                                               file_name=os.path.basename(ruta_inf),
+                                               key=f"video_dl_{clave}",
+                                               use_container_width=True)
         con_clip = [r for r in resultados if r["clip_path"]]
         sin_clip = [r for r in resultados if not r["clip_path"]]
         if not resultados:

@@ -51,6 +51,15 @@ Tracking:
   cambio de posesión, agrupación, avance y (en fija_amplia) cruce de la
   línea de gol y entrada al área. Sin Groq, sin API key, sin límites de
   tokens. La confianza es heurística y nunca pasa de 0,80.
+* Pases por trayectoria: cambio de portador (el balón sale de un jugador,
+  vuela sin portador y llega a un compañero; si llega a un rival es un
+  pase fallido). Base de las estadísticas de pases y secuencias, y el
+  clasificador los usa para etiquetar pases que no son rápidos.
+* Estadísticas e informe: posesión, eventos por equipo y por tramo, pases
+  y secuencias, tiros, duelos, recuperaciones, transiciones, balón parado,
+  territorio (proxy por cercanía a cada portero) y balón (distancia,
+  velocidad, cobertura). Se escriben ``<video>_informe.md`` + 2 CSV junto
+  a los clips, y la pantalla de Vídeo los muestra con descarga.
 * Solo se corta clip si event != "uncertain" y confianza >= 0,65.
 
 Límites honestos de clasificar solo con tracking (sin ver la jugada):
@@ -64,6 +73,7 @@ La posesión por tramos se calcula del tracking, como antes.
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import re
@@ -103,6 +113,13 @@ DEFAULT_GK_COLOR_VISITANTE = "#FF9800"      # portero visitante (naranja)
 DEFAULT_REFEREE_COLOR = "#000000"           # árbitro (negro)
 GK_NEAR_HEIGHTS = 4.0                       # balón cerca del portero (alturas)
 GK_AREA_HEIGHTS = 6.0                       # balón en zona del portero (alturas)
+# Pases por trayectoria (cambio de portador del balón)
+CARRIER_RADIUS_HEIGHTS = 1.8                # balón-jugador para "portador del balón"
+PASS_FLIGHT_MIN_SECONDS = 0.2               # vuelo mínimo para ser pase (no un toque)
+PASS_FLIGHT_MAX_SECONDS = 4.0               # tiempo máximo entre salida y llegada
+PASS_SPEED_MIN_BH = 1.5                     # velocidad mínima del balón en vuelo
+PASS_MIN_DISTANCE_BH = 3.0                  # distancia mínima del pase (alturas)
+SEQUENCE_GAP_SECONDS = 8.0                  # hueco máximo entre pases de una secuencia
 
 VALID_EVENTS = {
     "goal", "shot", "shot_on_target", "shot_off_target",
@@ -883,6 +900,435 @@ def posesion_por_tramos(muestras: list[dict], team_local: str, team_visitante: s
     return out
 
 
+def _persona_en_escena(m: dict, p: dict) -> tuple[float, float]:
+    """Posición de una persona en escena (alturas de jugador)."""
+    return ((p["x"] - m["cam_off"][0]) / max(1.0, m["median_height"]),
+            (p["y"] - m["cam_off"][1]) / max(1.0, m["median_height"]))
+
+
+def _portador(m: dict) -> tuple[int, str] | None:
+    """Portador del balón en una muestra: (track_id, equipo) o None.
+
+    El jugador de un equipo (el portero cuenta como su equipo; el árbitro
+    y los desconocidos no) más cercano al balón, dentro del radio de
+    portador. Sin balón en escena no hay portador.
+    """
+    if m.get("ball_scene") is None:
+        return None
+    bx, by = m["ball_scene"]
+    mejor: tuple[int, str] | None = None
+    mejor_d = CARRIER_RADIUS_HEIGHTS
+    for p in m.get("people", []):
+        equipo = _equipo_para_posesion(p.get("team"))
+        if equipo is None:
+            continue
+        px, py = _persona_en_escena(m, p)
+        d = math.hypot(px - bx, py - by)
+        if d < mejor_d:
+            mejor_d = d
+            mejor = (int(p["track_id"]), equipo)
+    return mejor
+
+
+def _detectar_pases_por_trayectoria(muestras: list[dict]) -> list[dict]:
+    """Pases por cambio de portador: el balón sale de un jugador y llega
+    a un compañero (o a un rival: pase fallido).
+
+    Un pase es: portador A del equipo T (estable ≥0,25 s) -> vuelo sin
+    portador (0,2-4,0 s, balón rápido) -> portador B del mismo equipo y
+    distinto track ID. Si B es rival, es un pase fallido (pérdida) de T.
+    Sin receptor en 4 s no se cuenta (balón fuera, despeje sin destino).
+    Devuelve [{"t", "t_llegada", "team", "from_track", "to_track",
+    "distancia_bh", "duracion_s", "completado"}, ...] con t relativo al
+    saque inicial. Es la base de las estadísticas de pases y secuencias,
+    y el clasificador lo usa para etiquetar pases que no son rápidos.
+    """
+    pases: list[dict] = []
+    n = len(muestras)
+    if n < 3:
+        return pases
+    dt = muestras[1]["t"] - muestras[0]["t"]
+    if dt <= 0:
+        dt = 0.1
+    control: tuple[int, str, float] | None = None  # (track, equipo, t_inicio)
+    control_estable = 0.0
+    vuelo_inicio: float | None = None
+    vuelo_salida: tuple[int, str, tuple[float, float]] | None = None
+    vuelo_vel_max = 0.0
+    for i, m in enumerate(muestras):
+        portador = _portador(m)
+        if portador is not None:
+            if control is not None and portador[0] == control[0]:
+                control_estable = m["t"] - control[2]
+            else:
+                # Nuevo portador: ¿cierra un vuelo (pase) o es control nuevo?
+                # (control es None durante el vuelo: el origen del pase
+                # está en vuelo_salida, no en control.)
+                if vuelo_inicio is not None and vuelo_salida is not None:
+                    duracion = m["t"] - vuelo_inicio
+                    if (PASS_FLIGHT_MIN_SECONDS <= duracion <= PASS_FLIGHT_MAX_SECONDS
+                            and vuelo_vel_max >= PASS_SPEED_MIN_BH):
+                        origen = vuelo_salida[2]
+                        destino = m["ball_scene"]
+                        distancia = (math.hypot(destino[0] - origen[0],
+                                                destino[1] - origen[1])
+                                     if destino is not None else 0.0)
+                        if distancia >= PASS_MIN_DISTANCE_BH:
+                            pases.append({
+                                "t": round(vuelo_inicio, 2),
+                                "t_llegada": round(m["t"], 2),
+                                "team": vuelo_salida[1],
+                                "from_track": vuelo_salida[0],
+                                "to_track": int(portador[0]),
+                                "distancia_bh": round(distancia, 1),
+                                "duracion_s": round(duracion, 2),
+                                "completado": portador[1] == vuelo_salida[1],
+                            })
+                vuelo_inicio = None
+                vuelo_salida = None
+                vuelo_vel_max = 0.0
+                control = (int(portador[0]), portador[1], m["t"])
+                control_estable = 0.0
+        else:
+            # Sin portador: si había control estable, empieza el vuelo.
+            if (control is not None and control_estable >= 0.25
+                    and vuelo_inicio is None):
+                anterior = muestras[i - 1] if i > 0 else m
+                if anterior.get("ball_scene") is not None:
+                    vuelo_inicio = anterior["t"]
+                    vuelo_salida = (control[0], control[1], anterior["ball_scene"])
+                    vuelo_vel_max = 0.0
+            if vuelo_inicio is not None:
+                vuelo_vel_max = max(vuelo_vel_max, m.get("ball_speed_bh") or 0.0)
+                if m["t"] - vuelo_inicio > PASS_FLIGHT_MAX_SECONDS:
+                    vuelo_inicio = None
+                    vuelo_salida = None
+                    vuelo_vel_max = 0.0
+            control = None
+            control_estable = 0.0
+    return pases
+
+
+def _secuencias_de_pases(pases: list[dict]) -> list[dict]:
+    """Cadenas de pases completados seguidos del mismo equipo.
+
+    Dos pases seguidos del mismo equipo con menos de 8 s entre la llegada
+    de uno y la salida del siguiente forman parte de la misma secuencia.
+    Devuelve [{"team", "inicio_s", "fin_s", "pases", "duracion_s"}, ...].
+    """
+    completados = sorted((p for p in pases if p["completado"]), key=lambda p: p["t"])
+    secuencias: list[dict] = []
+    actual: dict | None = None
+    for p in completados:
+        if (actual is not None and p["team"] == actual["team"]
+                and p["t"] - actual["fin_s"] <= SEQUENCE_GAP_SECONDS):
+            actual["pases"] += 1
+            actual["fin_s"] = p["t_llegada"]
+            actual["duracion_s"] = round(p["t_llegada"] - actual["inicio_s"], 1)
+        else:
+            if actual is not None:
+                secuencias.append(actual)
+            actual = {"team": p["team"], "inicio_s": p["t"],
+                      "fin_s": p["t_llegada"], "pases": 1,
+                      "duracion_s": round(p["t_llegada"] - p["t"], 1)}
+    if actual is not None:
+        secuencias.append(actual)
+    return secuencias
+
+
+def _calcular_estadisticas(
+    muestras: list[dict], resultados: list[dict], pases: list[dict],
+    secuencias: list[dict], team_local: str, team_visitante: str,
+    duracion_partido: float,
+) -> dict:
+    """Estadísticas del partido a partir del tracking y los cortes.
+
+    Todo son recuentos del tracking (por equipo y por tramo), no
+    estimaciones externas: posesión, eventos clasificados, pases por
+    trayectoria y secuencias, tiros, duelos, recuperaciones, transiciones,
+    balón parado, territorio (proxy por cercanía a cada portero) y balón
+    (distancia recorrida, velocidad, % de muestras con balón).
+    """
+    def _pct(n: int, total: int) -> int:
+        return round(100.0 * n / total) if total else 0
+
+    # Posesión total y por tramos.
+    conteo_pos = Counter(m.get("possession") for m in muestras)
+    total_m = sum(conteo_pos.values()) or 1
+    posesion = {
+        "local_pct": _pct(conteo_pos.get("local", 0), total_m),
+        "visitante_pct": _pct(conteo_pos.get("visitante", 0), total_m),
+        "desconocido_pct": _pct(conteo_pos.get("desconocido", 0), total_m),
+    }
+
+    # Eventos clasificados: por tipo y por equipo, y por tramo de 15'.
+    eventos_por_tipo: dict[str, dict[str, int]] = {}
+    eventos_por_tramo: list[dict] = []
+    for r in resultados:
+        if r["event"] == "uncertain":
+            continue
+        equipo = "local" if r["team"] == team_local else (
+            "visitante" if r["team"] == team_visitante else "desconocido")
+        eventos_por_tipo.setdefault(r["event"], {"local": 0, "visitante": 0})
+        if equipo in ("local", "visitante"):
+            eventos_por_tipo[r["event"]][equipo] += 1
+    if resultados and duracion_partido > 0:
+        n_tramos = max(1, int(math.ceil(duracion_partido / (TRAMO_MINUTES * 60.0))))
+        for k in range(n_tramos):
+            inicio = k * TRAMO_MINUTES * 60.0
+            fin = min(duracion_partido, (k + 1) * TRAMO_MINUTES * 60.0)
+            fila: dict[str, int | str] = {"tramo": f"{int(inicio // 60)}-{int(fin // 60)}'"}
+            for r in resultados:
+                if r["event"] == "uncertain" or not (inicio <= r["seconds"] < fin):
+                    continue
+                equipo = "local" if r["team"] == team_local else (
+                    "visitante" if r["team"] == team_visitante else None)
+                if equipo is None:
+                    continue
+                clave = f"{r['event']}_{equipo}"
+                fila[clave] = int(fila.get(clave, 0)) + 1  # type: ignore[operator]
+            eventos_por_tramo.append(fila)  # type: ignore[arg-type]
+
+    # Pases por trayectoria: por equipo, precisión y secuencias.
+    pases_stats: dict[str, dict[str, int | float]] = {}
+    for equipo in ("local", "visitante"):
+        del_equipo = [p for p in pases if p["team"] == equipo]
+        ok = [p for p in del_equipo if p["completado"]]
+        sec = [s for s in secuencias if s["team"] == equipo]
+        pases_stats[equipo] = {
+            "total": len(del_equipo),
+            "completados": len(ok),
+            "precision_pct": _pct(len(ok), len(del_equipo)),
+            "distancia_media_bh": (round(sum(p["distancia_bh"] for p in ok) / len(ok), 1)
+                                   if ok else 0.0),
+            "secuencias": len(sec),
+            "secuencia_max_pases": max((s["pases"] for s in sec), default=0),
+            "secuencia_media_pases": (round(sum(s["pases"] for s in sec) / len(sec), 1)
+                                      if sec else 0.0),
+        }
+
+    # Tiros y goles (del clasificador).
+    def _cuenta(eventos: tuple[str, ...], equipo: str) -> int:
+        return sum(eventos_por_tipo.get(e, {}).get(equipo, 0) for e in eventos)
+
+    tiros = {
+        equipo: {
+            "goles": _cuenta(("goal",), equipo),
+            "tiros_a_puerta": _cuenta(("shot_on_target", "shot"), equipo),
+            "tiros_fuera": _cuenta(("shot_off_target",), equipo),
+            "tiros_total": _cuenta(("goal", "shot", "shot_on_target",
+                                    "shot_off_target"), equipo),
+        } for equipo in ("local", "visitante")
+    }
+
+    # Territorio (proxy en seguimiento): % de muestras con el balón más
+    # cerca de la portería rival que de la propia (tercio de ataque).
+    tercio = {"local": 0, "visitante": 0, "total": 0}
+    for m in muestras:
+        if m.get("ball_scene") is None:
+            continue
+        d_local = d_visitante = None
+        if m.get("gk_local_scene") is not None:
+            d_local = math.hypot(m["ball_scene"][0] - m["gk_local_scene"][0],
+                                 m["ball_scene"][1] - m["gk_local_scene"][1])
+        if m.get("gk_visitante_scene") is not None:
+            d_visitante = math.hypot(m["ball_scene"][0] - m["gk_visitante_scene"][0],
+                                     m["ball_scene"][1] - m["gk_visitante_scene"][1])
+        if d_local is None or d_visitante is None:
+            continue
+        tercio["total"] += 1
+        if d_visitante < d_local:
+            tercio["local"] += 1
+        else:
+            tercio["visitante"] += 1
+    territorio = {
+        "local_pct": _pct(tercio["local"], tercio["total"]),
+        "visitante_pct": _pct(tercio["visitante"], tercio["total"]),
+        "muestras_con_porteros": tercio["total"],
+    }
+
+    # Balón: distancia recorrida, velocidad y cobertura de detección.
+    distancia = 0.0
+    velocidades = []
+    con_balon = 0
+    personas_total = 0
+    for i, m in enumerate(muestras):
+        if m.get("ball_scene") is not None:
+            con_balon += 1
+            velocidades.append(m.get("ball_speed_bh") or 0.0)
+            if i > 0 and muestras[i - 1].get("ball_scene") is not None:
+                distancia += math.hypot(
+                    m["ball_scene"][0] - muestras[i - 1]["ball_scene"][0],
+                    m["ball_scene"][1] - muestras[i - 1]["ball_scene"][1])
+        personas_total += len(m.get("people", []))
+    balon = {
+        "distancia_recorrida_bh": round(distancia, 0),
+        "velocidad_media_bh": (round(sum(velocidades) / len(velocidades), 2)
+                               if velocidades else 0.0),
+        "velocidad_max_bh": round(max(velocidades), 1) if velocidades else 0.0,
+        "muestras_con_balon_pct": _pct(con_balon, len(muestras)),
+        "personas_medias_por_muestra": (round(personas_total / len(muestras), 1)
+                                        if muestras else 0.0),
+    }
+
+    return {
+        "duracion_partido_s": round(duracion_partido, 1),
+        "muestras": len(muestras),
+        "posesion": posesion,
+        "posesion_por_tramos": posesion_por_tramos(muestras, team_local, team_visitante),
+        "eventos_por_tipo": eventos_por_tipo,
+        "eventos_por_tramo": eventos_por_tramo,
+        "pases": pases_stats,
+        "tiros": tiros,
+        "territorio": territorio,
+        "balon": balon,
+        "duelos": {e: _cuenta(("duel",), e) for e in ("local", "visitante")},
+        "recuperaciones": {e: _cuenta(("recovery",), e) for e in ("local", "visitante")},
+        "perdidas": {e: _cuenta(("loss",), e) for e in ("local", "visitante")},
+        "transiciones": {e: _cuenta(("transition", "counterattack"), e)
+                         for e in ("local", "visitante")},
+        "centros": {e: _cuenta(("cross",), e) for e in ("local", "visitante")},
+        "corners": {e: _cuenta(("corner",), e) for e in ("local", "visitante")},
+        "balon_parado": {e: _cuenta(("set_piece", "foul"), e) for e in ("local", "visitante")},
+        "distribuciones_portero": {e: _cuenta(("gk_distribution",), e)
+                                   for e in ("local", "visitante")},
+        "entradas_area": {e: _cuenta(("area_entry", "key_pass"), e)
+                          for e in ("local", "visitante")},
+    }
+
+
+def _exportar_informe(informe: dict, estadisticas: dict, pases: list[dict],
+                      video_path: Path, output_dir: Path) -> dict:
+    """Escribe el informe profesional del partido: markdown + 2 CSV.
+
+    ``{stem}_informe.md``: resumen con tablas (posesión, eventos, pases,
+    tiros, territorio, balón) y lista de cortes. ``{stem}_eventos.csv``:
+    un fila por corte. ``{stem}_estadisticas.csv``: métrica por equipo.
+    Devuelve {"informe_md", "eventos_csv", "estadisticas_csv"} (rutas str).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    est = estadisticas
+    team_local = informe.get("team_local", "Local")
+    team_visitante = informe.get("team_visitante", "Visitante")
+    resultados = informe.get("results", [])
+    nombre_md = output_dir / f"{video_path.stem}_informe.md"
+    nombre_ev = output_dir / f"{video_path.stem}_eventos.csv"
+    nombre_est = output_dir / f"{video_path.stem}_estadisticas.csv"
+
+    def _fila_eventos(evento: str) -> str:
+        e = est["eventos_por_tipo"].get(evento, {})
+        return f"| {EVENT_NAMES_ES.get(evento, evento)} | {e.get('local', 0)} | {e.get('visitante', 0)} |"
+
+    lineas = [
+        f"# Informe de vídeo: {team_local} vs {team_visitante}",
+        "",
+        f"- Duración analizada: {format_mmss(est['duracion_partido_s'])}",
+        f"- Saque inicial en el vídeo: {format_mmss(informe.get('kickoff_offset_s', 0.0))}",
+        f"- Muestras YOLO: {est['muestras']} · Muestras con balón: "
+        f"{est['balon']['muestras_con_balon_pct']}%",
+        "",
+        "## Posesión",
+        "",
+        f"- **{team_local}: {est['posesion']['local_pct']}%** · "
+        f"**{team_visitante}: {est['posesion']['visitante_pct']}%** · "
+        f"Sin asignar: {est['posesion']['desconocido_pct']}%",
+        "",
+        "| Tramo | " + team_local + " | " + team_visitante + " | Sin asignar |",
+        "|---|---|---|---|",
+    ]
+    for tramo in est["posesion_por_tramos"]:
+        lineas.append(f"| {tramo['tramo']} | {tramo['local_pct']}% | "
+                      f"{tramo['visitante_pct']}% | {tramo['desconocido_pct']}% |")
+    lineas += [
+        "",
+        "## Eventos",
+        "",
+        f"| Evento | {team_local} | {team_visitante} |",
+        "|---|---|---|",
+    ]
+    for evento in ("goal", "shot_on_target", "shot_off_target", "shot", "key_pass",
+                   "pass", "cross", "corner", "foul", "duel", "recovery", "loss",
+                   "transition", "counterattack", "area_entry", "set_piece",
+                   "gk_distribution"):
+        if evento in est["eventos_por_tipo"]:
+            lineas.append(_fila_eventos(evento))
+    p_loc, p_vis = est["pases"]["local"], est["pases"]["visitante"]
+    t_loc, t_vis = est["tiros"]["local"], est["tiros"]["visitante"]
+    lineas += [
+        "",
+        "## Pases (por trayectoria: cambio de portador)",
+        "",
+        f"| | {team_local} | {team_visitante} |",
+        "|---|---|---|",
+        f"| Pases intentados | {p_loc['total']} | {p_vis['total']} |",
+        f"| Pases completados | {p_loc['completados']} | {p_vis['completados']} |",
+        f"| Precisión | {p_loc['precision_pct']}% | {p_vis['precision_pct']}% |",
+        f"| Distancia media (alturas) | {p_loc['distancia_media_bh']} | {p_vis['distancia_media_bh']} |",
+        f"| Secuencias | {p_loc['secuencias']} | {p_vis['secuencias']} |",
+        f"| Secuencia más larga (pases) | {p_loc['secuencia_max_pases']} | {p_vis['secuencia_max_pases']} |",
+        f"| Secuencia media (pases) | {p_loc['secuencia_media_pases']} | {p_vis['secuencia_media_pases']} |",
+        "",
+        "## Tiros",
+        "",
+        f"| | {team_local} | {team_visitante} |",
+        "|---|---|---|",
+        f"| Goles | {t_loc['goles']} | {t_vis['goles']} |",
+        f"| Tiros a puerta | {t_loc['tiros_a_puerta']} | {t_vis['tiros_a_puerta']} |",
+        f"| Tiros fuera | {t_loc['tiros_fuera']} | {t_vis['tiros_fuera']} |",
+        f"| Tiros totales | {t_loc['tiros_total']} | {t_vis['tiros_total']} |",
+        "",
+        "## Territorio y balón",
+        "",
+        f"- Tercio de ataque (balón más cerca de la portería rival): "
+        f"{team_local} {est['territorio']['local_pct']}% · "
+        f"{team_visitante} {est['territorio']['visitante_pct']}% "
+        f"(con ambos porteros visibles en {est['territorio']['muestras_con_porteros']} muestras)",
+        f"- Distancia recorrida por el balón: {est['balon']['distancia_recorrida_bh']} alturas",
+        f"- Velocidad media del balón: {est['balon']['velocidad_media_bh']} alturas/s · "
+        f"máxima: {est['balon']['velocidad_max_bh']} alturas/s",
+        "",
+        "## Cortes",
+        "",
+        "| Minuto | Evento | Equipo | Confianza | Resumen |",
+        "|---|---|---|---|---|",
+    ]
+    for r in resultados:
+        lineas.append(f"| {format_mmss(r['seconds'])} | "
+                      f"{EVENT_NAMES_ES.get(r['event'], r['event'])} | {r['team']} | "
+                      f"{int(r['confidence'] * 100)}% | {r['summary']} |")
+    nombre_md.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+
+    with open(nombre_ev, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["minuto", "segundo", "evento", "equipo", "confianza",
+                    "resumen", "zona", "clip"])
+        for r in resultados:
+            w.writerow([r["minute"], r["seconds"], r["event"], r["team"],
+                        r["confidence"], r["summary"], r["zone"],
+                        r["clip_path"] or ""])
+    with open(nombre_est, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["metrica", team_local, team_visitante])
+        w.writerow(["posesion_pct", est["posesion"]["local_pct"],
+                    est["posesion"]["visitante_pct"]])
+        for evento, vals in sorted(est["eventos_por_tipo"].items()):
+            w.writerow([f"eventos_{evento}", vals.get("local", 0),
+                        vals.get("visitante", 0)])
+        for clave in ("total", "completados", "precision_pct",
+                      "distancia_media_bh", "secuencias", "secuencia_max_pases",
+                      "secuencia_media_pases"):
+            w.writerow([f"pases_{clave}", p_loc[clave], p_vis[clave]])
+        for clave in ("goles", "tiros_a_puerta", "tiros_fuera", "tiros_total"):
+            w.writerow([f"tiros_{clave}", t_loc[clave], t_vis[clave]])
+        w.writerow(["territorio_ataque_pct", est["territorio"]["local_pct"],
+                    est["territorio"]["visitante_pct"]])
+        w.writerow(["balon_distancia_bh", est["balon"]["distancia_recorrida_bh"], ""])
+        w.writerow(["balon_velocidad_media_bh", est["balon"]["velocidad_media_bh"], ""])
+        w.writerow(["balon_velocidad_max_bh", est["balon"]["velocidad_max_bh"], ""])
+    return {"informe_md": str(nombre_md), "eventos_csv": str(nombre_ev),
+            "estadisticas_csv": str(nombre_est)}
+
+
 def _detectar_candidatos(muestras: list[dict], camera_mode: str) -> list[dict]:
     """Candidatos a evento desde señales relativas del tracking.
 
@@ -1096,7 +1542,8 @@ def _posesion_mayoritaria(muestras: list[dict], tiempos: list[float],
 
 
 def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
-                             team_local: str, team_visitante: str) -> dict:
+                             team_local: str, team_visitante: str,
+                             pases: list[dict] | None = None) -> dict:
     """Clasifica un candidato solo con el tracking YOLO.
 
     Ventana de ±3 s alrededor del candidato: velocidad del balón, si se
@@ -1313,6 +1760,19 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
     # 11. Pase: balón rápido que recorre distancia, mismo equipo.
     if vel_max >= SPEED_FAST_BH and avance >= 4.0 and not cambio_posesion:
         return _res("pass", 0.65, f"Pase del {equipo}", equipo)
+    # 11b. Pase por trayectoria: cambio de portador del mismo equipo con
+    #      vuelo, aunque el balón no sea rápido (la mayoría de los pases
+    #      de centro del campo no superan SPEED_FAST_BH, así que la regla
+    #      11 no los ve). Un pase fallido no etiqueta pase.
+    if pases:
+        for p in pases:
+            if abs(p["t"] - t) <= 1.5 and p["completado"]:
+                equipo_pase = (team_local if p["team"] == "local"
+                               else team_visitante)
+                if p["distancia_bh"] >= 12.0 or en_zona_portero:
+                    return _res("key_pass", 0.70,
+                                f"Pase clave del {equipo_pase} al área", equipo_pase)
+                return _res("pass", 0.70, f"Pase del {equipo_pase}", equipo_pase)
     # 12. Balón parado con reanudación lenta (sin velocidad para la regla 2).
     #     Si el balón sigue parado después, no es una jugada: incierto.
     if parado_s >= 2.0 and vel_despues > STOP_TO_BH:
@@ -1391,32 +1851,23 @@ def _analizar_impl(
     muestras = _anotar_posesion(muestras, team_local, team_visitante)
     muestras = _anotar_porteros(muestras)
     posesion_tramos = posesion_por_tramos(muestras, team_local, team_visitante)
+    update("Detectando pases por trayectoria (cambio de portador).", 0.50)
+    pases = _detectar_pases_por_trayectoria(muestras)
+    secuencias = _secuencias_de_pases(pases)
     update("Buscando candidatos a evento en las señales del tracking.", 0.55)
     candidatos = _detectar_candidatos(muestras, camera_mode)
     candidatos = _dedup_y_limitar(candidatos, max_candidates)
-    if not candidatos:
-        update("YOLO no encontró señales claras de jugada en el vídeo.", 1.0)
-        return {
-            "results": [], "possession_by_period": posesion_tramos,
-            "kickoff_offset_s": kickoff_offset,
-            "match_duration_s": duracion_partido,
-            "video_duration_s": duracion_video,
-            "samples_analyzed": len(muestras),
-            "team_colors": {"local": color_local, "visitante": color_visitante,
-                    "gk_local": color_gk_local,
-                    "gk_visitante": color_gk_visitante,
-                    "arbitro": color_arbitro},
-        }
-
     output_dir = video_path.parent / f"{video_path.stem}_clips"
     resultados: list[dict] = []
+    if not candidatos:
+        update("YOLO no encontró señales claras de jugada en el vídeo.", 1.0)
     for n_cand, cand in enumerate(candidatos, start=1):
         t = float(cand["seconds"])  # relativo al saque inicial
         t_video = t + kickoff_offset
         update(f"YOLO clasifica candidato {n_cand} de {len(candidatos)}.",
                0.55 + 0.35 * n_cand / max(1, len(candidatos)))
         clasificacion = _clasificar_por_tracking(
-            cand, muestras, camera_mode, team_local, team_visitante)
+            cand, muestras, camera_mode, team_local, team_visitante, pases=pases)
         clip_path: str | None = None
         if (clasificacion["event"] != "uncertain"
                 and clasificacion["confidence"] >= min_confidence):
@@ -1442,18 +1893,33 @@ def _analizar_impl(
             "reason": "; ".join(cand["signals"]),
             "signals": list(cand["signals"]),
         })
-    update("Análisis y generación de cortes completados.", 1.0)
-    return {
+    update("Calculando estadísticas y escribiendo el informe.", 0.95)
+    estadisticas = _calcular_estadisticas(
+        muestras, resultados, pases, secuencias,
+        team_local, team_visitante, duracion_partido)
+    informe_base = {
         "results": resultados,
         "possession_by_period": posesion_tramos,
         "kickoff_offset_s": kickoff_offset,
         "match_duration_s": duracion_partido,
         "video_duration_s": duracion_video,
         "samples_analyzed": len(muestras),
+        "team_local": team_local,
+        "team_visitante": team_visitante,
         "team_colors": {"local": color_local, "visitante": color_visitante,
-                    "gk_local": color_gk_local,
-                    "gk_visitante": color_gk_visitante,
-                    "arbitro": color_arbitro},
+                "gk_local": color_gk_local,
+                "gk_visitante": color_gk_visitante,
+                "arbitro": color_arbitro},
+    }
+    rutas_informe = _exportar_informe(
+        informe_base, estadisticas, pases, video_path, output_dir)
+    update("Análisis y generación de cortes completados.", 1.0)
+    return {
+        **informe_base,
+        "estadisticas": estadisticas,
+        "pases": pases,
+        "secuencias": secuencias,
+        **rutas_informe,
     }
 
 
@@ -1528,7 +1994,9 @@ def analyze_video_full(
     {"results": [...], "possession_by_period": [{"tramo", "local_pct",
     "visitante_pct", "desconocido_pct"}, ...], "kickoff_offset_s": ...,
     "match_duration_s": ..., "video_duration_s": ...,
-    "samples_analyzed": ..., "team_colors": {"local": ..., "visitante": ...}}
+    "samples_analyzed": ..., "team_colors": {"local": ..., "visitante": ...},
+    "estadisticas": {...}, "pases": [...], "secuencias": [...],
+    "informe_md": ..., "eventos_csv": ..., "estadisticas_csv": ...}
     """
     return _analizar_impl(
         video_path, color_local, color_visitante, team_local,
