@@ -9,7 +9,7 @@ from pathlib import Path
 # la app sigue funcionando; solo la pantalla de Vídeo avisa del problema.
 try:
     from video_track import (
-        analyze_video_full, suggest_kickoff, detect_shirt_colors,
+        analyze_video_full, suggest_kickoff,
         parse_mmss, format_mmss, VideoProcessingError,
         DEFAULT_YOLO_MODEL, DEFAULT_GROQ_MODEL,
         DEFAULT_MIN_CONFIDENCE, DEFAULT_MAX_CANDIDATES,
@@ -20,7 +20,6 @@ try:
 except Exception as _video_err:  # noqa: BLE001 - el vídeo es opcional
     analyze_video_full = None
     suggest_kickoff = None
-    detect_shirt_colors = None
     parse_mmss = None
     format_mmss = None
     VideoProcessingError = RuntimeError
@@ -88,8 +87,6 @@ if "video_informe" not in st.session_state:
     st.session_state.video_informe = None
 if "video_seleccionado" not in st.session_state:
     st.session_state.video_seleccionado = None
-if "video_paleta" not in st.session_state:
-    st.session_state.video_paleta = None
 if "video_kickoff_text" not in st.session_state:
     st.session_state.video_kickoff_text = "00:00"
 if "video_anadidos" not in st.session_state:
@@ -620,47 +617,35 @@ elif st.session_state.pagina == "video":
         st.caption("Ejemplo: si el saque inicial es a los 4:32 del vídeo, escribe 04:32. "
                    "Todos los cortes se calculan relativos a ese inicio.")
 
-    # --- Colores de camiseta: paleta detectada + asignación manual ---
-    st.markdown("##### 🎨 Colores de camiseta (asignación manual)")
-    st.caption("Los colores de la pantalla de Alineaciones son solo el valor inicial. "
-               "Detecta la paleta del vídeo y asigna tú qué color es cada equipo.")
-    if st.button("🎨 Detectar colores de camiseta"):
-        if ruta_video and os.path.isfile(ruta_video):
-            with st.spinner("Detectando la paleta de camisetas (muestras de todo el vídeo)..."):
-                try:
-                    st.session_state.video_paleta = detect_shirt_colors(Path(ruta_video))
-                except VideoProcessingError as err:
-                    st.error(str(err))
-        else:
-            st.warning("Primero escribe una ruta de vídeo válida.")
-    paleta = st.session_state.video_paleta
-    opciones_color = [dp["color_local"], dp["color_visitante"]]
-    if paleta:
-        for item in paleta:
-            if item["hex"] not in opciones_color:
-                opciones_color.append(item["hex"])
-        cols_paleta = st.columns(len(paleta))
-        for col, item in zip(cols_paleta, paleta):
-            with col:
-                st.markdown(
-                    f'<div style="background:{item["hex"]}; height:36px; border-radius:6px; '
-                    f'border:1px solid #888;"></div>'
-                    f'<div style="text-align:center; font-size:12px;">{item["hex"]} · {item["share"]:.0%}</div>',
-                    unsafe_allow_html=True,
-                )
+    # --- Colores de camiseta: heredados de Alineaciones, sin volver a elegir ---
+    # La herramienta ya sabe qué color es cada equipo: usa directamente
+    # dp["color_local"] / dp["color_visitante"], puestos en Alineaciones.
+    # Antes había dos desplegables aquí, y además Streamlit no actualizaba
+    # su valor al cambiar el color en Alineaciones (el widget guardaba el
+    # valor viejo en session_state), así que se quedaban los colores por
+    # defecto #1E88E5 / #E53935 aunque se hubieran cambiado antes.
+    st.markdown("##### 🎨 Colores de camiseta (de Alineaciones)")
+    st.caption(
+        "Ya están puestos en Alineaciones, no hace falta elegirlos otra vez. "
+        "Si quieres cambiarlos, vuelve a Alineaciones y cambia el Color Local / Visitante."
+    )
     c_c1, c_c2 = st.columns(2)
     with c_c1:
-        color_local_elegido = st.selectbox(
-            f"Color {dp['eq_local']} (local)", opciones_color,
-            index=opciones_color.index(dp["color_local"]),
-            key="video_color_local",
+        st.markdown(
+            f'<div style="background:{dp["color_local"]}; height:36px; border-radius:6px; '
+            f'border:1px solid #888;"></div>'
+            f'<div style="font-size:13px;">{dp["eq_local"]} (local) · {dp["color_local"]}</div>',
+            unsafe_allow_html=True,
         )
     with c_c2:
-        color_visitante_elegido = st.selectbox(
-            f"Color {dp['eq_visitante']} (visitante)", opciones_color,
-            index=opciones_color.index(dp["color_visitante"]),
-            key="video_color_visitante",
+        st.markdown(
+            f'<div style="background:{dp["color_visitante"]}; height:36px; border-radius:6px; '
+            f'border:1px solid #888;"></div>'
+            f'<div style="font-size:13px;">{dp["eq_visitante"]} (visitante) · {dp["color_visitante"]}</div>',
+            unsafe_allow_html=True,
         )
+    color_local_elegido = dp["color_local"]
+    color_visitante_elegido = dp["color_visitante"]
 
     # --- Parámetros de análisis ---
     st.markdown("##### ⚙️ Parámetros de análisis")

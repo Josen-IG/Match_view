@@ -20,7 +20,7 @@ mano a la carpeta de Match_view cuando Josenrique lo decida.
 | Solo gol/tiro/córner/falta | Todas las jugadas: gol, tiro a puerta/fuera, pase, pase clave, centro, córner, falta, tarjeta, duelo, recuperación, pérdida, transición/contraataque, entrada al área, balón parado, distribución del portero, posesión por tramos |
 | Coordenadas de campo fijas | Tracking relativo: la cámara sigue al balón, así que la posición en imagen NO es posición en el campo (ver "Limitaciones") |
 | Analizaba desde el minuto 0 | El calentamiento no se analiza: saque inicial manual + sugerencia automática |
-| Colores fijos de match.py | Paleta de camisetas detectada en el vídeo; el usuario asigna local/visitante a mano |
+| Colores fijos de match.py | Colores heredados de Alineaciones, sin volver a elegirlos en Vídeo |
 
 ## Respuestas del usuario (2026-11-11) — ya aplicadas
 
@@ -34,10 +34,10 @@ mano a la carpeta de Match_view cuando Josenrique lo decida.
    jugadores) y el zoom (distancias en alturas de jugador). La zona Z1-Z9
    solo se calcula como aproximación en modo "fija amplia"; en modo
    "seguimiento" queda "Sin especificar". No se asume vídeo panorámico de VEO.
-3. **Equipos**: por colores, pero el usuario selecciona manualmente qué color
-   es cada equipo. La UI detecta la paleta dominante de camisetas y deja
-   asignar local/visitante antes del análisis (los colores de match.py son
-   solo el valor inicial). No se asume que el equipo vista siempre igual.
+3. **Equipos**: por colores, heredados de Alineaciones. La pantalla de
+   Vídeo usa directamente el Color Local / Visitante puestos en
+   Alineaciones, sin volver a elegirlos. Si hay que cambiarlos, se cambian
+   en Alineaciones.
 4. **Jugadas**: todas las variables, análisis en profundidad (lista arriba).
    Prioridad a gol/tiro/córner, pero se cubren todas.
 5. **PC**: Windows, Ryzen 7 serie 7000, **CPU (sin GPU)**. YOLO11s por
@@ -56,11 +56,11 @@ py -m streamlit run match.py
 ```
 
 1. Entrar con la llave (1234, sin cambios en esta tarea).
-2. Configurar equipos y colores en Alineaciones (valores iniciales del vídeo).
+2. Configurar equipos y colores en Alineaciones (son los que usa el vídeo).
 3. Ir a **🎥 Vídeo** desde Partido o desde Final.
 4. Escribir la ruta local del vídeo del partido completo.
 5. Poner el saque inicial (MM:SS) o pulsar **🔍 Sugerir inicio** y revisarlo.
-6. Pulsar **🎨 Detectar colores de camiseta** y asignar qué color es local y cuál visitante.
+6. Revisar los colores heredados de Alineaciones que muestra la pantalla.
 7. Elegir parámetros (por defecto: 10 fps, 15 candidatos, confianza 0,65, YOLO11s).
 8. **▶️ Analizar vídeo**. Los cortes aparecen como botones
    `MM:SS | Gol (82%) - resumen breve`. Al pulsar uno se reproduce el clip
@@ -112,8 +112,8 @@ fotogramas. El modelo es configurable por parámetro.
    "Primeros 10 minutos (prueba)" en la UI, con el saque inicial puesto a mano.
    Comprueba: ¿los cortes tienen sentido? ¿Groq clasifica bien gol/tiro/córner?
 2. **Sugerencia de inicio**: `--suggest-kickoff` y compara con el saque real.
-3. **Paleta de colores**: ¿los dos colores dominantes son las dos camisetas?
-   Si sale el césped o el árbitro como color principal, ajusta a mano.
+3. **Colores**: comprueba en Vídeo que los colores heredados de Alineaciones
+   son las camisetas de cada equipo. Si no, cámbialos en Alineaciones.
 4. **Partido completo**: solo cuando la prueba de 10 min vaya bien. En CPU
    tarda más que en tiempo real (ver abajo).
 
