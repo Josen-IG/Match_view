@@ -126,6 +126,9 @@ if "datos_partido" not in st.session_state:
         "eq_visitante": eq_def_2,
         "color_local": "#1E88E5",
         "color_visitante": "#E53935",
+        "color_portero_local": "#FFEB3B",
+        "color_portero_visitante": "#FF9800",
+        "color_arbitro": "#000000",
         "form_local": "1-4-4-2",
         "form_visitante": "1-4-3-3",
         "xi_local": xi_loc_init,
@@ -261,6 +264,22 @@ if st.session_state.pagina == "alineaciones":
             
         dp["color_visitante"] = b5.color_picker("Color Visitante", dp["color_visitante"])
         dp["form_visitante"] = b6.selectbox("Táctica Visitante", lista_formaciones, index=lista_formaciones.index(dp["form_visitante"]) if dp["form_visitante"] in lista_formaciones else 1)
+
+    # Colores de porteros y árbitro (para el vídeo): el portero cuenta como
+    # su equipo y su posición marca qué portería se ataca; el árbitro no
+    # cuenta para posesión ni agrupación. Tienen que ser distintos de los
+    # colores de campo; si el portero cambia de camiseta, se cambia aquí.
+    st.markdown("##### 🧤 Colores de porteros y árbitro (para el vídeo)")
+    c_p1, c_p2, c_p3 = st.columns(3)
+    with c_p1:
+        dp["color_portero_local"] = st.color_picker(
+            "Portero Local", dp.get("color_portero_local", "#FFEB3B"))
+    with c_p2:
+        dp["color_portero_visitante"] = st.color_picker(
+            "Portero Visitante", dp.get("color_portero_visitante", "#FF9800"))
+    with c_p3:
+        dp["color_arbitro"] = st.color_picker(
+            "Árbitro", dp.get("color_arbitro", "#000000"))
 
     st.divider()
 
@@ -646,6 +665,26 @@ elif st.session_state.pagina == "video":
         )
     color_local_elegido = dp["color_local"]
     color_visitante_elegido = dp["color_visitante"]
+    st.markdown("##### 🧤 Porteros y árbitro (de Alineaciones)")
+    st.caption(
+        "También se ponen en Alineaciones. El portero cuenta como su equipo "
+        "y marca qué portería se ataca; el árbitro no cuenta para posesión."
+    )
+    c_g1, c_g2, c_g3 = st.columns(3)
+    for col, etiqueta, color in (
+            (c_g1, "Portero local", dp.get("color_portero_local", "#FFEB3B")),
+            (c_g2, "Portero visitante", dp.get("color_portero_visitante", "#FF9800")),
+            (c_g3, "Árbitro", dp.get("color_arbitro", "#000000"))):
+        with col:
+            st.markdown(
+                f'<div style="background:{color}; height:28px; border-radius:6px; '
+                f'border:1px solid #888;"></div>'
+                f'<div style="font-size:13px;">{etiqueta} · {color}</div>',
+                unsafe_allow_html=True,
+            )
+    color_portero_local_elegido = dp.get("color_portero_local", "#FFEB3B")
+    color_portero_visitante_elegido = dp.get("color_portero_visitante", "#FF9800")
+    color_arbitro_elegido = dp.get("color_arbitro", "#000000")
 
     # --- Parámetros de análisis ---
     st.markdown("##### ⚙️ Parámetros de análisis")
@@ -674,9 +713,9 @@ elif st.session_state.pagina == "video":
         )
     st.info("Sin Groq: la clasificación la hace solo YOLO, con las señales del "
               "tracking (velocidad, balón parado, cambio de posesión, agrupación, "
-              "avance y posición en fija amplia). No hace falta API key ni internet. "
-              "En seguimiento, el gol sale como tiro y el córner como balón parado: "
-              "para distinguirlos usa el modo fija amplia.")
+              "avance, posición del portero y posición en fija amplia). No hace falta "
+              "API key ni internet. El portero marca qué portería se ataca: un balón "
+              "rápido junto al portero es tiro a puerta, y si lo supera y se pierde, gol.")
 
     # --- Analizar ---
     if st.button("▶️ Analizar vídeo", type="primary", use_container_width=True):
@@ -699,6 +738,9 @@ elif st.session_state.pagina == "video":
                         Path(ruta_video),
                         color_local=color_local_elegido,
                         color_visitante=color_visitante_elegido,
+                        color_gk_local=color_portero_local_elegido,
+                        color_gk_visitante=color_portero_visitante_elegido,
+                        color_arbitro=color_arbitro_elegido,
                         team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
                         sample_fps=sample_fps, max_candidates=max_candidatos,
                         min_confidence=min_conf, yolo_model=yolo_modelo,

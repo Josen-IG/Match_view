@@ -16,8 +16,11 @@ Diseño (respuestas del usuario, 2026-11-11):
   como aproximación en modo "fija_amplia"; en modo "seguimiento" (por defecto)
   la zona es "Sin especificar". No se asume vídeo panorámico de VEO.
 * Equipos por color de camiseta, pero el usuario asigna MANUALMENTE qué color
-  es cada equipo en la UI (``detect_shirt_colors()`` muestra la paleta
-  dominante; los colores de ``match.py`` son solo el valor inicial).
+  es cada equipo en la UI (los colores de ``match.py`` son solo el valor
+  inicial). También se asignan el color de cada portero y el del árbitro:
+  el portero cuenta como su equipo y su posición marca dónde está su
+  portería (en seguimiento, qué portería se ataca); el árbitro no cuenta
+  para posesión ni agrupación.
 * Jugadas: todas. Gol, tiro a puerta/fuera, pase, pase clave, centro, córner,
   falta, tarjeta, duelo, recuperación, pérdida, transición/contraataque,
   entrada al área, balón parado, distribución del portero y posesión por
@@ -95,6 +98,11 @@ CROWD_MIN_PEOPLE = 5                        # personas en ese radio para "agrupa
 TRANSITION_ADVANCE_HEIGHTS = 8.0            # alturas de avance en 3 s para "transición"
 SET_PIECE_STOP_SECONDS = 2.0                # balón parado para "balón parado / saque"
 TRAMO_MINUTES = 15                          # tramos para la posesión por tramos
+DEFAULT_GK_COLOR_LOCAL = "#FFEB3B"          # portero local (amarillo)
+DEFAULT_GK_COLOR_VISITANTE = "#FF9800"      # portero visitante (naranja)
+DEFAULT_REFEREE_COLOR = "#000000"           # árbitro (negro)
+GK_NEAR_HEIGHTS = 4.0                       # balón cerca del portero (alturas)
+GK_AREA_HEIGHTS = 6.0                       # balón en zona del portero (alturas)
 
 VALID_EVENTS = {
     "goal", "shot", "shot_on_target", "shot_off_target",
@@ -313,18 +321,45 @@ def _color_torso(frame, x0: int, y0: int, x1: int, y1: int):
     return float(mediana[0]), float(mediana[1]), float(mediana[2])
 
 
-def _clasificar_color(hsv, ref_local, ref_visitante) -> str:
-    """'local' / 'visitante' / 'desconocido' según distancia HSV a los colores de equipo."""
+def _clasificar_color(hsv, ref_local, ref_visitante,
+                      ref_gk_local=None, ref_gk_visitante=None, ref_arbitro=None) -> str:
+    """'local' / 'visitante' / 'gk_local' / 'gk_visitante' / 'arbitro' /
+    'desconocido' según distancia HSV a los colores de referencia.
+
+    Los porteros y el árbitro tienen su propio color: sin ellos salían
+    "desconocido" y el árbitro junto al balón falseaba la posesión.
+    Si el color está demasiado lejos de todos, o entre dos referencias
+    (p. ej. portero con camiseta parecida a la de su equipo), desconocido.
+    """
     if hsv is None:
         return "desconocido"
-    d_local = _distancia_hsv(*hsv, *ref_local)
-    d_visitante = _distancia_hsv(*hsv, *ref_visitante)
-    mejor = min(d_local, d_visitante)
-    if mejor > COLOR_DISTANCE_MAX:
+    refs = {"local": ref_local, "visitante": ref_visitante}
+    if ref_gk_local is not None:
+        refs["gk_local"] = ref_gk_local
+    if ref_gk_visitante is not None:
+        refs["gk_visitante"] = ref_gk_visitante
+    if ref_arbitro is not None:
+        refs["arbitro"] = ref_arbitro
+    distancias = {k: _distancia_hsv(*hsv, *v) for k, v in refs.items()}
+    orden = sorted(distancias.items(), key=lambda kv: kv[1])
+    mejor, d_mejor = orden[0]
+    if d_mejor > COLOR_DISTANCE_MAX:
         return "desconocido"
-    if abs(d_local - d_visitante) < COLOR_MARGIN_MIN:
+    if len(orden) > 1 and orden[1][1] - d_mejor < COLOR_MARGIN_MIN:
         return "desconocido"
-    return "local" if d_local < d_visitante else "visitante"
+    return mejor
+
+
+def _equipo_para_posesion(team: str) -> str | None:
+    """Equipo que cuenta para la posesión: el portero cuenta como su equipo;
+    el árbitro y los desconocidos no cuentan (se mantiene la última posesión)."""
+    if team in ("local", "visitante"):
+        return team
+    if team == "gk_local":
+        return "local"
+    if team == "gk_visitante":
+        return "visitante"
+    return None
 
 
 def detect_shirt_colors(
@@ -522,11 +557,14 @@ def _track_video(
     imgsz: int,
     color_local_hex: str,
     color_visitante_hex: str,
-    flip_x: bool,
-    flip_y: bool,
-    start_seconds: float,
-    end_seconds: float,
-    progress: ProgressCallback,
+    color_gk_local_hex: str = DEFAULT_GK_COLOR_LOCAL,
+    color_gk_visitante_hex: str = DEFAULT_GK_COLOR_VISITANTE,
+    color_arbitro_hex: str = DEFAULT_REFEREE_COLOR,
+    flip_x: bool = False,
+    flip_y: bool = False,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+    progress: ProgressCallback | None = None,
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
 
@@ -549,12 +587,18 @@ def _track_video(
     if fps_real <= 0:
         fps_real = 30.0
     total_duration = video_duration(video_path)
+    if end_seconds is None:
+        end_seconds = total_duration
     end_seconds = min(float(end_seconds), total_duration)
     duracion_partido = max(0.0, end_seconds - start_seconds)
+    progress = progress or (lambda _m, _v: None)
 
     paso = max(1, int(round(fps_real / max(1, sample_fps))))
     ref_local = _rgb_a_hsv_opencv(*_hex_a_rgb(color_local_hex))
     ref_visitante = _rgb_a_hsv_opencv(*_hex_a_rgb(color_visitante_hex))
+    ref_gk_local = _rgb_a_hsv_opencv(*_hex_a_rgb(color_gk_local_hex))
+    ref_gk_visitante = _rgb_a_hsv_opencv(*_hex_a_rgb(color_gk_visitante_hex))
+    ref_arbitro = _rgb_a_hsv_opencv(*_hex_a_rgb(color_arbitro_hex))
 
     try:
         detector = YOLO(yolo_model)
@@ -627,7 +671,9 @@ def _track_video(
                                 if track_id is not None:
                                     hsv = _color_torso(frame, int(x0), int(y0), int(x1), int(y1))
                                     votos_color[int(track_id)][
-                                        _clasificar_color(hsv, ref_local, ref_visitante)
+                                        _clasificar_color(hsv, ref_local, ref_visitante,
+                                                          ref_gk_local, ref_gk_visitante,
+                                                          ref_arbitro)
                                     ] += 1
                             elif clase == 32:
                                 if balon is None or conf > balon["conf"]:
@@ -759,13 +805,15 @@ def _compensar_camara(muestras: list[dict]) -> list[dict]:
 def _anotar_posesion(muestras: list[dict], team_local: str, team_visitante: str) -> list[dict]:
     """Posesión por muestra: jugador más cercano al balón (en alturas).
 
-    Se mantiene la última posesión cuando el balón va solo (pase en vuelo).
+    Solo cuentan jugadores de un equipo (el portero cuenta como su equipo);
+    el árbitro y los desconocidos no cambian la posesión. Se mantiene la
+    última posesión cuando el balón va solo (pase en vuelo).
     """
     posesion_actual = "desconocido"
     for m in muestras:
         if m["ball_scene"] is not None and m["people"]:
             def dist_alturas(p):
-                if p.get("team") is None:
+                if _equipo_para_posesion(p.get("team")) is None:
                     return float("inf")
                 # Posición de la persona también en escena (alturas)
                 px = (p["x"] - m["cam_off"][0]) / max(1.0, m["median_height"])
@@ -773,13 +821,39 @@ def _anotar_posesion(muestras: list[dict], team_local: str, team_visitante: str)
                 return math.hypot(px - m["ball_scene"][0], py - m["ball_scene"][1])
             cercana = min(m["people"], key=dist_alturas)
             if dist_alturas(cercana) <= POSSESSION_RADIUS_HEIGHTS:
-                posesion_actual = cercana["team"]
+                posesion_actual = _equipo_para_posesion(cercana["team"])
         m["possession"] = posesion_actual
         m["possession_team_name"] = (
             team_local if posesion_actual == "local"
             else team_visitante if posesion_actual == "visitante"
             else "Desconocido"
         )
+    return muestras
+
+
+def _anotar_porteros(muestras: list[dict]) -> list[dict]:
+    """Posición de cada portero en escena (alturas) por muestra.
+
+    Añade 'gk_local_scene' / 'gk_visitante_scene' (tupla o None). La posición
+    del portero marca dónde está su portería: en seguimiento es la única
+    referencia de qué portería se ataca. Si hay varios con ese color (falso
+    positivo), se usa la media.
+    """
+    for m in muestras:
+        for clave, rol in (("gk_local_scene", "gk_local"),
+                           ("gk_visitante_scene", "gk_visitante")):
+            puntos = []
+            for p in m["people"]:
+                if p.get("team") != rol:
+                    continue
+                px = (p["x"] - m["cam_off"][0]) / max(1.0, m["median_height"])
+                py = (p["y"] - m["cam_off"][1]) / max(1.0, m["median_height"])
+                puntos.append((px, py))
+            if puntos:
+                m[clave] = (sum(p[0] for p in puntos) / len(puntos),
+                            sum(p[1] for p in puntos) / len(puntos))
+            else:
+                m[clave] = None
     return muestras
 
 
@@ -818,7 +892,8 @@ def _detectar_candidatos(muestras: list[dict], camera_mode: str) -> list[dict]:
     de plano, balón parado + agrupación (balón parado), saque del portero,
     cambio de posesión + avance rápido (transición), pase largo rápido,
     cambio de posesión solo (recuperación / duelo), balón parado largo
-    (≥3 s) y entrada al área (solo fija_amplia).
+    (≥3 s), entrada al área (solo fija_amplia) y balón cerca del portero
+    (zona de portería: tiro / gol).
     En modo fija_amplia se añaden: cruce de línea de gol y balón fuera del campo.
     """
     brutos: list[dict] = []
@@ -855,10 +930,12 @@ def _detectar_candidatos(muestras: list[dict], camera_mode: str) -> list[dict]:
             if previas and max(previas) >= STOP_FROM_BH:
                 senales.append("parada brusca del balón")
                 score += 2.5
-        # Agrupación junto al balón (en alturas)
+        # Agrupación junto al balón (en alturas; el árbitro no cuenta).
         if m["ball_scene"] is not None:
             n_cerca = 0
             for p in personas:
+                if p.get("team") == "arbitro":
+                    continue
                 px = (p["x"] - m["cam_off"][0]) / max(1.0, m["median_height"])
                 py = (p["y"] - m["cam_off"][1]) / max(1.0, m["median_height"])
                 if math.hypot(px - m["ball_scene"][0], py - m["ball_scene"][1]) <= CROWD_RADIUS_HEIGHTS:
@@ -866,6 +943,18 @@ def _detectar_candidatos(muestras: list[dict], camera_mode: str) -> list[dict]:
             if n_cerca >= CROWD_MIN_PEOPLE:
                 senales.append(f"agrupación de {n_cerca} jugadores junto al balón")
                 score += 2.0
+        # Balón cerca de un portero: la jugada está en zona de portería
+        # (tiro a puerta, gol, o balón al área). La posición del portero
+        # marca qué portería se ataca.
+        if m["ball_scene"] is not None:
+            for clave_gk in ("gk_local_scene", "gk_visitante_scene"):
+                gk = m.get(clave_gk)
+                if gk is not None and math.hypot(
+                        m["ball_scene"][0] - gk[0],
+                        m["ball_scene"][1] - gk[1]) <= GK_NEAR_HEIGHTS:
+                    senales.append("balón cerca del portero")
+                    score += 2.0
+                    break
         # Balón fuera de plano: se pierde el balón con velocidad alta (gol, fuera, red)
         if m["ball_s"] is None:
             continue
@@ -1012,16 +1101,18 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
 
     Ventana de ±3 s alrededor del candidato: velocidad del balón, si se
     pierde el balón tras la jugada, cuánto llevaba parado, si cambia la
-    posesión, cuánta gente hay junto al balón, cuánto avanza y (solo en
+    posesión, cuánta gente hay junto al balón, cuánto avanza, distancia a
+    cada portero (su posición marca qué portería se ataca) y (solo en
     modo fija_amplia) si cruza la línea de gol o entra al área.
 
     Devuelve event/confidence/summary/team, como antes devolvía Groq.
     La confianza es heurística y nunca pasa de 0,80: sin ver la jugada no
-    se puede asegurar un gol o un córner. En modo seguimiento el gol NO se
-    etiqueta nunca (no se puede verificar sin la línea de gol en plano);
-    un balón perdido a gran velocidad se etiqueta como tiro. Lo mismo pasa
-    con córner, centro y entrada al área: en seguimiento no hay posición
-    en el campo, así que salen como balón parado, pase o pase clave.
+    se puede asegurar un gol o un córner. En modo seguimiento el gol se
+    etiqueta cuando el balón supera al portero y se pierde (0,65), y el
+    tiro a puerta cuando va rápido junto al portero; sin portero visible
+    no se distinguen (un gol sale como tiro). Lo mismo pasa con córner,
+    centro y entrada al área: en seguimiento no hay posición en el campo,
+    así que salen como balón parado, pase o pase clave.
     """
     import bisect
     t = float(cand["seconds"])
@@ -1073,11 +1164,13 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
     perdido = (sum(1 for m in tramo_despues if m.get("ball_scene") is None)
                / max(1, len(tramo_despues))) if tramo_despues else 0.0
 
-    # Gente junto al balón en el instante del candidato.
+    # Gente junto al balón en el instante del candidato (el árbitro no cuenta).
     agrupacion = 0
     if m0 is not None and m0.get("ball_scene") is not None:
         bx, by = m0["ball_scene"]
         for p in m0["people"]:
+            if p.get("team") == "arbitro":
+                continue
             px = (p["x"] - m0["cam_off"][0]) / max(1.0, m0["median_height"])
             py = (p["y"] - m0["cam_off"][1]) / max(1.0, m0["median_height"])
             if math.hypot(px - bx, py - by) <= CROWD_RADIUS_HEIGHTS:
@@ -1115,23 +1208,79 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
             if (xy_antes[0] - limite) * (xy_despues[0] - limite) < 0:
                 cruza_gol = True
     entra_area = fija and not _en_area(xy_antes) and _en_area(xy_despues)
+
+    # Distancia del balón a cada portero (en alturas). La posición del
+    # portero marca su portería: el equipo que ataca es el contrario al
+    # del portero más cercano. En seguimiento es la única referencia de
+    # qué portería se ataca.
+    def _dist_portero(m, clave):
+        gk = m.get(clave) if m is not None else None
+        if m is None or m.get("ball_scene") is None or gk is None:
+            return None
+        return math.hypot(m["ball_scene"][0] - gk[0], m["ball_scene"][1] - gk[1])
+
+    dist_gk_local = _dist_portero(m0, "gk_local_scene")
+    dist_gk_visitante = _dist_portero(m0, "gk_visitante_scene")
+    dist_gk_antes = min(
+        [d for d in (_dist_portero(m_antes, "gk_local_scene"),
+                     _dist_portero(m_antes, "gk_visitante_scene"))
+         if d is not None], default=None)
+    dist_gk_despues = min(
+        [d for d in (_dist_portero(m_despues, "gk_local_scene"),
+                     _dist_portero(m_despues, "gk_visitante_scene"))
+         if d is not None], default=None)
+    if dist_gk_local is not None and (dist_gk_visitante is None
+                                      or dist_gk_local <= dist_gk_visitante):
+        gk_cercano, dist_gk = "gk_local", dist_gk_local
+        equipo_atacante = team_visitante
+    elif dist_gk_visitante is not None:
+        gk_cercano, dist_gk = "gk_visitante", dist_gk_visitante
+        equipo_atacante = team_local
+    else:
+        gk_cercano, dist_gk, equipo_atacante = None, None, equipo
+    cerca_portero = dist_gk is not None and dist_gk <= GK_NEAR_HEIGHTS
+    en_zona_portero = (dist_gk_despues is not None
+                       and dist_gk_despues <= GK_AREA_HEIGHTS)
+    entra_zona_portero = (dist_gk_antes is not None
+                          and dist_gk_antes > GK_AREA_HEIGHTS
+                          and en_zona_portero)
+    # El equipo que ataca la portería del portero cercano es el contrario.
+    # Un balón rápido junto al portero solo es tiro/gol si lo mueve el
+    # equipo atacante: un pase atrás al propio portero no es un tiro.
+    atacante_codigo = ("visitante" if gk_cercano == "gk_local"
+                       else "local" if gk_cercano == "gk_visitante" else None)
+    ataca = (atacante_codigo is not None
+             and posesion_antes in ("desconocido", atacante_codigo))
     senales = " ".join(cand.get("signals", []))
 
     # 1. Gol: solo en fija_amplia, balón que cruza la línea de gol rápido.
     if fija and cruza_gol and vel_max >= SPEED_FAST_BH:
         return _res("goal", 0.80, f"Gol del {equipo}", equipo)
     # 2. Balón parado con reanudación: córner, saque de portero o balón parado.
+    #    Si la reanudación es un tiro junto al portero (falta directa), no es
+    #    balón parado: se deja pasar a las reglas de tiro/gol de portero.
     if parado_s >= 2.0 and vel_despues >= SPEED_FAST_BH:
         if fija and _cerca_linea_gol(xy_0) and _en_banda(xy_0):
             return _res("corner", 0.70, f"Córner del {equipo}", equipo)
         if agrupacion <= 2:
             return _res("gk_distribution", 0.65,
                         f"Distribución del portero del {equipo}", equipo)
-        return _res("set_piece", 0.65, f"Balón parado del {equipo}", equipo)
+        if not cerca_portero:
+            return _res("set_piece", 0.65, f"Balón parado del {equipo}", equipo)
     # 3. Falta: parada brusca + agrupación + cambio de posesión.
     if ("parada brusca" in senales and agrupacion >= CROWD_MIN_PEOPLE
             and cambio_posesion):
         return _res("foul", 0.60, f"Falta sobre el {equipo}", equipo)
+    # 3b. Gol en seguimiento: balón rápido junto al portero que se pierde
+    #      (lo supera y no reaparece). Menos seguro que en fija amplia
+    #      (0,65 frente a 0,80): sin línea de gol no se puede asegurar.
+    if (not fija and cerca_portero and ataca and vel_max >= SPEED_FAST_BH
+            and perdido >= 0.5):
+        return _res("goal", 0.65, f"Gol del {equipo_atacante}", equipo_atacante)
+    # 3c. Tiro a puerta: balón rápido junto al portero (no se pierde).
+    if cerca_portero and ataca and vel_max >= SPEED_FAST_BH:
+        return _res("shot", 0.70, f"Tiro a puerta del {equipo_atacante}",
+                    equipo_atacante)
     # 4. Tiro: balón perdido a gran velocidad, o rápido hacia la línea de gol.
     if vel_max >= SPEED_FAST_BH and (perdido >= 0.5
                                      or (fija and _cerca_linea_gol(xy_despues))):
@@ -1153,12 +1302,13 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
     # 8. Recuperación / pérdida: cambio de posesión sin más.
     if cambio_posesion:
         return _res("recovery", 0.65, f"Recuperación del {equipo}", equipo)
-    # 9. Pase clave: mismo equipo, balón largo que acaba en el área.
+    # 9. Pase clave: mismo equipo, balón largo que acaba en el área (fija
+    #    amplia) o en zona del portero (seguimiento).
     if (not cambio_posesion and vel_max >= SPEED_FAST_BH and avance >= 6.0
-            and fija and _en_area(xy_despues)):
+            and ((fija and _en_area(xy_despues)) or en_zona_portero)):
         return _res("key_pass", 0.65, f"Pase clave del {equipo} al área", equipo)
-    # 10. Entrada al área.
-    if entra_area:
+    # 10. Entrada al área (fija amplia) o a zona del portero (seguimiento).
+    if entra_area or entra_zona_portero:
         return _res("area_entry", 0.60, f"Entrada al área del {equipo}", equipo)
     # 11. Pase: balón rápido que recorre distancia, mismo equipo.
     if vel_max >= SPEED_FAST_BH and avance >= 4.0 and not cambio_posesion:
@@ -1193,6 +1343,9 @@ def _analizar_impl(
     kickoff_offset: float,
     camera_mode: str,
     progress: ProgressCallback | None,
+    color_gk_local: str = DEFAULT_GK_COLOR_LOCAL,
+    color_gk_visitante: str = DEFAULT_GK_COLOR_VISITANTE,
+    color_arbitro: str = DEFAULT_REFEREE_COLOR,
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -1227,13 +1380,16 @@ def _analizar_impl(
         fin = min(fin, kickoff_offset + float(max_minutes) * 60.0)
     muestras, duracion_partido, _equipos = _track_video(
         video_path, yolo_model, sample_fps, imgsz,
-        color_local, color_visitante, flip_x, flip_y,
+        color_local, color_visitante,
+        color_gk_local, color_gk_visitante, color_arbitro,
+        flip_x, flip_y,
         kickoff_offset, fin, update,
     )
     update("Compensando el movimiento de cámara y suavizando el balón.", 0.45)
     muestras = _suavizar_balon(muestras)
     muestras = _compensar_camara(muestras)
     muestras = _anotar_posesion(muestras, team_local, team_visitante)
+    muestras = _anotar_porteros(muestras)
     posesion_tramos = posesion_por_tramos(muestras, team_local, team_visitante)
     update("Buscando candidatos a evento en las señales del tracking.", 0.55)
     candidatos = _detectar_candidatos(muestras, camera_mode)
@@ -1246,7 +1402,10 @@ def _analizar_impl(
             "match_duration_s": duracion_partido,
             "video_duration_s": duracion_video,
             "samples_analyzed": len(muestras),
-            "team_colors": {"local": color_local, "visitante": color_visitante},
+            "team_colors": {"local": color_local, "visitante": color_visitante,
+                    "gk_local": color_gk_local,
+                    "gk_visitante": color_gk_visitante,
+                    "arbitro": color_arbitro},
         }
 
     output_dir = video_path.parent / f"{video_path.stem}_clips"
@@ -1291,7 +1450,10 @@ def _analizar_impl(
         "match_duration_s": duracion_partido,
         "video_duration_s": duracion_video,
         "samples_analyzed": len(muestras),
-        "team_colors": {"local": color_local, "visitante": color_visitante},
+        "team_colors": {"local": color_local, "visitante": color_visitante,
+                    "gk_local": color_gk_local,
+                    "gk_visitante": color_gk_visitante,
+                    "arbitro": color_arbitro},
     }
 
 
@@ -1299,6 +1461,9 @@ def analyze_video(
     video_path: Path | str,
     color_local: str = "#1E88E5",
     color_visitante: str = "#E53935",
+    color_gk_local: str = DEFAULT_GK_COLOR_LOCAL,
+    color_gk_visitante: str = DEFAULT_GK_COLOR_VISITANTE,
+    color_arbitro: str = DEFAULT_REFEREE_COLOR,
     team_local: str = "Local",
     team_visitante: str = "Visitante",
     sample_fps: int = DEFAULT_SAMPLE_FPS,
@@ -1330,6 +1495,8 @@ def analyze_video(
         team_visitante, sample_fps, max_candidates, pre_roll, post_roll,
         min_confidence, yolo_model, imgsz, flip_x, flip_y,
         max_minutes, kickoff_offset, camera_mode, progress,
+        color_gk_local=color_gk_local,
+        color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
     )["results"]
 
 
@@ -1337,6 +1504,9 @@ def analyze_video_full(
     video_path: Path | str,
     color_local: str = "#1E88E5",
     color_visitante: str = "#E53935",
+    color_gk_local: str = DEFAULT_GK_COLOR_LOCAL,
+    color_gk_visitante: str = DEFAULT_GK_COLOR_VISITANTE,
+    color_arbitro: str = DEFAULT_REFEREE_COLOR,
     team_local: str = "Local",
     team_visitante: str = "Visitante",
     sample_fps: int = DEFAULT_SAMPLE_FPS,
@@ -1365,6 +1535,8 @@ def analyze_video_full(
         team_visitante, sample_fps, max_candidates, pre_roll, post_roll,
         min_confidence, yolo_model, imgsz, flip_x, flip_y,
         max_minutes, kickoff_offset, camera_mode, progress,
+        color_gk_local=color_gk_local,
+        color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
     )
 
 
@@ -1378,6 +1550,9 @@ if __name__ == "__main__":
     parser.add_argument("video", type=Path, help="Ruta local del vídeo")
     parser.add_argument("--color-local", default="#1E88E5")
     parser.add_argument("--color-visitante", default="#E53935")
+    parser.add_argument("--color-gk-local", default=DEFAULT_GK_COLOR_LOCAL)
+    parser.add_argument("--color-gk-visitante", default=DEFAULT_GK_COLOR_VISITANTE)
+    parser.add_argument("--color-arbitro", default=DEFAULT_REFEREE_COLOR)
     parser.add_argument("--team-local", default="Local")
     parser.add_argument("--team-visitante", default="Visitante")
     parser.add_argument("--sample-fps", type=int, default=DEFAULT_SAMPLE_FPS)
@@ -1400,6 +1575,9 @@ if __name__ == "__main__":
     informe = analyze_video_full(
         args.video,
         color_local=args.color_local, color_visitante=args.color_visitante,
+        color_gk_local=args.color_gk_local,
+        color_gk_visitante=args.color_gk_visitante,
+        color_arbitro=args.color_arbitro,
         team_local=args.team_local, team_visitante=args.team_visitante,
         sample_fps=args.sample_fps, max_candidates=args.max_candidates,
         min_confidence=args.min_confidence, yolo_model=args.yolo_model,
