@@ -4,7 +4,7 @@ Nuevo módulo de análisis de vídeo para `match.py`. No toca `prueba.py` ni el
 repo: los archivos viven en `~/workspace/match_view_video_v2/` y se copian a
 mano a la carpeta de Match_view cuando Josenrique lo decida.
 
-- `video_track.py` — tracking continuo con YOLO + clasificación con Groq + cortes con FFmpeg.
+- `video_track.py` — tracking continuo con YOLO + clasificación por tracking + cortes con FFmpeg. Sin Groq: no hace falta API key ni internet.
 - `match.py` — copia completa de `match.py` (commit a415be4) con la pantalla **Vídeo** añadida.
 - `README_VIDEO.md` — este archivo.
 
@@ -15,8 +15,8 @@ mano a la carpeta de Match_view cuando Josenrique lo decida.
 | Una foto cada 5 s, YOLO por lotes de imágenes fijas | `YOLO.track(persist=True, tracker="bytetrack.yaml")` fotograma a fotograma, IDs persistentes en todo el vídeo |
 | Solo contaba personas (clase 0) y balón (32) | Personas + balón, con equipo por color de camiseta (voto por mayoría por track ID) |
 | Balón sin seguir: si se perdía, desaparecía | Balón suavizado EMA + interpolación de huecos ≤ 1 s |
-| Candidatos por cambios de conteo | Candidatos por señales del tracking: pico de velocidad, parada brusca, agrupación, balón fuera de plano, balón parado, saque de portero, transición, pase largo |
-| Groq veía 3 fotos sueltas | Groq ve 3 fotogramas (-2, 0, +2 s) + contexto estructurado (minuto, trayectoria, posesión, zona, señales) |
+| Candidatos por cambios de conteo | Candidatos por señales del tracking: pico de velocidad, parada brusca, agrupación, balón fuera de plano, balón parado, saque de portero, transición, cambio de posesión solo, balón parado largo, entrada al área, pase largo |
+| Clasificación con Groq (visión) | Clasificación solo con el tracking: ventana de ±3 s con velocidad, balón perdido, balón parado, cambio de posesión, agrupación, avance y (en fija amplia) cruce de la línea de gol y entrada al área. Sin API key ni límites de tokens |
 | Solo gol/tiro/córner/falta | Todas las jugadas: gol, tiro a puerta/fuera, pase, pase clave, centro, córner, falta, tarjeta, duelo, recuperación, pérdida, transición/contraataque, entrada al área, balón parado, distribución del portero, posesión por tramos |
 | Coordenadas de campo fijas | Tracking relativo: la cámara sigue al balón, así que la posición en imagen NO es posición en el campo (ver "Limitaciones") |
 | Analizaba desde el minuto 0 | El calentamiento no se analiza: saque inicial manual + sugerencia automática |
@@ -50,8 +50,7 @@ mano a la carpeta de Match_view cuando Josenrique lo decida.
 En PowerShell, en la carpeta de Match_view:
 
 ```powershell
-py -m pip install streamlit pandas ultralytics opencv-python-headless groq
-$env:GROQ_API_KEY = "tu_clave_de_groq"
+py -m pip install streamlit pandas ultralytics opencv-python-headless
 py -m streamlit run match.py
 ```
 
@@ -86,7 +85,6 @@ python video_track.py "C:\Videos\partido.mp4" --kickoff 04:32
 | Parámetro | Default | Dónde se cambia |
 |---|---|---|
 | Modelo YOLO | `yolo11s.pt` (11n más rápido, 11m más preciso) | UI Vídeo / `--yolo-model` |
-| Modelo Groq (visión) | `qwen/qwen3.8-27b` | UI Vídeo / `--groq-model` |
 | Muestreo | 10 fps | UI Vídeo / `--sample-fps` |
 | imgsz | 640 | parámetro `imgsz` |
 | Máx. candidatos | 15 (límite 20) | UI Vídeo / `--max-candidates` |
@@ -96,21 +94,38 @@ python video_track.py "C:\Videos\partido.mp4" --kickoff 04:32
 | Modo de cámara | `seguimiento` (VEO/móvil) | UI Vídeo / `--camera-mode` |
 | Clips | carpeta `<video>_clips`, nombre `MMSS_evento.mp4` | automático |
 
-Modelo Groq verificado el 2026-11-11 en
-https://console.groq.com/docs/models y
-https://console.groq.com/docs/deprecations: `qwen/qwen3.8-27b` es un modelo
-multimodal (visión) real, sucesor de `qwen/qwen3.6-27b`, en Preview (Groq
-puede retirarlo con poco aviso: comprobar con
-`GET https://api.groq.com/openai/v1/models`). NO usar
-`meta-llama/llama-4-scout-17b-16e-instruct` (retirado por Groq el
-17/07/2026). Los `openai/gpt-oss-120b/20b` son solo texto, no valen para
-fotogramas. El modelo es configurable por parámetro.
+## Cómo clasifica YOLO cada jugada (sin Groq)
+
+`_clasificar_por_tracking()` mira una ventana de ±3 s alrededor de cada
+candidato: velocidad del balón, si se pierde tras la jugada, cuánto llevaba
+parado, si cambia la posesión, cuánta gente hay junto al balón, cuánto
+avanza y (solo en fija amplia) si cruza la línea de gol o entra al área.
+
+| Jugada | Cómo se distingue | Confianza |
+|---|---|---|
+| Gol | Solo fija amplia: balón que cruza la línea de gol rápido | 0,80 |
+| Tiro | Balón perdido a gran velocidad, o rápido hacia la línea de gol | 0,70 |
+| Córner | Balón parado ≥2 s + reanudación rápida desde la esquina (fija amplia) | 0,70 |
+| Balón parado | Balón parado ≥2 s + reanudación rápida | 0,65 |
+| Distribución portero | Balón parado ≥2 s + reanudación, con poca gente cerca | 0,65 |
+| Falta | Parada brusca + agrupación + cambio de posesión | 0,60 |
+| Centro | Balón rápido y largo desde banda hacia el área (fija amplia) | 0,65 |
+| Transición / contraataque | Cambio de posesión + avance rápido | 0,70 |
+| Duelo | Agrupación + cambio de posesión | 0,60 |
+| Recuperación | Cambio de posesión sin más | 0,65 |
+| Pase clave | Mismo equipo, balón largo que acaba en el área (fija amplia) | 0,65 |
+| Entrada al área | Del tercio medio al tercio final (fija amplia) | 0,60 |
+| Pase | Balón rápido que recorre distancia, mismo equipo | 0,65 |
+
+La confianza nunca pasa de 0,80: sin ver la jugada no se puede asegurar
+un gol o un córner. La posesión por tramos (15') se sigue calculando del
+tracking y se muestra en la pantalla de Vídeo.
 
 ## Cómo probar
 
 1. **Prueba rápida (10 min)**: vídeo de un partido, `--max-minutes 10` o
    "Primeros 10 minutos (prueba)" en la UI, con el saque inicial puesto a mano.
-   Comprueba: ¿los cortes tienen sentido? ¿Groq clasifica bien gol/tiro/córner?
+   Comprueba: ¿los cortes tienen sentido? ¿YOLO clasifica bien gol/tiro/córner?
 2. **Sugerencia de inicio**: `--suggest-kickoff` y compara con el saque real.
 3. **Colores**: comprueba en Vídeo que los colores heredados de Alineaciones
    son las camisetas de cada equipo. Si no, cámbialos en Alineaciones.
@@ -135,11 +150,12 @@ se ha probado: hace falta un vídeo de partido.
   campo. La zona Z1-Z9 no se puede saber con seguridad en modo seguimiento;
   por eso queda "Sin especificar" (mejor no inventarla). En modo fija amplia
   es solo una aproximación. Esto afecta también a la distinción de jugadas
-  que dependen de la zona (p. ej. entrada al área): Groq las infiere de los
-  fotogramas, no de coordenadas.
+  que dependen de la zona: en seguimiento, el gol sale como tiro, el córner
+  como balón parado, el centro como pase y la entrada al área no se detecta.
+  En fija amplia sí se distinguen (ver la tabla de clasificación).
 - **Balón pequeño y rápido**: YOLO11s puede perder el balón en tiros largos
   o con oclusiones. Se interpola hasta 1 s; si se pierde más, la señal se
-  pierde y Groq decide solo con las imágenes.
+  pierde y la jugada puede salir como tiro o quedar incierta.
 - **VEO panorámico**: si el vídeo es panorámico (muy ancho), el tracking
   sigue funcionando, pero las distancias en alturas se calculan igual; la
   zona sigue sin ser fiable. No se ha probado con ese formato.
@@ -151,9 +167,9 @@ se ha probado: hace falta un vídeo de partido.
 - **Colores**: si las camisetas son parecidas (p. ej. blancas vs grises) o
   hay mucho sol/sombra, la asignación por color falla y muchos jugadores
   quedan "desconocido". La asignación manual de la paleta mitiga esto.
-- **Groq**: `qwen/qwen3.8-27b` está en Preview y puede retirarse; solo
-  admite 3 imágenes por petición, por eso se envían 3 fotogramas (-2, 0,
-  +2 s). La clasificación depende de la calidad de esos 3 fotogramas. Los candidatos
+- **Clasificación sin ver la jugada**: las etiquetas son heurísticas sobre
+  el tracking, no una confirmación visual. La confianza nunca pasa de 0,80
+  y las jugadas ambiguas (falta, duelo) quedan en 0,60. Los candidatos
   descartados se muestran con el motivo para que se vea por qué.
 - **CPU**: en Ryzen 7 sin GPU, un partido de 90 min a 10 fps tarda más que
   en tiempo real (estimación: 1,5-3 h según el PC). Si va lento: bajar a

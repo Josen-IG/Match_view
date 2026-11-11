@@ -42,27 +42,27 @@ Tracking:
 * Posesión = jugador más cercano al balón, suavizada.
 * Candidatos desde señales del tracking (pico de velocidad, parada brusca,
   agrupación, balón fuera de plano, balón parado, saque de portero,
-  transición...), no de cambios de conteo. Groq clasifica cada candidato
-  con 3 fotogramas (-2, 0, +2 s) + contexto estructurado. El modelo solo
-  admite 3 imágenes por petición, por eso no se envían 5.
+  transición, cambio de posesión solo, balón parado largo, entrada al
+  área...), no de cambios de conteo. Cada candidato se clasifica SOLO con
+  el tracking: ventana de ±3 s con velocidad, balón perdido, balón parado,
+  cambio de posesión, agrupación, avance y (en fija_amplia) cruce de la
+  línea de gol y entrada al área. Sin Groq, sin API key, sin límites de
+  tokens. La confianza es heurística y nunca pasa de 0,80.
 * Solo se corta clip si event != "uncertain" y confianza >= 0,65.
 
-Modelo Groq por defecto: ``qwen/qwen3.8-27b``.
-Verificado el 2026-11-11 en https://console.groq.com/docs/models y
-https://console.groq.com/docs/deprecations: modelo multimodal (visión) de
-Groq, sucesor de ``qwen/qwen3.6-27b``, en Preview (puede retirarse con poco
-aviso; comprobar con ``GET https://api.groq.com/openai/v1/models`` con la
-API key). NO usar ``meta-llama/llama-4-scout-17b-16e-instruct``: Groq lo
-retiró el 17/07/2026. Los ``openai/gpt-oss-120b/20b`` son de producción pero
-solo texto, no valen para fotogramas. El modelo es configurable.
+Límites honestos de clasificar solo con tracking (sin ver la jugada):
+en modo seguimiento (VEO/móvil, el habitual) no hay posición en el campo,
+así que el gol, el córner, el centro y la entrada al área NO se pueden
+distinguir con seguridad: un gol sale como tiro, un córner como balón
+parado y un centro como pase. En modo fija_amplia (todo el campo en plano)
+sí se distinguen, porque la posición del balón es posición en el campo.
+La posesión por tramos se calcula del tracking, como antes.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import math
-import os
 import re
 import shutil
 import subprocess
@@ -74,7 +74,6 @@ from typing import Callable, Optional
 # Constantes / defaults (todos configurables por parámetro)
 # ---------------------------------------------------------------------------
 DEFAULT_YOLO_MODEL = "yolo11s.pt"          # equilibrio CPU Ryzen 7; 11n más rápido, 11m más preciso
-DEFAULT_GROQ_MODEL = "qwen/qwen3.8-27b"    # visión, verificado en docs de Groq 2026-11-11
 DEFAULT_MIN_CONFIDENCE = 0.65
 DEFAULT_SAMPLE_FPS = 10                     # ~10 fps (respuesta del usuario); bajar a 5 si va lento
 DEFAULT_MAX_CANDIDATES = 15
@@ -119,7 +118,7 @@ ProgressCallback = Callable[[str, float], None]
 
 
 class VideoProcessingError(RuntimeError):
-    """Error al procesar el vídeo (archivo, ffmpeg, YOLO o Groq)."""
+    """Error al procesar el vídeo (archivo, ffmpeg o YOLO)."""
 
 
 # ---------------------------------------------------------------------------
@@ -817,7 +816,9 @@ def _detectar_candidatos(muestras: list[dict], camera_mode: str) -> list[dict]:
     en alturas de jugador, no posiciones absolutas en el campo):
     pico de velocidad, parada brusca, agrupación junto al balón, balón fuera
     de plano, balón parado + agrupación (balón parado), saque del portero,
-    cambio de posesión + avance rápido (transición), pase largo rápido.
+    cambio de posesión + avance rápido (transición), pase largo rápido,
+    cambio de posesión solo (recuperación / duelo), balón parado largo
+    (≥3 s) y entrada al área (solo fija_amplia).
     En modo fija_amplia se añaden: cruce de línea de gol y balón fuera del campo.
     """
     brutos: list[dict] = []
@@ -901,6 +902,32 @@ def _detectar_candidatos(muestras: list[dict], camera_mode: str) -> list[dict]:
             if avance >= TRANSITION_ADVANCE_HEIGHTS:
                 senales.append("cambio de posesión + avance rápido")
                 score += 3.0
+        # Cambio de posesión solo (sin avance rápido): recuperación / duelo.
+        if (hace_3s is not None
+                and hace_3s["possession"] in ("local", "visitante")
+                and m["possession"] in ("local", "visitante")
+                and hace_3s["possession"] != m["possession"]):
+            senales.append("cambio de posesión")
+            score += 2.0
+        # Balón parado largo (≥3 s): balón parado / falta / saque.
+        parado = 0.0
+        k = i
+        while k > 0 and muestras[k - 1]["ball_speed_bh"] <= STOP_TO_BH:
+            parado += dt
+            k -= 1
+            if parado >= 3.0:
+                break
+        if parado >= 3.0:
+            senales.append("balón parado (≥3 s)")
+            score += 1.5
+        # Entrada al área (solo fija_amplia): del tercio medio al tercio final.
+        if (camera_mode == "fija_amplia" and hace_3s is not None
+                and m["ball_s"] is not None and hace_3s.get("ball_s") is not None):
+            x_antes = hace_3s["ball_s"]["x"]
+            x_ahora = m["ball_s"]["x"]
+            if 17.0 < x_antes < 83.0 and (x_ahora >= 83.0 or x_ahora <= 17.0):
+                senales.append("entrada al área")
+                score += 2.0
         # Solo en cámara fija amplia: línea de gol y balón fuera del campo
         if camera_mode == "fija_amplia" and m["ball_s"] is not None:
             x, y = m["ball_s"]["x"], m["ball_s"]["y"]
@@ -952,109 +979,196 @@ def _dedup_y_limitar(candidatos: list[dict], max_candidates: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Fotogramas para Groq
+# Clasificación por tracking (sin Groq)
 # ---------------------------------------------------------------------------
-def _extraer_fotogramas(video_path: Path | str, timestamps_video: list[float]) -> list[tuple[float, str]]:
-    """Extrae fotogramas en los instantes ABSOLUTOS dados. Devuelve [(t, base64_jpeg)]."""
-    video_path = Path(video_path).expanduser().resolve()
-    import cv2
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise VideoProcessingError(f"No se pudo abrir el vídeo: {video_path}")
-    out: list[tuple[float, str]] = []
-    try:
-        for t in timestamps_video:
-            cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t * 1000.0))
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                continue
-            alto, ancho = frame.shape[:2]
-            if ancho > 960:
-                escala = 960.0 / ancho
-                frame = cv2.resize(frame, (960, max(1, int(alto * escala))))
-            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
-            if not ok:
-                continue
-            out.append((t, base64.b64encode(buf.tobytes()).decode("ascii")))
-    finally:
-        cap.release()
-    return out
+def _muestra_en(muestras: list[dict], tiempos: list[float], t: float) -> dict | None:
+    """Muestra más cercana al instante t (o None si no hay muestras)."""
+    import bisect
+    if not muestras:
+        return None
+    i = bisect.bisect_left(tiempos, t)
+    if i >= len(muestras):
+        i = len(muestras) - 1
+    elif i > 0 and abs(tiempos[i - 1] - t) < abs(tiempos[i] - t):
+        i -= 1
+    return muestras[i]
 
 
-def _clasificar_candidato(client, model: str, frames: list[tuple[float, str]],
-                         contexto: dict) -> dict:
-    """Clasifica un candidato con Groq (visión). Devuelve event/confidence/summary/team."""
-    from groq import APIError
-    # El modelo qwen/qwen3.8-27b solo admite 3 imágenes por petición (error 400
-    # "Too many images provided" si se envían 5). Si llegan más, quedarse con
-    # 3 repartidas: primera, central y última.
-    if len(frames) > 3:
-        frames = [frames[0], frames[len(frames) // 2], frames[-1]]
-    eventos_txt = ", ".join(sorted(VALID_EVENTS - {"uncertain"}))
-    prompt = (
-        "Eres el analista de un partido de fútbol amateur (Regional Preferente, "
-        "cámara que sigue al balón: VEO o móvil, plano que se mueve; la posición en "
-        "la imagen NO es la posición fija en el campo). Clasifica con prudencia esta "
-        "secuencia de fotogramas. No afirmes que hubo gol si no hay evidencia visual "
-        "clara (balón dentro de la portería o celebración clara). Si no se distingue "
-        "una acción concreta, usa uncertain. "
-        "Devuelve SOLO JSON con las claves event, confidence, summary y team. "
-        f"event debe ser uno de: {eventos_txt}, uncertain. "
-        "Prioriza gol, tiro y córner cuando la evidencia lo permita, pero cubre "
-        "también pase, pase clave, centro, falta, tarjeta, duelo, recuperación, "
-        "pérdida, transición/contraataque, entrada al área, balón parado y "
-        "distribución del portero. "
-        "confidence es un número entre 0 y 1. "
-        "summary es una frase MUY breve en español, máximo 12 palabras, que diga qué pasa. "
-        "team es el nombre exacto del equipo protagonista, o \"Desconocido\"."
-    )
-    contexto_texto = (
-        f"Contexto del tracking YOLO (medido, no lo inventes): minuto {contexto['minute']} "
-        f"de partido, segundo {contexto['seconds']:.0f}, zona {contexto['zone']} "
-        f"(solo aproximación; en cámara de seguimiento es 'Sin especificar'), "
-        f"balón en el plano X={contexto['ball_x']:.0f}, Y={contexto['ball_y']:.0f} (0-100, "
-        f"coordenadas de imagen, no de campo), velocidad relativa del balón "
-        f"{contexto['speed_bh']:.1f} alturas/s, posesión: {contexto['team']}, "
-        f"personas detectadas: {contexto['people']}, señales: {', '.join(contexto['signals'])}. "
-        f"Equipos: local {contexto['team_local']}, visitante {contexto['team_visitante']}. "
-        f"Trayectoria del balón en escena (t relativo, X, Y en alturas): {contexto['trayectoria']}."
-    )
-    content: list[dict] = [
-        {"type": "text", "text": prompt},
-        {"type": "text", "text": contexto_texto},
-    ]
-    for timestamp, b64 in frames:
-        content.append({"type": "text", "text": f"Fotograma en {timestamp:.1f} segundos de partido."})
-        content.append({"type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-    try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": content}],
-            temperature=0.1,
-            max_completion_tokens=256,
-            response_format={"type": "json_object"},
-        )
-    except APIError as error:
-        raise VideoProcessingError(f"Error de la API de Groq: {error}") from error
-    response_text = completion.choices[0].message.content
-    try:
-        result = json.loads(response_text)
-        event = str(result["event"]).lower().strip()
-        confidence = float(result["confidence"])
-        summary = str(result["summary"]).strip()
-        team = str(result.get("team", "Desconocido")).strip()
-    except (TypeError, KeyError, ValueError, json.JSONDecodeError) as error:
-        raise VideoProcessingError(
-            "Groq devolvió una clasificación con formato inválido."
-        ) from error
-    if event not in VALID_EVENTS or not 0.0 <= confidence <= 1.0:
-        raise VideoProcessingError("Groq devolvió un tipo de jugada o confianza inválidos.")
-    summary = " ".join(summary.split()[:12]) or "Jugada sin descripción clara."
-    if team not in (contexto["team_local"], contexto["team_visitante"], "Desconocido"):
-        team = contexto["team"] if contexto["team"] in (
-            contexto["team_local"], contexto["team_visitante"]) else "Desconocido"
-    return {"event": event, "confidence": confidence, "summary": summary, "team": team}
+def _posesion_mayoritaria(muestras: list[dict], tiempos: list[float],
+                          t0: float, t1: float) -> str:
+    """Posesión mayoritaria ('local'/'visitante'/'desconocido') entre t0 y t1."""
+    import bisect
+    i0 = bisect.bisect_left(tiempos, t0)
+    i1 = bisect.bisect_right(tiempos, t1)
+    conteo = Counter(m["possession"] for m in muestras[i0:i1])
+    if not conteo:
+        return "desconocido"
+    return conteo.most_common(1)[0][0]
+
+
+def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
+                             team_local: str, team_visitante: str) -> dict:
+    """Clasifica un candidato solo con el tracking YOLO.
+
+    Ventana de ±3 s alrededor del candidato: velocidad del balón, si se
+    pierde el balón tras la jugada, cuánto llevaba parado, si cambia la
+    posesión, cuánta gente hay junto al balón, cuánto avanza y (solo en
+    modo fija_amplia) si cruza la línea de gol o entra al área.
+
+    Devuelve event/confidence/summary/team, como antes devolvía Groq.
+    La confianza es heurística y nunca pasa de 0,80: sin ver la jugada no
+    se puede asegurar un gol o un córner. En modo seguimiento el gol NO se
+    etiqueta nunca (no se puede verificar sin la línea de gol en plano);
+    un balón perdido a gran velocidad se etiqueta como tiro. Lo mismo pasa
+    con córner, centro y entrada al área: en seguimiento no hay posición
+    en el campo, así que salen como balón parado, pase o pase clave.
+    """
+    import bisect
+    t = float(cand["seconds"])
+    tiempos = [m["t"] for m in muestras]
+    if not tiempos:
+        return {"event": "uncertain", "confidence": 0.0,
+                "summary": "Sin muestras de tracking.", "team": "Desconocido"}
+    fija = camera_mode == "fija_amplia"
+
+    def _res(event: str, confidence: float, summary: str, team: str) -> dict:
+        return {"event": event, "confidence": confidence,
+                "summary": summary, "team": team}
+
+    m0 = _muestra_en(muestras, tiempos, t)
+    m_antes = _muestra_en(muestras, tiempos, t - 2.0)
+    m_despues = _muestra_en(muestras, tiempos, t + 2.0)
+    posesion_antes = _posesion_mayoritaria(muestras, tiempos, t - 3.0, t - 0.5)
+    posesion_despues = _posesion_mayoritaria(muestras, tiempos, t + 0.5, t + 3.0)
+    cambio_posesion = (posesion_antes in ("local", "visitante")
+                       and posesion_despues in ("local", "visitante")
+                       and posesion_antes != posesion_despues)
+    equipo = (team_local if posesion_despues == "local"
+              else team_visitante if posesion_despues == "visitante"
+              else cand.get("team") or "Desconocido")
+
+    # Velocidad máxima del balón en [-1, +2] s y velocidad tras la jugada.
+    i0 = bisect.bisect_left(tiempos, t - 1.0)
+    i1 = bisect.bisect_right(tiempos, t + 2.0)
+    ventana = muestras[i0:i1]
+    vel_max = max((m.get("ball_speed_bh") or 0.0) for m in ventana) if ventana else 0.0
+    m_despues_1 = _muestra_en(muestras, tiempos, t + 1.5)
+    vel_despues = (m_despues_1 or {}).get("ball_speed_bh") or 0.0
+
+    # Cuánto llevaba parado el balón antes del candidato.
+    parado_s = 0.0
+    dt = tiempos[1] - tiempos[0] if len(tiempos) > 1 else 0.1
+    j = bisect.bisect_left(tiempos, t)
+    while j > 0:
+        v_parado = muestras[j - 1].get("ball_speed_bh")
+        if v_parado is None or v_parado > STOP_TO_BH:
+            break
+        parado_s += dt
+        j -= 1
+
+    # ¿Se pierde el balón tras el candidato? (fracción de muestras sin balón)
+    k0 = bisect.bisect_left(tiempos, t + 0.5)
+    k1 = bisect.bisect_right(tiempos, t + 3.0)
+    tramo_despues = muestras[k0:k1]
+    perdido = (sum(1 for m in tramo_despues if m.get("ball_scene") is None)
+               / max(1, len(tramo_despues))) if tramo_despues else 0.0
+
+    # Gente junto al balón en el instante del candidato.
+    agrupacion = 0
+    if m0 is not None and m0.get("ball_scene") is not None:
+        bx, by = m0["ball_scene"]
+        for p in m0["people"]:
+            px = (p["x"] - m0["cam_off"][0]) / max(1.0, m0["median_height"])
+            py = (p["y"] - m0["cam_off"][1]) / max(1.0, m0["median_height"])
+            if math.hypot(px - bx, py - by) <= CROWD_RADIUS_HEIGHTS:
+                agrupacion += 1
+
+    # Avance del balón en la ventana [-2, +2] s (en alturas de jugador).
+    avance = 0.0
+    if (m_antes is not None and m_despues is not None
+            and m_antes.get("ball_scene") is not None
+            and m_despues.get("ball_scene") is not None):
+        avance = math.hypot(m_despues["ball_scene"][0] - m_antes["ball_scene"][0],
+                            m_despues["ball_scene"][1] - m_antes["ball_scene"][1])
+
+    # Posición en campo (solo fiable en fija_amplia: X = eje de ataque,
+    # 0 portería local, 100 visitante; Y = ancho).
+    def _xy(m):
+        if m is None or m.get("ball_s") is None:
+            return None
+        return m["ball_s"]["x"], m["ball_s"]["y"]
+
+    xy_antes, xy_0, xy_despues = _xy(m_antes), _xy(m0), _xy(m_despues)
+
+    def _en_area(xy):
+        return xy is not None and (xy[0] >= 83.0 or xy[0] <= 17.0)
+
+    def _cerca_linea_gol(xy):
+        return xy is not None and (xy[0] >= 95.0 or xy[0] <= 5.0)
+
+    def _en_banda(xy):
+        return xy is not None and (xy[1] <= 15.0 or xy[1] >= 85.0)
+
+    cruza_gol = False
+    if fija and xy_antes is not None and xy_despues is not None:
+        for limite in (97.0, 3.0):
+            if (xy_antes[0] - limite) * (xy_despues[0] - limite) < 0:
+                cruza_gol = True
+    entra_area = fija and not _en_area(xy_antes) and _en_area(xy_despues)
+    senales = " ".join(cand.get("signals", []))
+
+    # 1. Gol: solo en fija_amplia, balón que cruza la línea de gol rápido.
+    if fija and cruza_gol and vel_max >= SPEED_FAST_BH:
+        return _res("goal", 0.80, f"Gol del {equipo}", equipo)
+    # 2. Balón parado con reanudación: córner, saque de portero o balón parado.
+    if parado_s >= 2.0 and vel_despues >= SPEED_FAST_BH:
+        if fija and _cerca_linea_gol(xy_0) and _en_banda(xy_0):
+            return _res("corner", 0.70, f"Córner del {equipo}", equipo)
+        if agrupacion <= 2:
+            return _res("gk_distribution", 0.65,
+                        f"Distribución del portero del {equipo}", equipo)
+        return _res("set_piece", 0.65, f"Balón parado del {equipo}", equipo)
+    # 3. Falta: parada brusca + agrupación + cambio de posesión.
+    if ("parada brusca" in senales and agrupacion >= CROWD_MIN_PEOPLE
+            and cambio_posesion):
+        return _res("foul", 0.60, f"Falta sobre el {equipo}", equipo)
+    # 4. Tiro: balón perdido a gran velocidad, o rápido hacia la línea de gol.
+    if vel_max >= SPEED_FAST_BH and (perdido >= 0.5
+                                     or (fija and _cerca_linea_gol(xy_despues))):
+        return _res("shot", 0.70, f"Tiro del {equipo} hacia portería", equipo)
+    # 5. Centro: balón rápido y largo desde banda hacia el área.
+    #    Si sale desde el centro y acaba en el área es pase clave (regla 9),
+    #    no centro: por eso aquí se exige banda en el origen.
+    if (vel_max >= SPEED_FAST_BH and avance >= 6.0 and not cambio_posesion
+            and fija and _en_banda(xy_antes)):
+        return _res("cross", 0.65, f"Centro del {equipo} al área", equipo)
+    # 6. Transición / contraataque: cambio de posesión + avance rápido.
+    if cambio_posesion and avance >= TRANSITION_ADVANCE_HEIGHTS:
+        if avance >= 12.0 and vel_max >= SPEED_FAST_BH:
+            return _res("counterattack", 0.70, f"Contraataque del {equipo}", equipo)
+        return _res("transition", 0.70, f"Transición del {equipo}", equipo)
+    # 7. Duelo: agrupación + cambio de posesión, sin avance rápido.
+    if cambio_posesion and agrupacion >= CROWD_MIN_PEOPLE:
+        return _res("duel", 0.60, f"Duelo ganado por el {equipo}", equipo)
+    # 8. Recuperación / pérdida: cambio de posesión sin más.
+    if cambio_posesion:
+        return _res("recovery", 0.65, f"Recuperación del {equipo}", equipo)
+    # 9. Pase clave: mismo equipo, balón largo que acaba en el área.
+    if (not cambio_posesion and vel_max >= SPEED_FAST_BH and avance >= 6.0
+            and fija and _en_area(xy_despues)):
+        return _res("key_pass", 0.65, f"Pase clave del {equipo} al área", equipo)
+    # 10. Entrada al área.
+    if entra_area:
+        return _res("area_entry", 0.60, f"Entrada al área del {equipo}", equipo)
+    # 11. Pase: balón rápido que recorre distancia, mismo equipo.
+    if vel_max >= SPEED_FAST_BH and avance >= 4.0 and not cambio_posesion:
+        return _res("pass", 0.65, f"Pase del {equipo}", equipo)
+    # 12. Balón parado con reanudación lenta (sin velocidad para la regla 2).
+    #     Si el balón sigue parado después, no es una jugada: incierto.
+    if parado_s >= 2.0 and vel_despues > STOP_TO_BH:
+        return _res("set_piece", 0.60, f"Balón parado del {equipo}", equipo)
+    return {"event": "uncertain", "confidence": 0.0,
+            "summary": "Jugada sin clasificar clara.", "team": equipo}
 
 
 # ---------------------------------------------------------------------------
@@ -1062,7 +1176,6 @@ def _clasificar_candidato(client, model: str, frames: list[tuple[float, str]],
 # ---------------------------------------------------------------------------
 def _analizar_impl(
     video_path: Path | str,
-    api_key: str,
     color_local: str,
     color_visitante: str,
     team_local: str,
@@ -1073,7 +1186,6 @@ def _analizar_impl(
     post_roll: int,
     min_confidence: float,
     yolo_model: str,
-    groq_model: str,
     imgsz: int,
     flip_x: bool,
     flip_y: bool,
@@ -1093,12 +1205,6 @@ def _analizar_impl(
         raise ValueError("El saque inicial no puede ser negativo.")
     if camera_mode not in ("seguimiento", "fija_amplia"):
         raise ValueError("camera_mode debe ser 'seguimiento' o 'fija_amplia'.")
-    if not api_key:
-        raise VideoProcessingError(
-            "No está configurada la variable de entorno GROQ_API_KEY. "
-            "En PowerShell: $env:GROQ_API_KEY = \"tu_clave\" y abre Streamlit "
-            "desde esa misma terminal."
-        )
     update = progress or (lambda _message, _value: None)
     duracion_video = video_duration(video_path)
     if kickoff_offset >= duracion_video:
@@ -1106,12 +1212,6 @@ def _analizar_impl(
             "El saque inicial está después del final del vídeo. Revísalo."
         )
     update("Cargando YOLO y siguiendo el vídeo fotograma a fotograma.", 0.02)
-    try:
-        from groq import Groq
-    except ImportError as error:
-        raise VideoProcessingError(
-            "Falta el paquete groq. Instala con: py -m pip install groq"
-        ) from error
     try:
         import ultralytics  # noqa: F401
         import cv2  # noqa: F401
@@ -1149,37 +1249,15 @@ def _analizar_impl(
             "team_colors": {"local": color_local, "visitante": color_visitante},
         }
 
-    client = Groq(api_key=api_key)
     output_dir = video_path.parent / f"{video_path.stem}_clips"
     resultados: list[dict] = []
     for n_cand, cand in enumerate(candidatos, start=1):
         t = float(cand["seconds"])  # relativo al saque inicial
         t_video = t + kickoff_offset
-        update(f"Groq clasifica candidato {n_cand} de {len(candidatos)}.",
+        update(f"YOLO clasifica candidato {n_cand} de {len(candidatos)}.",
                0.55 + 0.35 * n_cand / max(1, len(candidatos)))
-        tray = []
-        for m in muestras:
-            if abs(m["t"] - t) <= 2.05 and m.get("ball_scene") is not None:
-                tray.append(f"{m['t'] - t:+.1f}s:({m['ball_scene'][0]:.1f},{m['ball_scene'][1]:.1f})")
-        frames = _extraer_fotogramas(
-            video_path, [t_video - 2, t_video, t_video + 2])
-        if len(frames) < 2:
-            clasificacion = {
-                "event": "uncertain", "confidence": 0.0,
-                "summary": "No se pudieron extraer fotogramas.",
-                "team": "Desconocido",
-            }
-        else:
-            contexto = {
-                "minute": int(t // 60), "seconds": t,
-                "zone": zona_para_candidato(cand["ball_x"], cand["ball_y"], camera_mode),
-                "ball_x": cand["ball_x"], "ball_y": cand["ball_y"],
-                "speed_bh": cand["speed_bh"], "team": cand["team"],
-                "people": cand["people"], "signals": cand["signals"],
-                "team_local": team_local, "team_visitante": team_visitante,
-                "trayectoria": "; ".join(tray) if tray else "sin trayectoria",
-            }
-            clasificacion = _clasificar_candidato(client, groq_model, frames, contexto)
+        clasificacion = _clasificar_por_tracking(
+            cand, muestras, camera_mode, team_local, team_visitante)
         clip_path: str | None = None
         if (clasificacion["event"] != "uncertain"
                 and clasificacion["confidence"] >= min_confidence):
@@ -1219,7 +1297,6 @@ def _analizar_impl(
 
 def analyze_video(
     video_path: Path | str,
-    api_key: str,
     color_local: str = "#1E88E5",
     color_visitante: str = "#E53935",
     team_local: str = "Local",
@@ -1230,7 +1307,6 @@ def analyze_video(
     post_roll: int = DEFAULT_POST_ROLL,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     yolo_model: str = DEFAULT_YOLO_MODEL,
-    groq_model: str = DEFAULT_GROQ_MODEL,
     imgsz: int = 640,
     flip_x: bool = False,
     flip_y: bool = False,
@@ -1250,16 +1326,15 @@ def analyze_video(
     ``analyze_video_full``.
     """
     return _analizar_impl(
-        video_path, api_key, color_local, color_visitante, team_local,
+        video_path, color_local, color_visitante, team_local,
         team_visitante, sample_fps, max_candidates, pre_roll, post_roll,
-        min_confidence, yolo_model, groq_model, imgsz, flip_x, flip_y,
+        min_confidence, yolo_model, imgsz, flip_x, flip_y,
         max_minutes, kickoff_offset, camera_mode, progress,
     )["results"]
 
 
 def analyze_video_full(
     video_path: Path | str,
-    api_key: str,
     color_local: str = "#1E88E5",
     color_visitante: str = "#E53935",
     team_local: str = "Local",
@@ -1270,7 +1345,6 @@ def analyze_video_full(
     post_roll: int = DEFAULT_POST_ROLL,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     yolo_model: str = DEFAULT_YOLO_MODEL,
-    groq_model: str = DEFAULT_GROQ_MODEL,
     imgsz: int = 640,
     flip_x: bool = False,
     flip_y: bool = False,
@@ -1287,9 +1361,9 @@ def analyze_video_full(
     "samples_analyzed": ..., "team_colors": {"local": ..., "visitante": ...}}
     """
     return _analizar_impl(
-        video_path, api_key, color_local, color_visitante, team_local,
+        video_path, color_local, color_visitante, team_local,
         team_visitante, sample_fps, max_candidates, pre_roll, post_roll,
-        min_confidence, yolo_model, groq_model, imgsz, flip_x, flip_y,
+        min_confidence, yolo_model, imgsz, flip_x, flip_y,
         max_minutes, kickoff_offset, camera_mode, progress,
     )
 
@@ -1300,7 +1374,7 @@ def analyze_video_full(
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Analizar un vídeo de partido con YOLO + Groq.")
+    parser = argparse.ArgumentParser(description="Analizar un vídeo de partido con YOLO (sin Groq).")
     parser.add_argument("video", type=Path, help="Ruta local del vídeo")
     parser.add_argument("--color-local", default="#1E88E5")
     parser.add_argument("--color-visitante", default="#E53935")
@@ -1310,7 +1384,6 @@ if __name__ == "__main__":
     parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
     parser.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     parser.add_argument("--yolo-model", default=DEFAULT_YOLO_MODEL)
-    parser.add_argument("--groq-model", default=DEFAULT_GROQ_MODEL)
     parser.add_argument("--max-minutes", type=float, default=None)
     parser.add_argument("--kickoff", default="00:00",
                         help="Saque inicial en MM:SS (el calentamiento no se analiza)")
@@ -1324,14 +1397,13 @@ if __name__ == "__main__":
         print("Saque inicial sugerido:",
               format_mmss(sugerido) if sugerido is not None else "no encontrado")
         raise SystemExit(0)
-    key = os.environ.get("GROQ_API_KEY", "")
     informe = analyze_video_full(
-        args.video, key,
+        args.video,
         color_local=args.color_local, color_visitante=args.color_visitante,
         team_local=args.team_local, team_visitante=args.team_visitante,
         sample_fps=args.sample_fps, max_candidates=args.max_candidates,
         min_confidence=args.min_confidence, yolo_model=args.yolo_model,
-        groq_model=args.groq_model, max_minutes=args.max_minutes,
+        max_minutes=args.max_minutes,
         kickoff_offset=parse_mmss(args.kickoff), camera_mode=args.camera_mode,
         progress=lambda msg, frac: print(f"[{frac:.0%}] {msg}"),
     )

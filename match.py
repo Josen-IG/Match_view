@@ -11,7 +11,7 @@ try:
     from video_track import (
         analyze_video_full, suggest_kickoff,
         parse_mmss, format_mmss, VideoProcessingError,
-        DEFAULT_YOLO_MODEL, DEFAULT_GROQ_MODEL,
+        DEFAULT_YOLO_MODEL,
         DEFAULT_MIN_CONFIDENCE, DEFAULT_MAX_CANDIDATES,
         DEFAULT_SAMPLE_FPS, EVENT_NAMES_ES,
     )
@@ -23,7 +23,7 @@ except Exception as _video_err:  # noqa: BLE001 - el vídeo es opcional
     parse_mmss = None
     format_mmss = None
     VideoProcessingError = RuntimeError
-    DEFAULT_YOLO_MODEL, DEFAULT_GROQ_MODEL = "yolo11s.pt", "qwen/qwen3.8-27b"
+    DEFAULT_YOLO_MODEL = "yolo11s.pt"
     DEFAULT_MIN_CONFIDENCE, DEFAULT_MAX_CANDIDATES, DEFAULT_SAMPLE_FPS = 0.65, 15, 10
     EVENT_NAMES_ES = {}
     VIDEO_DISPONIBLE = False
@@ -82,7 +82,7 @@ if "pagina" not in st.session_state:
     st.session_state.pagina = "alineaciones"  # "alineaciones", "partido", "final", "video"
 if "eventos" not in st.session_state:
     st.session_state.eventos = []
-# Estado de la pantalla de Vídeo (análisis YOLO + Groq, video_track.py)
+# Estado de la pantalla de Vídeo (análisis solo YOLO, video_track.py)
 if "video_informe" not in st.session_state:
     st.session_state.video_informe = None
 if "video_seleccionado" not in st.session_state:
@@ -538,7 +538,7 @@ elif st.session_state.pagina == "final":
                 st.session_state.pagina = "alineaciones"
                 st.rerun()
 
-# --- 7. PANTALLA 4: VÍDEO (análisis YOLO + Groq) ---
+# --- 7. PANTALLA 4: VÍDEO (análisis solo YOLO) ---
 elif st.session_state.pagina == "video":
     dp = st.session_state.datos_partido
 
@@ -560,7 +560,7 @@ elif st.session_state.pagina == "video":
         st.error("⚠️ El módulo de vídeo no está disponible en este equipo.")
         st.caption(f"Detalle: {VIDEO_ERROR}")
         st.info("Instala las dependencias en PowerShell: "
-                "py -m pip install ultralytics opencv-python-headless groq")
+                "py -m pip install ultralytics opencv-python-headless")
         st.stop()
 
     st.caption("Cámara que sigue al balón (VEO o móvil): el tracking es relativo "
@@ -659,7 +659,7 @@ elif st.session_state.pagina == "video":
         max_candidatos = st.slider("Máx. candidatos", 1, 20, DEFAULT_MAX_CANDIDATES)
     with p2:
         min_conf = st.slider("Confianza mínima", 0.50, 0.90, DEFAULT_MIN_CONFIDENCE, 0.05,
-                             help="Solo se corta clip si Groq confía al menos esto.")
+                             help="Solo se corta clip si la clasificación confía al menos esto.")
         yolo_modelo = st.selectbox("Modelo YOLO", ["yolo11s.pt", "yolo11n.pt", "yolo11m.pt"], index=0)
     with p3:
         camera_mode_txt = st.selectbox(
@@ -672,22 +672,16 @@ elif st.session_state.pagina == "video":
         alcance_txt = st.selectbox(
             "Alcance", ["Primeros 10 minutos (prueba)", "Partido completo"], index=0,
         )
-    groq_modelo = st.text_input("Modelo Groq (visión)", value=DEFAULT_GROQ_MODEL,
-                                help="Modelo multimodal de Groq. Verificado en 2026: "
-                                     "qwen/qwen3.8-27b. Si Groq lo retira, cambiar aquí.")
-    groq_ok = bool(os.environ.get("GROQ_API_KEY"))
-    if groq_ok:
-        st.success("GROQ_API_KEY configurada (desde entorno).")
-    else:
-        st.warning("GROQ_API_KEY no está configurada. En PowerShell: "
-                   '$env:GROQ_API_KEY = "tu_clave" y abre Streamlit desde esa misma terminal.')
+    st.info("Sin Groq: la clasificación la hace solo YOLO, con las señales del "
+              "tracking (velocidad, balón parado, cambio de posesión, agrupación, "
+              "avance y posición en fija amplia). No hace falta API key ni internet. "
+              "En seguimiento, el gol sale como tiro y el córner como balón parado: "
+              "para distinguirlos usa el modo fija amplia.")
 
     # --- Analizar ---
     if st.button("▶️ Analizar vídeo", type="primary", use_container_width=True):
         if not ruta_video or not os.path.isfile(ruta_video):
             st.error("Escribe una ruta de vídeo válida.")
-        elif not groq_ok:
-            st.error("Falta GROQ_API_KEY (ver aviso de arriba).")
         else:
             try:
                 kickoff_s = parse_mmss(st.session_state.video_kickoff_text)
@@ -702,13 +696,12 @@ elif st.session_state.pagina == "video":
                     estado.write(mensaje)
                 try:
                     informe = analyze_video_full(
-                        Path(ruta_video), os.environ["GROQ_API_KEY"],
+                        Path(ruta_video),
                         color_local=color_local_elegido,
                         color_visitante=color_visitante_elegido,
                         team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
                         sample_fps=sample_fps, max_candidates=max_candidatos,
                         min_confidence=min_conf, yolo_model=yolo_modelo,
-                        groq_model=groq_modelo,
                         max_minutes=10.0 if alcance_txt.startswith("Primeros") else None,
                         kickoff_offset=kickoff_s,
                         camera_mode=("seguimiento" if camera_mode_txt.startswith("Seguimiento")
@@ -779,7 +772,7 @@ elif st.session_state.pagina == "video":
         # Descartados / inciertos
         if sin_clip:
             with st.expander(f"⚠️ Candidatos descartados / inciertos ({len(sin_clip)})", expanded=False):
-                st.caption("Groq no vio una jugada clara o la confianza fue baja. "
+                st.caption("La clasificación no vio una jugada clara o la confianza fue baja. "
                            "Se muestran para que veas por qué no se cortó el clip.")
                 for res in sin_clip:
                     nombre = EVENT_NAMES_ES.get(res["event"], res["event"])
