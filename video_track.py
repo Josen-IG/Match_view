@@ -43,7 +43,8 @@ Tracking:
 * Candidatos desde señales del tracking (pico de velocidad, parada brusca,
   agrupación, balón fuera de plano, balón parado, saque de portero,
   transición...), no de cambios de conteo. Groq clasifica cada candidato
-  con 5 fotogramas (-2, -1, 0, +1, +2 s) + contexto estructurado.
+  con 3 fotogramas (-2, 0, +2 s) + contexto estructurado. El modelo solo
+  admite 3 imágenes por petición, por eso no se envían 5.
 * Solo se corta clip si event != "uncertain" y confianza >= 0,65.
 
 Modelo Groq por defecto: ``qwen/qwen3.8-27b``.
@@ -984,6 +985,11 @@ def _clasificar_candidato(client, model: str, frames: list[tuple[float, str]],
                          contexto: dict) -> dict:
     """Clasifica un candidato con Groq (visión). Devuelve event/confidence/summary/team."""
     from groq import APIError
+    # El modelo qwen/qwen3.8-27b solo admite 3 imágenes por petición (error 400
+    # "Too many images provided" si se envían 5). Si llegan más, quedarse con
+    # 3 repartidas: primera, central y última.
+    if len(frames) > 3:
+        frames = [frames[0], frames[len(frames) // 2], frames[-1]]
     eventos_txt = ", ".join(sorted(VALID_EVENTS - {"uncertain"}))
     prompt = (
         "Eres el analista de un partido de fútbol amateur (Regional Preferente, "
@@ -1156,7 +1162,7 @@ def _analizar_impl(
             if abs(m["t"] - t) <= 2.05 and m.get("ball_scene") is not None:
                 tray.append(f"{m['t'] - t:+.1f}s:({m['ball_scene'][0]:.1f},{m['ball_scene'][1]:.1f})")
         frames = _extraer_fotogramas(
-            video_path, [t_video - 2, t_video - 1, t_video, t_video + 1, t_video + 2])
+            video_path, [t_video - 2, t_video, t_video + 2])
         if len(frames) < 2:
             clasificacion = {
                 "event": "uncertain", "confidence": 0.0,

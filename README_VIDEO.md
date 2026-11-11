@@ -16,7 +16,7 @@ mano a la carpeta de Match_view cuando Josenrique lo decida.
 | Solo contaba personas (clase 0) y balón (32) | Personas + balón, con equipo por color de camiseta (voto por mayoría por track ID) |
 | Balón sin seguir: si se perdía, desaparecía | Balón suavizado EMA + interpolación de huecos ≤ 1 s |
 | Candidatos por cambios de conteo | Candidatos por señales del tracking: pico de velocidad, parada brusca, agrupación, balón fuera de plano, balón parado, saque de portero, transición, pase largo |
-| Groq veía 3 fotos sueltas | Groq ve 5 fotogramas (-2, -1, 0, +1, +2 s) + contexto estructurado (minuto, trayectoria, posesión, zona, señales) |
+| Groq veía 3 fotos sueltas | Groq ve 3 fotogramas (-2, 0, +2 s) + contexto estructurado (minuto, trayectoria, posesión, zona, señales) |
 | Solo gol/tiro/córner/falta | Todas las jugadas: gol, tiro a puerta/fuera, pase, pase clave, centro, córner, falta, tarjeta, duelo, recuperación, pérdida, transición/contraataque, entrada al área, balón parado, distribución del portero, posesión por tramos |
 | Coordenadas de campo fijas | Tracking relativo: la cámara sigue al balón, así que la posición en imagen NO es posición en el campo (ver "Limitaciones") |
 | Analizaba desde el minuto 0 | El calentamiento no se analiza: saque inicial manual + sugerencia automática |
@@ -151,8 +151,9 @@ se ha probado: hace falta un vídeo de partido.
 - **Colores**: si las camisetas son parecidas (p. ej. blancas vs grises) o
   hay mucho sol/sombra, la asignación por color falla y muchos jugadores
   quedan "desconocido". La asignación manual de la paleta mitiga esto.
-- **Groq**: `qwen/qwen3.8-27b` está en Preview y puede retirarse; la
-  clasificación depende de la calidad de los 5 fotogramas. Los candidatos
+- **Groq**: `qwen/qwen3.8-27b` está en Preview y puede retirarse; solo
+  admite 3 imágenes por petición, por eso se envían 3 fotogramas (-2, 0,
+  +2 s). La clasificación depende de la calidad de esos 3 fotogramas. Los candidatos
   descartados se muestran con el motivo para que se vea por qué.
 - **CPU**: en Ryzen 7 sin GPU, un partido de 90 min a 10 fps tarda más que
   en tiempo real (estimación: 1,5-3 h según el PC). Si va lento: bajar a
