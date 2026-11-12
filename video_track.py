@@ -448,7 +448,22 @@ def _distancia_hsv(h1: float, s1: float, v1: float,
 
 
 def _color_torso(frame, x0: int, y0: int, x1: int, y1: int):
-    """Color mediano del torso (centro del bbox) en HSV OpenCV. None si no se puede."""
+    """Color mediano del torso (centro del bbox) en HSV OpenCV. None si no se puede.
+
+    Mediana solo de la mitad más saturada: en camisetas a rayas la mitad
+    blanca diluye el color y en contraluz el blanco lavado hace lo mismo;
+    los píxeles de color (los de la camiseta) son los más saturados.
+
+    NOTA: se probó KMeans (k=2, como en el proyecto football_analysis del
+    vídeo) para separar la camiseta del fondo, con dos reglas de elección
+    (grupo dominante / más saturado, y grupo del centro del torso). En
+    datos reales de este partido salió PEOR que la mediana: el césped
+    verde y saturado domina el torso cuando el jugador está lejos y
+    KMeans lo elegía como camiseta (4 falsos porteros verdes en 07:54,
+    desconocido 14 en el gol frente a 12 con la mediana). El KMeans del
+    vídeo funciona con cámara fija y jugadores grandes; con VEO, jugadores
+    lejos/pequeños y contraluz de atardecer, la mediana es más robusta.
+    """
     import numpy as np
     import cv2
     h, w = frame.shape[:2]
@@ -462,9 +477,6 @@ def _color_torso(frame, x0: int, y0: int, x1: int, y1: int):
     if region.size == 0:
         return None
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    # Mediana solo de la mitad más saturada: en camisetas a rayas la mitad
-    # blanca diluye el color y en contraluz el blanco lavado hace lo mismo;
-    # los píxeles de color (los de la camiseta) son los más saturados.
     pixeles = hsv.reshape(-1, 3)
     umbral_s = np.median(pixeles[:, 1])
     vivos = pixeles[pixeles[:, 1] >= umbral_s]
@@ -2970,11 +2982,31 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
     # 4. Tiro: balón perdido a gran velocidad, o rápido hacia la línea de gol.
     #    Un pase atrás al propio portero NO es tiro: el balón acaba junto
     #    al portero del equipo que tiene la posesión (posesión, no tiro).
-    #    Con mapa del campo, el balón tiene que ir HACIA la portería
-    #    rival: un balón rápido hacia la propia portería es un despeje
-    #    (el error del 08:30, saque del portero verde) y de lado es un
-    #    centro o un cambio de banda, no un tiro.
-    if (vel_max >= SPEED_FAST_BH and not pase_atras
+    #    Con mapa del campo, el balón tiene que ir HACIA la portería rival
+    #    y ACABAR CERCA de ella: un balón rápido que se pierde en el centro
+    #    del campo es un pase o un despeje, no un tiro (en 10 min sin
+    #    ningún tiro real salían 7 "tiros" por esta regla). Sin mapa se
+    #    mantiene la regla anterior (no hay posición real que mirar).
+    tiro_en_tercio_final = True
+    if hay_campo:
+        tiro_en_tercio_final = False
+        xy_fin = xy_campo_despues
+        if xy_fin is None:
+            for m in reversed(ventana):
+                if m.get("ball_pitch_s") is not None:
+                    xy_fin = (m["ball_pitch_s"]["x"], m["ball_pitch_s"]["y"])
+                    break
+        if xy_fin is not None:
+            if x_gk_rival is not None:
+                # La x está comprimida hacia el centro cuando la H es de
+                # baja calidad, pero el balón y el portero se comprimen
+                # juntos: la distancia entre ellos es más fiable que la
+                # x absoluta.
+                tiro_en_tercio_final = abs(xy_fin[0] - x_gk_rival) <= 30.0
+            else:
+                tiro_en_tercio_final = (xy_fin[0] <= 30.0
+                                        or xy_fin[0] >= PITCH_LENGTH_M - 30.0)
+    if (vel_max >= SPEED_FAST_BH and not pase_atras and tiro_en_tercio_final
             and (perdido >= 0.5
                  or (fija and _cerca_linea_gol(xy_despues))
                  or (hay_campo and xy_campo_despues is not None

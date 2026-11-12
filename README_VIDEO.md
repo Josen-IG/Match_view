@@ -128,7 +128,7 @@ y (solo en fija amplia) si cruza la línea de gol o entra al área.
 |---|---|---|
 | Gol | Fija amplia o **con mapa**: balón que cruza la línea de gol rápido (0,80). Seguimiento: (a) tiro rápido que se pierde ≥4 s y se reanuda en el centro (saque de centro: balón parado **en total** ≥1,5 s en los 5 s tras reaparecer, **≥6 jugadores** de los dos equipos alrededor, lejos de cualquier portero, y la reaparición **en el centro** del campo con mapa); (b) **por colocación**: el balón parado en el centro ≥8 s en 30 s con gente alrededor y un tiro rápido en los 60 s anteriores a la colocación — caza los goles en los que el balón **no se pierde** (la cámara lo sigue en la celebración y el traslado al centro). Los tiempos son totales, no rachas: en seguimiento el balón se pierde a menudo y una sola muestra sin balón rompe la racha. El equipo del gol es el que tenía la posesión **antes** del tiro (el pico de velocidad se busca 8 s atrás, porque el candidato se detecta en la pérdida/celebración, después del tiro); si no hay portero cerca, el equipo es el contrario al portero junto al balón en el tiro (el que encaja) | 0,80 / 0,70 |
 | Tiro a puerta | Balón rápido junto al portero | 0,70 |
-| Tiro | Balón perdido a gran velocidad, o rápido hacia la línea de gol (con mapa: a menos de 5 m de la línea). **Un balón que acaba en el propio portero es pase atrás, no tiro** (tampoco pase clave ni entrada al área): el guard se mira en el plano y, con mapa, en metros (balón a menos de 12 m del portero propio). **Con mapa, el tiro exige además que el balón vaya hacia la portería rival** (velocidad en x hacia la portería > 2 m/s); un despeje hacia la propia portería no es tiro | 0,70 |
+| Tiro | Balón perdido a gran velocidad, o rápido hacia la línea de gol (con mapa: a menos de 5 m de la línea). **Un balón que acaba en el propio portero es pase atrás, no tiro** (tampoco pase clave ni entrada al área): el guard se mira en el plano y, con mapa, en metros (balón a menos de 12 m del portero propio). **Con mapa, el tiro exige además que el balón vaya hacia la portería rival** (velocidad en x hacia la portería > 2 m/s) **y que acabe cerca de ella** (a menos de 30 m del portero rival en metros; sin portero visible, a menos de 30 m de una línea de gol): un balón rápido que se pierde en el centro del campo es un pase o un despeje, no un tiro (en 10 min sin ningún tiro real salían 7 "tiros"). Un despeje hacia la propia portería no es tiro | 0,70 |
 | Córner | Balón parado ≥2 s + reanudación rápida desde la esquina (fija amplia) | 0,70 |
 | Balón parado | Balón parado ≥2 s + reanudación rápida | 0,65 |
 | Distribución portero | Balón parado ≥2 s + reanudación, con poca gente cerca | 0,65 |
@@ -264,15 +264,31 @@ pase, secuencias por equipo, posesión 50/50, eventos y tiros contados,
 precisión de pase, informe md/csv, pase lento etiquetado como pase 0,70 y
 pase largo como pase clave), 10/10 checks de falta/gol con las reglas v2
 (falta sin árbitro, pase atrás al portero no es tiro, gol por saque de
-centro con tiempos totales) y 9/9 checks del mapa del campo (gol por cruce
+centro con tiempos totales) y 10/10 checks del mapa del campo (gol por cruce
 de línea, tiro hacia la portería rival, despeje hacia la propia no es tiro,
 entrada al área por metros, centro desde banda por metros, pase atrás con
-mapa no es pase clave, gol por colocación para el saque, homografía con 4
-esquinas y calidad baja con solo el centro, radar con balón en el centro).
+mapa no es pase clave, gol por colocación para el saque, balón rápido
+perdido en el centro no es tiro, homografía con 4 esquinas y calidad baja
+con solo el centro, radar con balón en el centro).
 En vídeo real (10 min del Cirbonero B - Milagres, ventana 05:24-07:54) el
 gol del Cirbonero ~06:07 se detecta como gol del Cirbonero a las 06:16
 (por colocación para el saque); la validación completa de 10 min con los
 cortes y el radar está en curso.
+
+**Colores de camiseta**: el color del torso es la mediana de la mitad más
+saturada de los píxeles. Se probó KMeans (k=2, como en el proyecto
+football_analysis del vídeo de referencia) para separar la camiseta del
+fondo, con dos reglas de elección (grupo dominante / más saturado, y
+grupo del centro del torso). En datos reales de este partido salió peor
+que la mediana: el césped verde y saturado domina el torso cuando el
+jugador está lejos y KMeans lo elegía como camiseta (4 falsos porteros
+verdes en 07:54, 14 desconocidos en el gol frente a 12 con la mediana).
+El KMeans del vídeo funciona con cámara fija y jugadores grandes; con
+VEO, jugadores lejos/pequeños y contraluz de atardecer, la mediana es
+más robusta. El color se compara con los 5 colores que pone el usuario
+en Alineaciones (local, visitante, portero local, portero visitante,
+árbitro) por distancia HSV, con margen mínimo entre la mejor y la segunda
+referencia.
 
 ## Limitaciones conocidas
 
