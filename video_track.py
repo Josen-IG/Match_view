@@ -99,7 +99,7 @@ DEFAULT_PRE_ROLL = 8                        # segundos antes del evento en el cl
 DEFAULT_POST_ROLL = 7                       # segundos después del evento en el clip
 MIN_GAP_SECONDS = 20                        # separación mínima entre candidatos
 MERGE_WINDOW_SECONDS = 8                    # señales a menos de 8 s se fusionan en 1 candidato
-BALL_GAP_MAX_SECONDS = 1.0                  # huecos de balón <= 1 s se interpolan
+BALL_GAP_MAX_SECONDS = 2.0                  # huecos de balón <= 2 s se interpolan
 BALL_EMA_ALPHA = 0.4                        # suavizado del balón (0-1, mayor = más reactivo)
 BALL_MAX_SPEED_BH = 25.0                    # salto máximo creíble del balón
 # en alturas/s (coordenadas de plano: balón + movimiento de cámara). Un tiro
@@ -1055,11 +1055,17 @@ def _corregir_eje_x_campo(muestras: list[dict]) -> int:
     centro (el balón del pase atrás 09:49 salía en x=52 en vez de x~5,
     y el 87% del balón caía en el tercio central). Los dos porteros
     están en sus líneas de gol (x=0 y x=105): se estira el eje x para
-    que caigan ahí. Se calcula en una rejilla cada 30 s (ventana ±30 s,
+    que se separen. Se calcula en una rejilla cada 30 s (ventana ±30 s,
     medianas de la x de cada portero) y se interpola; la y no se toca
-    (la dan bien los keypoints del centro). Solo se aplica si los dos
-    porteros están separados >30 m en el mapa y el factor queda en
-    0,5-3,0. Devuelve el nº de muestras corregidas.
+    (la dan bien los keypoints del centro).
+
+    El estirado se ancla en el PUNTO MEDIO entre los dos porteros
+    (x' = a*(x - x_medio) + 52,5), no en el portero izquierdo: así,
+    cuando la separación es pequeña y el factor se capa (a <= 2,5), los
+    puntos se reparten por el campo en vez de amontonarse en un lado.
+    Sin separación fiable (<10 m), mejor no corregir: las posiciones
+    comprimidas al menos son consistentes y el radar muestra la jugada.
+    Devuelve el nº de muestras corregidas.
     """
     import bisect
     if not muestras:
@@ -1085,17 +1091,15 @@ def _corregir_eje_x_campo(muestras: list[dict]) -> int:
         if xs_loc and xs_vis:
             x1 = min(xs_loc[len(xs_loc) // 2], xs_vis[len(xs_vis) // 2])
             x2 = max(xs_loc[len(xs_loc) // 2], xs_vis[len(xs_vis) // 2])
-            # Solo si los porteros están bien separados en el mapa: con
-            # keypoints solo del centro la x sale comprimida y los
-            # porteros caen cerca uno del otro (x2-x1 ~23 m); estirar
-            # desde ahí es un factor salvaje (a>2) que empuja los puntos
-            # fuera del campo y vacía el radar. Sin separación fiable,
-            # mejor no corregir: las posiciones comprimidas al menos son
-            # consistentes y el radar muestra la jugada.
-            if 40.0 <= x2 - x1 <= 120.0:
-                a = 105.0 / (x2 - x1)
-                if 1.0 <= a <= 2.0:
-                    rejilla.append((tg, a, -a * x1))
+            # Separación mínima para fiarse de los porteros; el factor
+            # se capa a 2,5 para no amplificar el ruido (antes, con
+            # separación ~22 m, no se corregía nada y el radar salía
+            # apelotonado en el centro).
+            if x2 - x1 >= 10.0:
+                a = min(105.0 / (x2 - x1), 2.5)
+                a = max(a, 1.0)
+                x_medio = (x1 + x2) / 2.0
+                rejilla.append((tg, a, 52.5 - a * x_medio))
         tg += 30.0
     if not rejilla:
         return 0
@@ -1429,10 +1433,17 @@ def _equipo_por_track(votos_color: dict[int, Counter],
 
 
 def _suavizar_balon(muestras: list[dict]) -> list[dict]:
-    """EMA + interpolación lineal de huecos de balón <= 1 s. Añade 'ball_s'.
+    """EMA + interpolación lineal de huecos de balón <= 2 s. Añade 'ball_s'.
 
-    Un solo pase sobre las muestras (índices): un hueco <= 1 s son como
-    mucho 10 muestras a 10 fps, así que el coste es lineal.
+    Un solo pase sobre las muestras (índices): un hueco <= 2 s son como
+    mucho 20 muestras a 10 fps, así que el coste es lineal. El hueco
+    era de 1 s; con el balón visto solo en ~60% de las muestras, los
+    huecos de 1-2 s son frecuentes (oclusiones, balón lejos) y cortaban
+    la trayectoria: la posesión se congelaba y los pases se partían.
+    Interpolar hasta 2 s es seguro porque el filtro de saltos ya exige
+    que la velocidad implícita entre las dos detecciones sea creíble
+    (<= BALL_MAX_SPEED_BH); un balón que se pierde 2 s y reaparece
+    lejos no se interpola, se descarta.
 
     Antes de interpolar se descartan los saltos imposibles: a conf 0,10
     YOLO a veces confunde el balón con una línea blanca o una media, y el
@@ -1625,23 +1636,30 @@ def _compensar_camara(muestras: list[dict]) -> list[dict]:
 def _anotar_posesion(muestras: list[dict], team_local: str, team_visitante: str) -> list[dict]:
     """Posesión por muestra: jugador más cercano al balón (en alturas).
 
-    Solo cuentan jugadores de un equipo (el portero cuenta como su equipo);
-    el árbitro y los desconocidos no cambian la posesión. Se mantiene la
-    última posesión cuando el balón va solo (pase en vuelo).
+    Solo cuentan jugadores de un equipo (el portero cuenta como su equipo).
+    Si el jugador más cercano al balón es "desconocido", el portador es
+    desconocido y la posesión NO cambia: antes se le daba al jugador
+    conocido más cercano (a menudo un rival que defendía cerca), y eso
+    regalaba la posesión al otro equipo y la dejaba invertida (40/60
+    cuando a ojo es 55/45). Se mantiene la última posesión cuando el
+    balón va solo (pase en vuelo) o cuando el portador es desconocido.
     """
     posesion_actual = "desconocido"
     for m in muestras:
         if m["ball_scene"] is not None and m["people"]:
             def dist_alturas(p):
-                if _equipo_para_posesion(p.get("team")) is None:
-                    return float("inf")
-                # Posición de la persona también en escena (alturas)
                 px = (p["x"] - m["cam_off"][0]) / max(1.0, m["median_height"])
                 py = (p["y"] - m["cam_off"][1]) / max(1.0, m["median_height"])
                 return math.hypot(px - m["ball_scene"][0], py - m["ball_scene"][1])
-            cercana = min(m["people"], key=dist_alturas)
-            if dist_alturas(cercana) <= POSSESSION_RADIUS_HEIGHTS:
-                posesion_actual = _equipo_para_posesion(cercana["team"])
+            # El más cercano de todos (sin árbitro); el más cercano con
+            # equipo conocido. Si el portador es desconocido, no se toca.
+            candidatos = [p for p in m["people"] if p.get("team") != "arbitro"]
+            if candidatos:
+                cercana = min(candidatos, key=dist_alturas)
+                if dist_alturas(cercana) <= POSSESSION_RADIUS_HEIGHTS:
+                    equipo = _equipo_para_posesion(cercana.get("team"))
+                    if equipo is not None:
+                        posesion_actual = equipo
         m["possession"] = posesion_actual
         m["possession_team_name"] = (
             team_local if posesion_actual == "local"
@@ -2856,8 +2874,15 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
         if m_reap.get("ball_pitch_s") is not None:
             rx, ry = (m_reap["ball_pitch_s"]["x"],
                       m_reap["ball_pitch_s"]["y"])
+            # Con homografía de calidad baja la x se comprime y el centro
+            # real sale desplazado: el radio se amplía a 20 m (con
+            # calidad alta/media sigue en 12 m). Sin este margen, el gol
+            # se perdía en la pasada completa aunque la regla funcionara
+            # en la ventana de diagnóstico.
+            radio_centro = (20.0 if m_reap.get("pitch_calidad") == "baja"
+                            else 12.0)
             reap_en_centro = math.hypot(
-                rx - PITCH_LENGTH_M / 2, ry - PITCH_WIDTH_M / 2) <= 12.0
+                rx - PITCH_LENGTH_M / 2, ry - PITCH_WIDTH_M / 2) <= radio_centro
         if m_reap.get("ball_scene") is not None:
             bx, by = m_reap["ball_scene"]
             equipos_cerca = set()
@@ -2902,11 +2927,14 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
                          bisect.bisect_right(tiempos, t + 30.0)):
             mm = muestras[idx]
             bp = mm.get("ball_pitch_s")
+            # Radio amplio con calidad baja (misma razón que en
+            # reap_en_centro: la x comprimida desplaza el centro).
+            radio_col = (20.0 if mm.get("pitch_calidad") == "baja" else 12.0)
             if (mm.get("ball_scene") is not None
                     and (mm.get("ball_speed_bh") or 0.0) <= STOP_TO_BH
                     and bp is not None
                     and math.hypot(bp["x"] - PITCH_LENGTH_M / 2,
-                                   bp["y"] - PITCH_WIDTH_M / 2) <= 12.0):
+                                   bp["y"] - PITCH_WIDTH_M / 2) <= radio_col):
                 colocacion_s += dt
                 if colocacion_idx is None:
                     colocacion_idx = idx
@@ -3282,6 +3310,12 @@ def _analizar_impl(
         "match_duration_s": duracion_partido,
         "video_duration_s": duracion_video,
         "samples_analyzed": len(muestras),
+        # Mapa del campo: pedido (checkbox) vs activo de verdad. Si se
+        # pidió y no se activó, el modelo pitch_keypoints.pt no estaba
+        # y la descarga falló: la pantalla de Vídeo avisa en vez de
+        # seguir en silencio sin radar ni reglas de mapa.
+        "mapa_pedido": pitch_model != "",
+        "mapa_activo": any(m.get("pitch_ok") for m in muestras),
         "team_local": team_local,
         "team_visitante": team_visitante,
         "team_colors": {"local": color_local, "visitante": color_visitante,

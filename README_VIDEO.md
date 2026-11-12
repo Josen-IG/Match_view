@@ -183,6 +183,31 @@ Vídeo se muestra al seleccionar el corte). Solo salen los jugadores
 clasificados (local/visitante/porteros/árbitro); los "desconocido" no
 se dibujan.
 
+**Mejoras v5 (2026-11-12, los 6 puntos de la demo):**
+- **Posesión**: si el jugador más cercano al balón es "desconocido",
+  la posesión NO cambia (antes se le daba al conocido más cercano,
+  a menudo un rival, y la dejaba invertida). Test en
+  test_pases_estadisticas.py (35 checks).
+- **Gol**: el radio del centro para el saque de centro / colocación
+  es 20 m (no 12 m) cuando la homografía es de calidad baja, porque
+  la x comprimida desplaza el centro. Test en test_faltas_goles.py
+  (14/14).
+- **Radar x**: corrección del eje x anclada en el punto medio entre
+  los dos porteros, factor capado a 2,5 (antes no se corregía nada
+  con separación <40 m y los puntos salían apelotonados en el centro).
+  Test en test_pitch.py (11/11).
+- **Mapa en el PC del usuario**: `analyze_video_full` devuelve
+  `mapa_pedido` / `mapa_activo`; la pantalla Vídeo muestra un aviso
+  bien visible si se pidió el mapa y no se activó (modelo
+  pitch_keypoints.pt ausente y descarga fallida), con el enlace para
+  descargarlo.
+- **Balón**: interpolación de huecos ampliada de 1 s a 2 s (el balón
+  se ve solo en ~60% de las muestras; los huecos de 1-2 s cortaban
+  la trayectoria). Segura por el filtro de saltos (velocidad implícita
+  <= 25 alturas/s). Test en test_pases_estadisticas.py.
+- **Tiros falsos (v4)**: revalidado en los 10 min con las reglas
+  nuevas (ver test10_campo/resultado.json).
+
 **SigLIP + UMAP + KMeans para asignar equipos: PROBADO Y DESCARTADO**
 (2026-11-12, del notebook Roboflow football-ai). El `TeamClassifier`
 (`google/siglip-base-patch16-224`) separa los recortes por **tamaño /

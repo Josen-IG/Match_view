@@ -764,6 +764,18 @@ elif st.session_state.pagina == "video":
                     st.session_state.video_informe = informe
                     st.session_state.video_seleccionado = None
                     estado.write("✅ Análisis completado.")
+                    if informe.get("mapa_pedido") and not informe.get("mapa_activo"):
+                        st.warning(
+                            "⚠️ El mapa del campo NO se activó: no se encontró el modelo "
+                            "pitch_keypoints.pt junto a video_track.py y no se pudo "
+                            "descargar de HuggingFace (¿sin internet?). Sin mapa no hay "
+                            "radar en los cortes, el tiro no exige ir hacia la portería "
+                            "rival y el gol no se detecta al cruzar la línea. Descarga el "
+                            "modelo (85 MB) de https://huggingface.co/Adit-jain/Soccana_Keypoint/"
+                            "resolve/main/Model/weights/best.pt y guárdalo como "
+                            "pitch_keypoints.pt en la misma carpeta que video_track.py, "
+                            "o desmarca el mapa y analiza sin él."
+                        )
                 except VideoProcessingError as err:
                     st.error(str(err))
                 except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo del análisis
