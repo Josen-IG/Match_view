@@ -183,6 +183,25 @@ Vídeo se muestra al seleccionar el corte). Solo salen los jugadores
 clasificados (local/visitante/porteros/árbitro); los "desconocido" no
 se dibujan.
 
+**SigLIP + UMAP + KMeans para asignar equipos: PROBADO Y DESCARTADO**
+(2026-11-12, del notebook Roboflow football-ai). El `TeamClassifier`
+(`google/siglip-base-patch16-224`) separa los recortes por **tamaño /
+distancia del jugador, no por el equipo**: clusters [46, 14] (inestable
+sin semilla: [24, 36] en otra ejecución), acuerdo con el color solo
+54% (azar), y el cluster mayoritario mezcla azules y rojos. Los 18
+"desconocido" por color solo se rescatan 5. SigLIP es un modelo general
+de visión-lenguaje, no distingue camisetas; el color (mediana de la
+mitad más saturada) sigue siendo mejor en este partido. El modelo
+está descargado en `~/workspace/match_view_analysis/siglip-base-patch16-224/`
+(775 MB) por si se quiere reintentar, pero **no se integra**.
+
+**Rescate por mejor vista** (en su lugar): cada track guarda la
+clasificación de su fotograma más cercano (bbox más alto). Si la
+pluralidad de votos no llega, se usa esa vista. Así un jugador que
+sale "desconocido" lejos pero se ve claro de cerca queda asignado.
+`_equipo_por_track(votos, mejor_vista)`; test en test_porteros.py
+(35/35).
+
 **Límites**: con cámara que sigue al balón (VEO) la homografía cambia en
 cada fotograma; si en un momento no se ven líneas, la muestra queda sin
 campo (en el partido de prueba, el 96% de las muestras tiene campo, pero

@@ -1226,6 +1226,13 @@ def _track_video(
     frame_idx = int(start_seconds * fps_real)
     muestras: list[dict] = []
     votos_color: dict[int, Counter] = defaultdict(Counter)
+    # Mejor vista por track: (altura del bbox en px, equipo). Un jugador
+    # lejos/pequeño o a contraluz sale "desconocido" en la mayoría de
+    # fotogramas, pero su fotograma más cercano (bbox más alto) suele
+    # clasificar bien; esa vista decide cuando el voto por pluralidad
+    # no llega (es el rescate de los "desconocido" sin usar SigLIP:
+    # probado y descartado, ver README_VIDEO.md).
+    mejor_vista: dict[int, tuple[float, str]] = {}
     # Asociación propia entre muestras: predict() no da IDs, así que cada
     # persona se casa con el track activo más cercano (radio + altura
     # parecida). Sin ByteTrack: con cámara que sigue al balón el pan/zoom
@@ -1335,11 +1342,14 @@ def _track_video(
                             })
                             x0, y0, x1, y1 = det["caja"]
                             hsv = _color_torso(frame, x0, y0, x1, y1)
-                            votos_color[mejor_id][
-                                _clasificar_color(hsv, ref_local, ref_visitante,
-                                                  ref_gk_local, ref_gk_visitante,
-                                                  ref_arbitro)
-                            ] += 1
+                            equipo_det = _clasificar_color(
+                                hsv, ref_local, ref_visitante,
+                                ref_gk_local, ref_gk_visitante, ref_arbitro)
+                            votos_color[mejor_id][equipo_det] += 1
+                            altura_px = float(y1 - y0)
+                            vista = mejor_vista.get(mejor_id)
+                            if vista is None or altura_px > vista[0]:
+                                mejor_vista[mejor_id] = (altura_px, equipo_det)
                         # Limpiar tracks que llevan demasiado sin verse.
                         for tid in [t for t, tr in tracks_activos.items()
                                     if procesados - tr["ultimo"] > TRACK_MAX_GAP_SAMPLES]:
@@ -1381,25 +1391,41 @@ def _track_video(
         cap.release()
 
     # Equipo por track ID: gana el equipo conocido con más votos (los
-    # "desconocido" no votan). Antes pedía mayoría del 60% y con torsos
-    # ruidosos (rayas, contraluz, césped) casi ningún track llegaba: todos
-    # salían desconocido y la posesión era 72% desconocido.
-    equipo_por_track: dict[int, str] = {}
-    for track_id, votos in votos_color.items():
-        total = sum(votos.values())
-        conocidos = {k: v for k, v in votos.items() if k != "desconocido"}
-        if not conocidos or total < VOTE_MIN_KNOWN:
-            equipo_por_track[track_id] = "desconocido"
-            continue
-        equipo, n = max(conocidos.items(), key=lambda kv: kv[1])
-        if n < VOTE_MIN_KNOWN or n / total < VOTE_MIN_KNOWN_FRAC:
-            equipo_por_track[track_id] = "desconocido"
-            continue
-        equipo_por_track[track_id] = equipo
+    # "desconocido" no votan), con rescate por mejor vista.
+    equipo_por_track = _equipo_por_track(votos_color, mejor_vista)
     for muestra in muestras:
         for persona in muestra["people"]:
             persona["team"] = equipo_por_track.get(persona["track_id"], "desconocido")
     return muestras, duracion_partido, equipo_por_track
+
+
+def _equipo_por_track(votos_color: dict[int, Counter],
+                      mejor_vista: dict[int, tuple[float, str]]
+                      ) -> dict[int, str]:
+    """Equipo final por track ID a partir de los votos de color.
+
+    Gana el equipo conocido con más votos (los "desconocido" no votan).
+    Antes pedía mayoría del 60% y con torsos ruidosos (rayas, contraluz,
+    césped) casi ningún track llegaba: todos salían desconocido y la
+    posesión era 72% desconocido. Si la pluralidad no llega, rescata
+    la mejor vista: el fotograma más cercano del track (bbox más alto)
+    es el más fiable; si ahí se ve el equipo, se usa.
+    """
+    equipo_por_track: dict[int, str] = {}
+    for track_id, votos in votos_color.items():
+        total = sum(votos.values())
+        conocidos = {k: v for k, v in votos.items() if k != "desconocido"}
+        equipo = "desconocido"
+        if conocidos and total >= VOTE_MIN_KNOWN:
+            equipo, n = max(conocidos.items(), key=lambda kv: kv[1])
+            if n < VOTE_MIN_KNOWN or n / total < VOTE_MIN_KNOWN_FRAC:
+                equipo = "desconocido"
+        if equipo == "desconocido":
+            vista = mejor_vista.get(track_id)
+            if vista is not None and vista[1] != "desconocido":
+                equipo = vista[1]
+        equipo_por_track[track_id] = equipo
+    return equipo_por_track
 
 
 def _suavizar_balon(muestras: list[dict]) -> list[dict]:
