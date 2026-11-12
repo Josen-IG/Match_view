@@ -190,6 +190,16 @@ puntos se mueven con los jugadores durante el corte.
 overlay de FFmpeg) y con los desconocido en gris. Test en
 test_pitch.py (12/12).
 
+**Gol v8 (2026-11-12):** la reaparición de la regla 3b debe quedarse
+**5 s en el centro** (en los 10 s siguientes): en un saque de centro
+de verdad el balón se queda ahí ~15 s mientras se colocan; en el
+falso gol de 06:57 solo estaba ~3 s y luego el mapa saltaba fuera del
+radio. Además, si el balón salta más de 8 m en el mapa en 3 s estando
+parado en el plano, el mapa no es fiable y el centro no se fía. Con
+esto, el falso gol de 06:57 ya no es gol (sale como falta) y el gol
+real del Cirbonero sigue detectándose (06:13 y 06:16). Test en
+test_faltas_goles.py (15/15).
+
 **Gol v7 (2026-11-12):** el radio del centro para el saque de centro
 / colocación con calidad baja pasa de 20 m a **25 m**: en la pasada
 completa el balón de la colocación sale a 22 m del centro (la x
