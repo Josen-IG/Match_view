@@ -2852,8 +2852,13 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
                 if mk.get("ball_pitch_s") is not None:
                     rx, ry = (mk["ball_pitch_s"]["x"],
                               mk["ball_pitch_s"]["y"])
+                    # Mismo radio que reap_en_centro (25 m con calidad
+                    # baja): con 12 m fijo, la colocación real (a 22 m
+                    # del centro por la x comprimida) no se encontraba.
+                    radio_busqueda = (25.0 if mk.get("pitch_calidad") == "baja"
+                                      else 12.0)
                     if math.hypot(rx - PITCH_LENGTH_M / 2,
-                                  ry - PITCH_WIDTH_M / 2) <= 12.0:
+                                  ry - PITCH_WIDTH_M / 2) <= radio_busqueda:
                         reap_idx = k
                         break
                 else:
@@ -2881,7 +2886,7 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
             rx, ry = (m_reap["ball_pitch_s"]["x"],
                       m_reap["ball_pitch_s"]["y"])
             # Con homografía de calidad baja la x se comprime y el centro
-            # real sale desplazado: el radio se amplía a 20 m (con
+            # real sale desplazado: el radio se amplía a 25 m (con
             # calidad alta/media sigue en 12 m). Sin este margen, el gol
             # se perdía en la pasada completa aunque la regla funcionara
             # en la ventana de diagnóstico.
@@ -2889,6 +2894,37 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
                             else 12.0)
             reap_en_centro = math.hypot(
                 rx - PITCH_LENGTH_M / 2, ry - PITCH_WIDTH_M / 2) <= radio_centro
+            # Estabilidad del mapa en la reaparición: si la homografía es
+            # inestable, el balón "salta" metros en el mapa aunque en el
+            # plano casi no se mueva (en el falso gol de 06:57 saltó 16 m
+            # en 3 s, de (43,6; 39,2) a (27,9; 29,2)). Un balón parado no
+            # puede moverse 8 m en 3 s: si salta, el mapa no es fiable y
+            # el centro no se puede fiar.
+            t_reap = m_reap["t"]
+            for m2 in muestras[reap_idx:bisect.bisect_right(
+                    tiempos, t_reap + 3.0)]:
+                bp2 = m2.get("ball_pitch_s")
+                if (bp2 is not None
+                        and math.hypot(bp2["x"] - rx, bp2["y"] - ry) > 8.0):
+                    reap_en_centro = False
+                    break
+            # Duración en el centro tras la reaparición: en un saque de
+            # centro de verdad el balón se queda ahí mientras los equipos
+            # se colocan (~15 s); en el falso gol de 06:57 el balón solo
+            # está cerca del centro ~3 s (416-419) y luego salta fuera
+            # del radio. Se exigen 5 s en los 10 s siguientes.
+            if reap_en_centro:
+                centro_s = 0.0
+                for m2 in muestras[reap_idx:bisect.bisect_right(
+                        tiempos, t_reap + 10.0)]:
+                    bp2 = m2.get("ball_pitch_s")
+                    if (bp2 is not None
+                            and math.hypot(bp2["x"] - PITCH_LENGTH_M / 2,
+                                           bp2["y"] - PITCH_WIDTH_M / 2)
+                            <= radio_centro):
+                        centro_s += dt
+                if centro_s < 5.0:
+                    reap_en_centro = False
         if m_reap.get("ball_scene") is not None:
             bx, by = m_reap["ball_scene"]
             equipos_cerca = set()
