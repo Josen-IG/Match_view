@@ -461,9 +461,17 @@ def _hsv_opencv_a_hex(h: float, s: float, v: float) -> str:
 
 def _distancia_hsv(h1: float, s1: float, v1: float,
                    h2: float, s2: float, v2: float) -> float:
-    """Distancia HSV con matiz circular. El matiz pesa más (es lo que distingue camisetas)."""
+    """Distancia HSV con matiz circular. El matiz pesa más (es lo que distingue camisetas).
+
+    En sombra/contraluz la S y la V caen mucho aunque el matiz siga siendo
+    claramente azul o rojo: con los pesos viejos (S 0,5 / V 0,3) un azul
+    en sombra (S~99, V~65) quedaba a distancia ~82 del ref azul y salía
+    "desconocido". Eso dejaba ~4,6 desconocido/muestra (la mayoría azules)
+    y la posesión invertida (42/58 cuando a ojo es 55/45). Con S 0,25 y
+    V 0,15 el matiz manda y esos jugadores se clasifican bien.
+    """
     dh = min(abs(h1 - h2), 180.0 - abs(h1 - h2))
-    return math.sqrt((dh * 2.0) ** 2 + ((s1 - s2) * 0.5) ** 2 + ((v1 - v2) * 0.3) ** 2)
+    return math.sqrt((dh * 2.0) ** 2 + ((s1 - s2) * 0.25) ** 2 + ((v1 - v2) * 0.15) ** 2)
 
 
 def _color_torso(frame, x0: int, y0: int, x1: int, y1: int):
@@ -529,6 +537,14 @@ def _clasificar_color(hsv, ref_local, ref_visitante,
     "desconocido" y el árbitro junto al balón falseaba la posesión.
     Si el color está demasiado lejos de todos, o entre dos referencias
     (p. ej. portero con camiseta parecida a la de su equipo), desconocido.
+
+    Reglas especiales (el matiz no significa nada sin saturación o con
+    muy poca luz):
+    - Casi negro (V<50 y S<80): es el ref más oscuro (portero o árbitro
+      de negro), sin mirar el matiz.
+    - Blanco/gris (S<40 pero claro): desconocido, el matiz no existe.
+    - Un ref oscuro (V<80) solo vale si la V de entrada también es baja:
+      un rojo en sombra (V~65) no es el portero de negro (V~0).
     """
     if hsv is None:
         return "desconocido"
@@ -539,7 +555,21 @@ def _clasificar_color(hsv, ref_local, ref_visitante,
         refs["gk_visitante"] = ref_gk_visitante
     if ref_arbitro is not None:
         refs["arbitro"] = ref_arbitro
-    distancias = {k: _distancia_hsv(*hsv, *v) for k, v in refs.items()}
+    h, s, v = hsv
+    if v < 50.0 and s < 80.0:
+        oscuro = min(refs.items(), key=lambda kv: kv[1][2])
+        if oscuro[1][2] < 80.0:
+            return oscuro[0]
+        return "desconocido"
+    if s < 40.0:
+        return "desconocido"
+    distancias = {}
+    for k, ref in refs.items():
+        if ref[2] < 80.0 and v > ref[2] + 50.0:
+            continue
+        distancias[k] = _distancia_hsv(h, s, v, *ref)
+    if not distancias:
+        return "desconocido"
     orden = sorted(distancias.items(), key=lambda kv: kv[1])
     mejor, d_mejor = orden[0]
     if d_mejor > COLOR_DISTANCE_MAX:

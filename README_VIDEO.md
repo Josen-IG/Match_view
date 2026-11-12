@@ -185,6 +185,19 @@ el radar salía vacío en los momentos en los que casi todos eran
 desconocido. El radar es un vídeo (2 fps), no una foto fija: los
 puntos se mueven con los jugadores durante el corte.
 
+**Posesión v10 (2026-11-12):** la clasificación de color ahora manda
+el MATIZ. Causa raíz de la posesión invertida (42/58 cuando a ojo es
+55/45): el azul en sombra (S~99, V~65) quedaba a distancia ~82 del ref
+azul y salía "desconocido" (23,3% desconocido, la mayoría azules). La
+distancia HSV pesaba S 0,5 / V 0,3 y la sombra dominaba al matiz. Ahora
+S 0,25 / V 0,15, con reglas para negro (V<50 y S<80 → ref más oscuro) y
+blanco/gris (S<40 → desconocido), y un ref oscuro solo vale si la V de
+entrada también es baja (un rojo en sombra no es el portero de negro).
+Medido en fotogramas reales: desconocido 23,3% → 9,2%, local 25,8% →
+39,0%, visitante 37,6% → 35,9% (ratio 52/48, cerca del 55/45 manual).
+Tests: test_porteros 35/35, test_pitch 13/13, test_faltas_goles 15/15,
+test_pases 35 checks.
+
 **Radar v9 (2026-11-12, a petición del usuario):** se ven TODOS los
 jugadores traqueados, con el color de su camiseta tal como se ve en el
 vídeo. Cada persona guarda su color real de torso (`color_rgb`, del
