@@ -2942,15 +2942,38 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
     reap_gente = 0
     reap_en_centro = True
     if reap_idx is not None:
-        # Tiempo TOTAL con el balón visto y parado en (reap, reap+5 s]:
-        # en el saque de centro el balón está parado un rato antes del
-        # saque, pero la cámara lo encuentra cuando ya va a sacarse.
+        # Tiempo con el balón visto y parado DESDE la reaparición, en
+        # una sola racha: se corta en cuanto el balón se mueve (>0,8
+        # alturas/s), salta >8 m del punto de reaparición o se pierde
+        # >1 s seguido. Antes se sumaban TODOS los parados en 5 s
+        # aunque el balón se perdiera entre medias y reapareciera 18 m
+        # más allá: en el falso gol de 06:57, 0,6 s parado en (69,39)
+        # + ~1,2 s parado en (54,29) sumaban 1,8 s aunque nunca hubo
+        # un balón parado en el centro. Una oclusión breve (<1 s) no
+        # corta la racha: la cámara pierde el balón un instante al
+        # colocarlo. La posición de reaparición se guarda antes para
+        # medir el salto.
+        m_reap = muestras[reap_idx]
+        bp_reap = m_reap.get("ball_pitch_s")
+        rx_reap = bp_reap["x"] if bp_reap is not None else None
+        ry_reap = bp_reap["y"] if bp_reap is not None else None
+        perdido_racha = 0.0
         for m in muestras[reap_idx:bisect.bisect_right(
                 tiempos, tiempos[reap_idx] + 5.0)]:
-            if (m.get("ball_scene") is not None
-                    and (m.get("ball_speed_bh") or 0.0) <= STOP_TO_BH):
-                reap_parado += dt
-        m_reap = muestras[reap_idx]
+            if m.get("ball_scene") is None:
+                perdido_racha += dt
+                if perdido_racha > 1.0:
+                    break
+                continue
+            perdido_racha = 0.0
+            if (m.get("ball_speed_bh") or 0.0) > STOP_TO_BH:
+                break
+            bp_m = m.get("ball_pitch_s")
+            if (bp_m is not None and rx_reap is not None
+                    and math.hypot(bp_m["x"] - rx_reap,
+                                   bp_m["y"] - ry_reap) > 8.0):
+                break
+            reap_parado += dt
         if m_reap.get("ball_pitch_s") is not None:
             rx, ry = (m_reap["ball_pitch_s"]["x"],
                       m_reap["ball_pitch_s"]["y"])
@@ -2965,13 +2988,14 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
                 rx - PITCH_LENGTH_M / 2, ry - PITCH_WIDTH_M / 2) <= radio_centro
             # Estabilidad del mapa en la reaparición: si la homografía es
             # inestable, el balón "salta" metros en el mapa aunque en el
-            # plano casi no se mueva (en el falso gol de 06:57 saltó 16 m
-            # en 3 s, de (43,6; 39,2) a (27,9; 29,2)). Un balón parado no
-            # puede moverse 8 m en 3 s: si salta, el mapa no es fiable y
-            # el centro no se puede fiar.
+            # plano casi no se mueva (en el falso gol de 06:57 saltó ~18 m,
+            # de (69,39) a (54,29)). Un balón parado no puede moverse 8 m:
+            # si salta, el mapa no es fiable y el centro no se puede
+            # fiar. La ventana es 5 s, la misma que reap_parado: con 3 s
+            # el salto de 06:57 (a los 3,4 s de la reaparición) se escapaba.
             t_reap = m_reap["t"]
             for m2 in muestras[reap_idx:bisect.bisect_right(
-                    tiempos, t_reap + 3.0)]:
+                    tiempos, t_reap + 5.0)]:
                 bp2 = m2.get("ball_pitch_s")
                 if (bp2 is not None
                         and math.hypot(bp2["x"] - rx, bp2["y"] - ry) > 8.0):
@@ -3078,6 +3102,10 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
     # al colocar (el saque mismo o un pase de la colocación) es rápido
     # pero no es el tiro (en el gol ~06:07 había un pico de 3,08 a 06:20,
     # 1 s antes de la colocación, y el tiro de 4,56 a 06:05).
+    # Y como máximo 25 s antes: en el gol real el tiro está a 14,4 s de
+    # la colocación; sin tope, cualquier balón rápido de hace un minuto
+    # vale como "tiro" y una colocación larga en el centro del campo
+    # (falso gol de 09:29: tiro a 36,6 s) se convierte en gol.
     t_tiro_coloc = None
     equipo_gol_coloc = None
     if colocacion_idx is not None:
@@ -3088,7 +3116,8 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
                 break
             if (mm.get("ball_speed_bh") or 0.0) >= SPEED_FAST_BH:
                 if t_col - mm["t"] >= 10.0:
-                    t_tiro_coloc = mm["t"]
+                    if t_col - mm["t"] <= 25.0:
+                        t_tiro_coloc = mm["t"]
                     break
                 # Balón rápido pegado a la colocación (el saque mismo):
                 # se sigue buscando hacia atrás.
