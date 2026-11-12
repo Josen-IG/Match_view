@@ -3070,8 +3070,18 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
                 # La x está comprimida hacia el centro cuando la H es de
                 # baja calidad, pero el balón y el portero se comprimen
                 # juntos: la distancia entre ellos es más fiable que la
-                # x absoluta.
-                tiro_en_tercio_final = abs(xy_fin[0] - x_gk_rival) <= 30.0
+                # x absoluta. PERO solo con esa distancia no basta: con
+                # los dos comprimidos, un balón en el centro (x~60) queda
+                # a 20 m del portero (x~80) y pasa como tiro. Se exige
+                # ADEMÁS que el balón acabe en el tercio final del lado
+                # del portero rival (x >= 70 si ataca a la derecha,
+                # x <= 35 si ataca a la izquierda).
+                cerca_gk = abs(xy_fin[0] - x_gk_rival) <= 30.0
+                if x_gk_rival > PITCH_LENGTH_M / 2:
+                    en_tercio = xy_fin[0] >= PITCH_LENGTH_M - 35.0
+                else:
+                    en_tercio = xy_fin[0] <= 35.0
+                tiro_en_tercio_final = cerca_gk and en_tercio
             else:
                 tiro_en_tercio_final = (xy_fin[0] <= 30.0
                                         or xy_fin[0] >= PITCH_LENGTH_M - 30.0)
@@ -3178,6 +3188,7 @@ def _analizar_impl(
     conf: float = 0.10,
     pitch_model: str | None = None,
     pitch_keyframe_seconds: float = PITCH_KEYFRAME_SECONDS,
+    debug_muestras_path: str | Path | None = None,
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -3303,6 +3314,10 @@ def _analizar_impl(
     estadisticas = _calcular_estadisticas(
         muestras, resultados, pases, secuencias,
         team_local, team_visitante, duracion_partido)
+    if debug_muestras_path is not None:
+        import pickle
+        with open(debug_muestras_path, "wb") as fh:
+            pickle.dump(muestras, fh)
     informe_base = {
         "results": resultados,
         "possession_by_period": posesion_tramos,
@@ -3413,6 +3428,7 @@ def analyze_video_full(
     progress: ProgressCallback | None = None,
     conf: float = 0.10,
     pitch_model: str | None = None,
+    debug_muestras_path: str | Path | None = None,
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -3424,6 +3440,9 @@ def analyze_video_full(
     "informe_md": ..., "eventos_csv": ..., "estadisticas_csv": ...}
 
     Por defecto imgsz=960 y conf=0.10 (ver analyze_video).
+
+    debug_muestras_path: si se pasa, guarda las muestras procesadas
+    (pickle) ahí para diagnosticar sin volver a trackear el vídeo.
     """
     return _analizar_impl(
         video_path, color_local, color_visitante, team_local,
@@ -3433,6 +3452,7 @@ def analyze_video_full(
         color_gk_local=color_gk_local,
         color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
         conf=conf, pitch_model=pitch_model,
+        debug_muestras_path=debug_muestras_path,
     )
 
 
