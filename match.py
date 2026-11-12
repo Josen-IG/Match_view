@@ -140,8 +140,12 @@ if "datos_partido" not in st.session_state:
 # --- 3. PANTALLA DE ACCESO ---
 if not st.session_state.authenticated:
     st.subheader("🔒 Acceso al Panel de Análisis")
-    pwd = st.text_input("Introduce la llave de acceso:", type="password")
-    if st.button("Entrar", type="primary"):
+    # Con st.form, pulsar Enter en la contraseña envía el formulario
+    # (sin form, Enter solo recargaba y había que pulsar "Entrar").
+    with st.form("login"):
+        pwd = st.text_input("Introduce la llave de acceso:", type="password")
+        entrar = st.form_submit_button("Entrar", type="primary")
+    if entrar:
         if pwd == "1234":
             st.session_state.authenticated = True
             st.rerun()
@@ -595,6 +599,10 @@ elif st.session_state.pagina == "video":
         key="video_path_input",
         placeholder=r"C:\Videos\partido_jornada1.mp4",
     )
+    # Windows pega la ruta entre comillas cuando tiene espacios
+    # ("C:\Mis vídeos\partido.mp4"): se quitan, si no os.path.isfile
+    # no la encuentra y el análisis no arranca.
+    ruta_video = ruta_video.strip().strip('"').strip("'").strip()
     st.session_state.video_path = ruta_video
 
     # --- Saque inicial (manual manda; sugerencia automática opcional) ---
@@ -711,16 +719,13 @@ elif st.session_state.pagina == "video":
         alcance_txt = st.selectbox(
             "Alcance", ["Primeros 10 minutos (prueba)", "Partido completo"], index=0,
         )
-        usar_mapa = st.checkbox(
-            "🗺️ Mapa del campo (homografía)",
-            value=True,
-            help="Calibra la cámara con las líneas del campo (modelo de keypoints) "
-                 "y pone cada jugador y el balón en metros reales (105x68 m). Con "
-                 "mapa, el tiro exige que el balón vaya hacia la portería rival, "
-                 "el gol se detecta al cruzar la línea y cada corte lleva el radar "
-                 "con los puntos de colores. La primera vez descarga el modelo "
-                 "pitch_keypoints.pt (~86 MB) de HuggingFace.",
-        )
+    # Mapa del campo siempre activo (no es una opción): calibra la cámara
+    # con las líneas del campo y pone cada jugador y el balón en metros
+    # reales (105x68 m). El tiro exige que el balón vaya hacia la
+    # portería rival, el gol se detecta al cruzar la línea y cada corte
+    # lleva el radar con los puntos de colores. La primera vez descarga
+    # el modelo pitch_keypoints.pt (~86 MB) de HuggingFace.
+    st.caption("🗺️ Mapa del campo siempre activo (homografía).")
     st.info("Sin Groq: la clasificación la hace solo YOLO, con las señales del "
               "tracking (velocidad, balón parado, cambio de posesión, agrupación, "
               "avance, posición del portero y posición en fija amplia). No hace falta "
@@ -758,7 +763,7 @@ elif st.session_state.pagina == "video":
                         kickoff_offset=kickoff_s,
                         camera_mode=("seguimiento" if camera_mode_txt.startswith("Seguimiento")
                                      else "fija_amplia"),
-                        pitch_model=None if usar_mapa else "",
+                        pitch_model=None,
                         progress=_progreso,
                     )
                     st.session_state.video_informe = informe
