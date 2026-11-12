@@ -261,13 +261,15 @@ def export_clip(
     output_dir: Path | None = None,
     label: str = "accion",
     radar_video: Path | str | None = None,
+    radar_opacidad: float = 0.70,
 ) -> Path:
     """Corta un clip con FFmpeg (H.264 + AAC). Nombre: MMSS_evento.mp4.
 
     Los tiempos son ABSOLUTOS del vídeo (no relativos al saque inicial).
     Si se pasa radar_video (un mp4 con el mapa del campo, misma duración
-    que el clip), se incrusta centrado abajo, como el radar de
-    retransmisión (ocupa la mitad inferior del vídeo).
+    que el clip), se incrusta centrado abajo, como el radar de los
+    videojuegos (FIFA): pequeño (480x300) y semitransparente
+    (radar_opacidad 0,70, se ve el vídeo por debajo).
     """
     video_path = Path(video_path).expanduser().resolve()
     duration = video_duration(video_path)
@@ -286,7 +288,8 @@ def export_clip(
             "-i", str(radar_video),
             "-t", f"{end - start:.3f}",
             "-filter_complex",
-            "[0:v][1:v]overlay=(W-w)/2:H-h-10:shortest=1[v]",
+            f"[1:v]format=rgba,colorchannelmixer=aa={radar_opacidad}[radar];"
+            "[0:v][radar]overlay=(W-w)/2:H-h-10:shortest=1[v]",
             "-map", "[v]", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-movflags", "+faststart",
@@ -864,17 +867,18 @@ def _cruza_linea_gol(xy_antes: tuple[float, float] | None,
     return False
 
 
-def draw_radar(muestra: dict, colores: dict, ancho: int = 960,
-               alto: int = 600) -> "np.ndarray":
+def draw_radar(muestra: dict, colores: dict, ancho: int = 480,
+               alto: int = 300) -> "np.ndarray":
     """Dibuja el mapa del campo (radar) de una muestra: puntos de colores
     por jugador (local/visitante, porteros con borde, árbitro), balón
     blanco. Usa las coordenadas de campo (pitch_x/pitch_y) de la muestra.
     Devuelve una imagen BGR (numpy) lista para incrustar en un clip.
 
-    Tamaño grande (960x600) como el radar de retransmisión: ocupa la
-    mitad inferior del vídeo, centrado abajo, con el campo completo
-    (porterías, áreas, círculo central, puntos de penalti) y puntos
-    grandes con borde. Los grosores y radios escalan con el tamaño.
+    Tamaño 480x300, como el radar de los videojuegos (FIFA): pequeño y
+    abajo en el centro, sin tapar la jugada. Los grosores y radios
+    escalan con el tamaño. Los jugadores "desconocido" se dibujan en
+    gris: antes no se dibujaban y el radar salía vacío en los momentos
+    en los que casi todos eran desconocido.
     """
     import numpy as np
     import cv2
@@ -926,6 +930,7 @@ def draw_radar(muestra: dict, colores: dict, ancho: int = 960,
     c_local = _color_bgr(colores.get("local", "#1E88E5"))
     c_visitante = _color_bgr(colores.get("visitante", "#E53935"))
     c_arbitro = _color_bgr(colores.get("arbitro", "#CCFF00"))
+    c_desconocido = (158, 158, 158)  # gris BGR: jugador sin equipo claro
     for p in muestra.get("people", []):
         if p.get("pitch_x") is None or p.get("pitch_y") is None:
             continue
@@ -937,7 +942,8 @@ def draw_radar(muestra: dict, colores: dict, ancho: int = 960,
         elif team == "arbitro":
             color = c_arbitro
         else:
-            continue
+            # Desconocido: gris, para que el radar nunca salga vacío.
+            color = c_desconocido
         # La homografía extrapola mal en los bordes (y<0 o y>68): el
         # punto se recorta al campo para que nunca desaparezca del radar.
         cx, cy = _px(min(max(p["pitch_x"], 0.0), PITCH_LENGTH_M),
@@ -2879,7 +2885,7 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
             # calidad alta/media sigue en 12 m). Sin este margen, el gol
             # se perdía en la pasada completa aunque la regla funcionara
             # en la ventana de diagnóstico.
-            radio_centro = (20.0 if m_reap.get("pitch_calidad") == "baja"
+            radio_centro = (25.0 if m_reap.get("pitch_calidad") == "baja"
                             else 12.0)
             reap_en_centro = math.hypot(
                 rx - PITCH_LENGTH_M / 2, ry - PITCH_WIDTH_M / 2) <= radio_centro
@@ -2929,7 +2935,7 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
             bp = mm.get("ball_pitch_s")
             # Radio amplio con calidad baja (misma razón que en
             # reap_en_centro: la x comprimida desplaza el centro).
-            radio_col = (20.0 if mm.get("pitch_calidad") == "baja" else 12.0)
+            radio_col = (25.0 if mm.get("pitch_calidad") == "baja" else 12.0)
             if (mm.get("ball_scene") is not None
                     and (mm.get("ball_speed_bh") or 0.0) <= STOP_TO_BH
                     and bp is not None

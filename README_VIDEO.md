@@ -176,12 +176,28 @@ constrainida por las líneas del centro.
 
 **Radar en los cortes**: cada corte lleva el mapa del campo con los
 jugadores como **puntos de colores** (color de cada equipo, porteros con
-borde, balón blanco) incrustado **centrado abajo** en el clip, grande
-(960x600, la mitad inferior del vídeo, como el radar de retransmisión),
-y una imagen PNG del radar en el momento de la jugada (en la pantalla de
-Vídeo se muestra al seleccionar el corte). Solo salen los jugadores
-clasificados (local/visitante/porteros/árbitro); los "desconocido" no
-se dibujan.
+borde, balón blanco) incrustado **centrado abajo** en el clip, pequeño
+(480x300, como el radar de los videojuegos) y semitransparente (70%,
+se ve el vídeo por debajo), y una imagen PNG del radar en el momento
+de la jugada (en la pantalla de Vídeo se muestra al seleccionar el
+corte). Los "desconocido" se dibujan en gris: antes no se dibujaban y
+el radar salía vacío en los momentos en los que casi todos eran
+desconocido. El radar es un vídeo (2 fps), no una foto fija: los
+puntos se mueven con los jugadores durante el corte.
+
+**Radar v7 (2026-11-12, a petición del usuario):** más pequeño
+(480x300, antes 960x600), semitransparente (opacidad 0,70 en el
+overlay de FFmpeg) y con los desconocido en gris. Test en
+test_pitch.py (12/12).
+
+**Gol v7 (2026-11-12):** el radio del centro para el saque de centro
+/ colocación con calidad baja pasa de 20 m a **25 m**: en la pasada
+completa el balón de la colocación sale a 22 m del centro (la x
+comprimida lo desplaza) y con 20 m no se detectaba el gol. Con 25 m,
+el gol del Cirbonero se detecta bien (06:13 y 06:16). Queda un gol
+falso a 06:57 (Milagres) por la regla 3b: la homografía es inestable
+ahí (el balón salta 16 m en 2 s) y la reaparición cae cerca del
+centro. Test en test_faltas_goles.py (14/14).
 
 **Mejoras v5 (2026-11-12, los 6 puntos de la demo):**
 - **Posesión**: si el jugador más cercano al balón es "desconocido",
