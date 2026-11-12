@@ -266,7 +266,8 @@ def export_clip(
 
     Los tiempos son ABSOLUTOS del vídeo (no relativos al saque inicial).
     Si se pasa radar_video (un mp4 con el mapa del campo, misma duración
-    que el clip), se incrusta abajo a la derecha con overlay.
+    que el clip), se incrusta centrado abajo, como el radar de
+    retransmisión (ocupa la mitad inferior del vídeo).
     """
     video_path = Path(video_path).expanduser().resolve()
     duration = video_duration(video_path)
@@ -285,7 +286,7 @@ def export_clip(
             "-i", str(radar_video),
             "-t", f"{end - start:.3f}",
             "-filter_complex",
-            "[0:v][1:v]overlay=W-w-10:H-h-10:shortest=1[v]",
+            "[0:v][1:v]overlay=(W-w)/2:H-h-10:shortest=1[v]",
             "-map", "[v]", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-movflags", "+faststart",
@@ -863,33 +864,45 @@ def _cruza_linea_gol(xy_antes: tuple[float, float] | None,
     return False
 
 
-def draw_radar(muestra: dict, colores: dict, ancho: int = 420,
-               alto: int = 280) -> "np.ndarray":
+def draw_radar(muestra: dict, colores: dict, ancho: int = 960,
+               alto: int = 600) -> "np.ndarray":
     """Dibuja el mapa del campo (radar) de una muestra: puntos de colores
     por jugador (local/visitante, porteros con borde, árbitro), balón
     blanco. Usa las coordenadas de campo (pitch_x/pitch_y) de la muestra.
-    Devuelve una imagen BGR (numpy) lista para incrustar en un clip."""
+    Devuelve una imagen BGR (numpy) lista para incrustar en un clip.
+
+    Tamaño grande (960x600) como el radar de retransmisión: ocupa la
+    mitad inferior del vídeo, centrado abajo, con el campo completo
+    (porterías, áreas, círculo central, puntos de penalti) y puntos
+    grandes con borde. Los grosores y radios escalan con el tamaño.
+    """
     import numpy as np
     import cv2
     img = np.full((alto, ancho, 3), (46, 125, 50), dtype=np.uint8)  # verde
-    m = 14  # margen
+    m = 28  # margen
     x0, y0 = m, m
     w = ancho - 2 * m
     h = alto - 2 * m
     ex, ey = w / PITCH_LENGTH_M, h / PITCH_WIDTH_M
+    esc = ancho / 420.0  # escala respecto al radar pequeño original
+    gr_linea = max(1, int(round(2 * esc)))
+    r_jug = max(3, int(round(7 * esc)))
+    r_port = max(4, int(round(9 * esc)))
+    r_balon = max(4, int(round(8 * esc)))
 
     def _px(x_m: float, y_m: float) -> tuple[int, int]:
         return (int(x0 + x_m * ex), int(y0 + y_m * ey))
 
-    def _linea(p1, p2, color=(255, 255, 255), grosor=1):
-        cv2.line(img, _px(*p1), _px(*p2), color, grosor, cv2.LINE_AA)
+    def _linea(p1, p2, color=(255, 255, 255), grosor=None):
+        cv2.line(img, _px(*p1), _px(*p2), color,
+                 grosor if grosor is not None else gr_linea, cv2.LINE_AA)
 
     # Contorno, medio campo, círculo central y áreas.
     cv2.rectangle(img, _px(0, 0), _px(PITCH_LENGTH_M, PITCH_WIDTH_M),
-                  (255, 255, 255), 1, cv2.LINE_AA)
+                  (255, 255, 255), gr_linea, cv2.LINE_AA)
     _linea((PITCH_LENGTH_M / 2, 0), (PITCH_LENGTH_M / 2, PITCH_WIDTH_M))
     cv2.circle(img, _px(PITCH_LENGTH_M / 2, PITCH_WIDTH_M / 2),
-               int(PITCH_CENTER_R_M * ex), (255, 255, 255), 1, cv2.LINE_AA)
+               int(PITCH_CENTER_R_M * ex), (255, 255, 255), gr_linea, cv2.LINE_AA)
     for gx in (0.0, PITCH_LENGTH_M):
         d = PITCH_BOX_DEPTH_M if gx == 0.0 else -PITCH_BOX_DEPTH_M
         g = PITCH_GOAL_BOX_DEPTH_M if gx == 0.0 else -PITCH_GOAL_BOX_DEPTH_M
@@ -903,7 +916,8 @@ def draw_radar(muestra: dict, colores: dict, ancho: int = 420,
         _linea((gx + g, y2), (gx, y2))
     # Punto de penalti y centro.
     for px_, py_ in ((11, 34), (94, 34), (52.5, 34)):
-        cv2.circle(img, _px(px_, py_), 2, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(img, _px(px_, py_), max(2, int(round(4 * esc))),
+                   (255, 255, 255), -1, cv2.LINE_AA)
 
     def _color_bgr(hex_color: str) -> tuple[int, int, int]:
         r, g, b = _hex_a_rgb(hex_color)
@@ -929,16 +943,17 @@ def draw_radar(muestra: dict, colores: dict, ancho: int = 420,
         cx, cy = _px(min(max(p["pitch_x"], 0.0), PITCH_LENGTH_M),
                       min(max(p["pitch_y"], 0.0), PITCH_WIDTH_M))
         if team in ("gk_local", "gk_visitante"):
-            cv2.circle(img, (cx, cy), 6, (0, 0, 0), -1, cv2.LINE_AA)
-            cv2.circle(img, (cx, cy), 5, color, -1, cv2.LINE_AA)
+            cv2.circle(img, (cx, cy), r_port + 1, (0, 0, 0), -1, cv2.LINE_AA)
+            cv2.circle(img, (cx, cy), r_port, color, -1, cv2.LINE_AA)
         else:
-            cv2.circle(img, (cx, cy), 4, color, -1, cv2.LINE_AA)
+            cv2.circle(img, (cx, cy), r_jug + 1, (0, 0, 0), -1, cv2.LINE_AA)
+            cv2.circle(img, (cx, cy), r_jug, color, -1, cv2.LINE_AA)
     balon = muestra.get("ball")
     if balon and balon.get("pitch_x") is not None:
         cx, cy = _px(min(max(balon["pitch_x"], 0.0), PITCH_LENGTH_M),
                       min(max(balon["pitch_y"], 0.0), PITCH_WIDTH_M))
-        cv2.circle(img, (cx, cy), 5, (0, 0, 0), -1, cv2.LINE_AA)
-        cv2.circle(img, (cx, cy), 4, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(img, (cx, cy), r_balon + 1, (0, 0, 0), -1, cv2.LINE_AA)
+        cv2.circle(img, (cx, cy), r_balon, (255, 255, 255), -1, cv2.LINE_AA)
     return img
 
 

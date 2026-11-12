@@ -176,9 +176,12 @@ constrainida por las líneas del centro.
 
 **Radar en los cortes**: cada corte lleva el mapa del campo con los
 jugadores como **puntos de colores** (color de cada equipo, porteros con
-borde, balón blanco) incrustado en la esquina inferior derecha del clip,
+borde, balón blanco) incrustado **centrado abajo** en el clip, grande
+(960x600, la mitad inferior del vídeo, como el radar de retransmisión),
 y una imagen PNG del radar en el momento de la jugada (en la pantalla de
-Vídeo se muestra al seleccionar el corte).
+Vídeo se muestra al seleccionar el corte). Solo salen los jugadores
+clasificados (local/visitante/porteros/árbitro); los "desconocido" no
+se dibujan.
 
 **Límites**: con cámara que sigue al balón (VEO) la homografía cambia en
 cada fotograma; si en un momento no se ven líneas, la muestra queda sin
