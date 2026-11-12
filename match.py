@@ -776,10 +776,11 @@ elif st.session_state.pagina == "video":
                             "descargar de HuggingFace (¿sin internet?). Sin mapa no hay "
                             "radar en los cortes, el tiro no exige ir hacia la portería "
                             "rival y el gol no se detecta al cruzar la línea. Descarga el "
-                            "modelo (85 MB) de https://huggingface.co/Adit-jain/Soccana_Keypoint/"
+                            "modelo (85 MB) de tu Drive "
+                            "(https://drive.google.com/file/d/1OX_xWS9xPY1s7exrqI8ejrWJ2ZQM8c9o/view) "
+                            "o de https://huggingface.co/Adit-jain/Soccana_Keypoint/"
                             "resolve/main/Model/weights/best.pt y guárdalo como "
-                            "pitch_keypoints.pt en la misma carpeta que video_track.py, "
-                            "o desmarca el mapa y analiza sin él."
+                            "pitch_keypoints.pt en la misma carpeta que video_track.py."
                         )
                 except VideoProcessingError as err:
                     st.error(str(err))
