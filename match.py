@@ -711,6 +711,16 @@ elif st.session_state.pagina == "video":
         alcance_txt = st.selectbox(
             "Alcance", ["Primeros 10 minutos (prueba)", "Partido completo"], index=0,
         )
+        usar_mapa = st.checkbox(
+            "🗺️ Mapa del campo (homografía)",
+            value=True,
+            help="Calibra la cámara con las líneas del campo (modelo de keypoints) "
+                 "y pone cada jugador y el balón en metros reales (105x68 m). Con "
+                 "mapa, el tiro exige que el balón vaya hacia la portería rival, "
+                 "el gol se detecta al cruzar la línea y cada corte lleva el radar "
+                 "con los puntos de colores. La primera vez descarga el modelo "
+                 "pitch_keypoints.pt (~86 MB) de HuggingFace.",
+        )
     st.info("Sin Groq: la clasificación la hace solo YOLO, con las señales del "
               "tracking (velocidad, balón parado, cambio de posesión, agrupación, "
               "avance, posición del portero y posición en fija amplia). No hace falta "
@@ -748,6 +758,7 @@ elif st.session_state.pagina == "video":
                         kickoff_offset=kickoff_s,
                         camera_mode=("seguimiento" if camera_mode_txt.startswith("Seguimiento")
                                      else "fija_amplia"),
+                        pitch_model=None if usar_mapa else "",
                         progress=_progreso,
                     )
                     st.session_state.video_informe = informe
@@ -783,6 +794,7 @@ elif st.session_state.pagina == "video":
                     ("Pases intentados", "pases", "total"),
                     ("Pases completados", "pases", "completados"),
                     ("Precisión de pase (%)", "pases", "precision_pct"),
+                    ("Distancia media de pase (m)", "pases", "distancia_media_m"),
                     ("Secuencias", "pases", "secuencias"),
                     ("Secuencia más larga (pases)", "pases", "secuencia_max_pases"),
                     ("Goles", "tiros", "goles"),
@@ -823,6 +835,14 @@ elif st.session_state.pagina == "video":
                        f"velocidad media {est['balon']['velocidad_media_bh']} alturas/s · "
                        f"máxima {est['balon']['velocidad_max_bh']} · "
                        f"detectado en el {est['balon']['muestras_con_balon_pct']}% de las muestras.")
+            if est["balon"].get("muestras_con_campo_pct"):
+                terc = est.get("tercios_campo") or {}
+                st.caption(f"Mapa del campo: {est['balon']['distancia_recorrida_m']} m recorridos · "
+                           f"velocidad media {est['balon']['velocidad_media_kmh']} km/h · "
+                           f"máxima {est['balon']['velocidad_max_kmh']} km/h · "
+                           f"campo calculado en el {est['balon']['muestras_con_campo_pct']}% "
+                           f"de las muestras · balón por tercios: izquierda {terc.get('izquierda_pct', 0)}% · "
+                           f"centro {terc.get('centro_pct', 0)}% · derecha {terc.get('derecha_pct', 0)}%.")
             # Descargar informe (markdown + CSV) generado junto a los clips
             st.markdown("**Informe completo:**")
             c_d1, c_d2, c_d3 = st.columns(3)
@@ -858,6 +878,12 @@ elif st.session_state.pagina == "video":
                         f"({int(sel['confidence'] * 100)}%)")
             st.write(sel["summary"])
             st.video(sel["clip_path"])
+            if sel.get("radar_path") and os.path.isfile(sel["radar_path"]):
+                st.image(sel["radar_path"],
+                         caption="Mapa del campo en el momento de la jugada: "
+                                 "puntos de colores por jugador (porteros con borde) "
+                                 "y balón blanco. También va incrustado en el clip.",
+                         use_container_width=False)
             st.caption(f"Equipo: {sel['team']} · Zona: {sel['zone']} · "
                        f"Balón en plano X={sel['ball_x']}, Y={sel['ball_y']} · "
                        f"YOLO: {sel['yolo_people']} personas, balón {'sí' if sel['yolo_ball'] else 'no'}")

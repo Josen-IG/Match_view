@@ -13,7 +13,7 @@ mano a la carpeta de Match_view cuando Josenrique lo decida.
 | Antes (video_ai.py) | Ahora (video_track.py) |
 |---|---|
 | Una foto cada 5 s, YOLO por lotes de imágenes fijas | `YOLO.track(persist=True, tracker="bytetrack.yaml")` fotograma a fotograma, IDs persistentes en todo el vídeo |
-| Solo contaba personas (clase 0) y balón (32) | Personas + balón, con equipo por color de camiseta (voto por mayoría por track ID) |
+| Solo contaba personas (clase 0) y balón (32) | Personas + balón, con equipo por color de camiseta (el más votado entre los conocidos por track ID) |
 | Balón sin seguir: si se perdía, desaparecía | Balón suavizado EMA + interpolación de huecos ≤ 1 s |
 | Candidatos por cambios de conteo | Candidatos por señales del tracking: pico de velocidad, parada brusca, agrupación, balón fuera de plano, balón parado, saque de portero, transición, cambio de posesión solo, balón parado largo, entrada al área, balón cerca del portero, pase largo |
 | Clasificación con Groq (visión) | Clasificación solo con el tracking: ventana de ±3 s con velocidad, balón perdido, balón parado, cambio de posesión, agrupación, avance y (en fija amplia) cruce de la línea de gol y entrada al área. Sin API key ni límites de tokens |
@@ -46,7 +46,7 @@ mano a la carpeta de Match_view cuando Josenrique lo decida.
 4. **Jugadas**: todas las variables, análisis en profundidad (lista arriba).
    Prioridad a gol/tiro/córner, pero se cubren todas.
 5. **PC**: Windows, Ryzen 7 serie 7000, **CPU (sin GPU)**. YOLO11s por
-   defecto, imgsz 640, muestreo ~10 fps, `device="cpu"`.
+   defecto, imgsz 960, conf 0,10, muestreo ~10 fps, `device="cpu"`.
 6. **Cortes**: solo botones con resumen breve, guardado **manual** a eventos.
    Nada se añade solo al CSV.
 
@@ -90,14 +90,31 @@ python video_track.py "C:\Videos\partido.mp4" --kickoff 04:32
 | Parámetro | Default | Dónde se cambia |
 |---|---|---|
 | Modelo YOLO | `yolo11s.pt` (11n más rápido, 11m más preciso) | UI Vídeo / `--yolo-model` |
-| Muestreo | 10 fps | UI Vídeo / `--sample-fps` |
-| imgsz | 640 | parámetro `imgsz` |
+| Muestreo | 10 fps (5 fps si la CPU va lenta) | UI Vídeo / `--sample-fps` |
+| imgsz | 960 | parámetro `imgsz` / `--imgsz` |
+| Confianza YOLO | 0,10 | parámetro `conf` / `--conf` |
 | Máx. candidatos | 15 (límite 20) | UI Vídeo / `--max-candidates` |
 | Confianza mínima | 0,65 | UI Vídeo / `--min-confidence` |
 | Clip | 8 s antes / 7 s después, H.264/AAC | `pre_roll` / `post_roll` |
 | Separación mínima entre candidatos | 20 s | `MIN_GAP_SECONDS` |
 | Modo de cámara | `seguimiento` (VEO/móvil) | UI Vídeo / `--camera-mode` |
 | Clips | carpeta `<video>_clips`, nombre `MMSS_evento.mp4` | automático |
+
+> **Por qué imgsz 960 y conf 0,10:** en vídeo VEO el balón es diminuto. A
+> 640/conf 0,25 solo aparece en ~2% de las muestras y la posesión salía
+> 72% desconocido; a 960/0,10 aparece en ~20% y el 70-86% de las personas
+> tienen equipo. Cuesta ~1,7x más tiempo que 640; en CPU lenta se compensa
+> bajando el muestreo a 5 fps (el partido completo a 5 fps tarda ~3 h en
+> una VM lenta; en un Ryzen 7, 10 fps es viable).
+>
+> **Tracking sin ByteTrack:** se usa `YOLO.predict()` + asociación propia
+> (vecino más cercano por posición y altura). ByteTrack se quitó porque con
+> cámara que sigue al balón el pan/zoom entre muestras rompía sus tracks
+> (de 18 personas a 0 en pocos fotogramas) y se tragaba el balón
+> (0% de muestras con balón frente a ~20% con predict()). El equipo por
+> track es el más votado entre los conocidos (no mayoría del 60%), y el
+> color del torso se mide con la mediana de la mitad más saturada, para
+> que las rayas y el contraluz no lo diluyan.
 
 ## Cómo clasifica YOLO cada jugada (sin Groq)
 
@@ -109,26 +126,81 @@ y (solo en fija amplia) si cruza la línea de gol o entra al área.
 
 | Jugada | Cómo se distingue | Confianza |
 |---|---|---|
-| Gol | Fija amplia: balón que cruza la línea de gol rápido. Seguimiento: balón rápido junto al portero que se pierde | 0,80 / 0,65 |
+| Gol | Fija amplia o **con mapa**: balón que cruza la línea de gol rápido (0,80). Seguimiento: (a) tiro rápido que se pierde ≥4 s y se reanuda en el centro (saque de centro: balón parado **en total** ≥1,5 s en los 5 s tras reaparecer, **≥6 jugadores** de los dos equipos alrededor, lejos de cualquier portero, y la reaparición **en el centro** del campo con mapa); (b) **por colocación**: el balón parado en el centro ≥8 s en 30 s con gente alrededor y un tiro rápido en los 60 s anteriores a la colocación — caza los goles en los que el balón **no se pierde** (la cámara lo sigue en la celebración y el traslado al centro). Los tiempos son totales, no rachas: en seguimiento el balón se pierde a menudo y una sola muestra sin balón rompe la racha. El equipo del gol es el que tenía la posesión **antes** del tiro (el pico de velocidad se busca 8 s atrás, porque el candidato se detecta en la pérdida/celebración, después del tiro); si no hay portero cerca, el equipo es el contrario al portero junto al balón en el tiro (el que encaja) | 0,80 / 0,70 |
 | Tiro a puerta | Balón rápido junto al portero | 0,70 |
-| Tiro | Balón perdido a gran velocidad, o rápido hacia la línea de gol | 0,70 |
+| Tiro | Balón perdido a gran velocidad, o rápido hacia la línea de gol (con mapa: a menos de 5 m de la línea). **Un balón que acaba en el propio portero es pase atrás, no tiro** (tampoco pase clave ni entrada al área): el guard se mira en el plano y, con mapa, en metros (balón a menos de 12 m del portero propio). **Con mapa, el tiro exige además que el balón vaya hacia la portería rival** (velocidad en x hacia la portería > 2 m/s); un despeje hacia la propia portería no es tiro | 0,70 |
 | Córner | Balón parado ≥2 s + reanudación rápida desde la esquina (fija amplia) | 0,70 |
 | Balón parado | Balón parado ≥2 s + reanudación rápida | 0,65 |
 | Distribución portero | Balón parado ≥2 s + reanudación, con poca gente cerca | 0,65 |
-| Falta | Parada brusca + agrupación + cambio de posesión | 0,60 |
-| Centro | Balón rápido y largo desde banda hacia el área (fija amplia) | 0,65 |
+| Falta | Frenazo (el balón pasa de ≥4 a ≤0,8 alturas/s) + agrupación ≥5 + juego parado después (balón parado **en total** ≥1 s o perdido ≥2 s en los 6 s siguientes). El árbitro cerca (≤6 alturas) sube la confianza a 0,65, pero **no es requisito**: solo se ve en el 44% de las muestras. Sin cambio de posesión exigido: en una falta el equipo que tenía el balón lo conserva. Tope de 5 faltas por partido (el resto pasan a duelo) | 0,60 / 0,65 |
+| Centro | Balón rápido y largo desde banda hacia el área (fija amplia **o con mapa**: balón en banda en metros reales) | 0,65 |
 | Transición / contraataque | Cambio de posesión + avance rápido | 0,70 |
 | Duelo | Agrupación + cambio de posesión | 0,60 |
 | Recuperación | Cambio de posesión sin más | 0,65 |
-| Pase clave | Mismo equipo, balón largo que acaba en el área o en zona del portero | 0,65 |
-| Entrada al área | Del tercio medio al tercio final (fija amplia) o a zona del portero | 0,60 |
+| Pase clave | Mismo equipo, balón largo que acaba en el área o en zona del portero (con mapa: que acaba **en el área en metros**) (no si es el propio portero: eso es pase atrás) | 0,65 |
+| Entrada al área | Del tercio medio al tercio final (fija amplia) o a zona del portero (con mapa: el balón **cruza la línea del área en metros**) (no si es el propio portero) | 0,60 |
 | Pase | Balón rápido que recorre distancia, mismo equipo | 0,65 |
 | Pase (por trayectoria) | Cambio de portador del mismo equipo con vuelo (aunque el balón no sea rápido: la mayoría de los pases de centro del campo) | 0,70 |
-| Pase clave (por trayectoria) | Pase por trayectoria largo (≥12 alturas) o que acaba en zona del portero | 0,70 |
+| Pase clave (por trayectoria) | Pase por trayectoria largo (≥12 alturas) o que acaba en zona del portero (no si es el propio portero) | 0,70 |
 
 La confianza nunca pasa de 0,80: sin ver la jugada no se puede asegurar
 un gol o un córner. La posesión por tramos (15') se sigue calculando del
 tracking y se muestra en la pantalla de Vídeo.
+
+## Mapa del campo (homografía) — posiciones en metros reales
+
+Cada jugador y el balón se proyectan sobre un campo de **105 x 68 m**.
+Eso convierte el tracking relativo en posición real: se sabe si un balón
+rápido va hacia la portería rival (tiro) o hacia la propia (despeje o pase
+atrás), si cruza la línea de gol (gol), si entra al área, desde qué banda
+sale un centro, y las distancias de los pases y la velocidad del balón en
+m y km/h.
+
+**Cómo funciona**: un modelo YOLO de pose (Soccana Keypoint, YOLOv11n-pose,
+29 puntos clave del campo: líneas, áreas, círculo central, esquinas)
+detecta las líneas visibles en un fotograma cada 5 s; con esos puntos se
+calcula la homografía (`cv2.findHomography`) que convierte píxeles de la
+imagen en metros de campo. La homografía se suaviza entre fotogramas y
+caduca a los 30 s sin líneas nuevas. **El modelo se descarga solo la
+primera vez** de HuggingFace (`pitch_keypoints.pt`, ~86 MB); si el archivo
+está junto a `video_track.py` se usa directamente, y si la descarga falla
+el análisis sigue sin mapa.
+
+**Calidad**: depende de qué líneas se ven. Si solo se ve el centro del
+campo (círculo central, línea de medio campo) la calidad es **baja** y la
+coordenada x (la longitud del campo) sale comprimida hacia el centro.
+Para corregirlo se usa un ancla que no falla: **los dos porteros están en
+sus líneas de gol** (x = 0 y x = 105 m). El eje x se estira para que los
+porteros queden en sus líneas; la coordenada y (la anchura) ya viene bien
+constrainida por las líneas del centro.
+
+**Radar en los cortes**: cada corte lleva el mapa del campo con los
+jugadores como **puntos de colores** (color de cada equipo, porteros con
+borde, balón blanco) incrustado en la esquina inferior derecha del clip,
+y una imagen PNG del radar en el momento de la jugada (en la pantalla de
+Vídeo se muestra al seleccionar el corte).
+
+**Límites**: con cámara que sigue al balón (VEO) la homografía cambia en
+cada fotograma; si en un momento no se ven líneas, la muestra queda sin
+campo (en el partido de prueba, el 96% de las muestras tiene campo, pero
+casi todo en calidad baja). Con keypoints solo del centro la x sale
+comprimida y los porteros caen cerca uno del otro: la corrección por
+porteros solo se aplica si están bien separados (≥40 m en el mapa) y con
+un factor suave (1,0-2,0); si no, no se corrige y el radar muestra la
+jugada comprimida pero con los puntos dentro del campo (los puntos se
+recortan a los límites del campo para que nunca desaparezcan). Los puntos
+que la homografía manda fuera de un margen sensato (x en [-20, 125],
+y en [-20, 88]) se descartan. El balón suele perderse justo en el momento
+del gol (queda tapado por jugadores), así que **el gol se detecta por el
+saque de centro** en seguimiento: por pérdida + reaparición en el centro,
+o por colocación larga en el centro con un tiro previo; la regla de cruce
+de línea solo vale cuando el balón es visible. La velocidad máxima del
+balón es el mayor valor sin capar (el tope de 126 km/h es un salto de la
+homografía, no un tiro real).
+
+En la pantalla de Vídeo hay un checkbox **"🗺️ Mapa del campo
+(homografía)"** (activado por defecto). Para desactivarlo por terminal:
+`--sin-mapa`; para usar otro archivo de modelo: `--pitch-model RUTA`.
 
 ## Estadísticas e informe del partido (analista profesional)
 
@@ -150,12 +222,14 @@ pases intentados/completados, precisión, distancia media y **secuencias**
 número de secuencias, la más larga y la media). El clasificador usa estos
 pases para etiquetar pases que no son rápidos (regla 11b).
 
-**Territorio**: en seguimiento no hay posición en el campo, así que el
-tercio de ataque es un proxy: % de muestras con el balón más cerca de la
-portería rival que de la propia (según la posición de cada portero).
+**Territorio**: sin mapa es un proxy (tercio de ataque según la posición
+de cada portero). **Con mapa**, la posición del balón en metros da los
+tercios reales del campo: % de muestras con el balón en el tercio izquierdo
+(0-35 m), central (35-70 m) y derecho (70-105 m).
 
-**Balón**: distancia recorrida (en alturas de jugador), velocidad media y
-máxima, y % de muestras con balón detectado (cobertura del tracking).
+**Balón**: distancia recorrida (en alturas de jugador) y, **con mapa**,
+en metros y velocidad en km/h, con el % de muestras con balón detectado
+(cobertura del tracking) y el % con campo calculado.
 
 En la pantalla de Vídeo de `match.py` se muestra la tabla de estadísticas
 y hay botones para descargar el informe (.md) y los dos CSV.
@@ -188,19 +262,32 @@ y 32/32 checks de pases por trayectoria, secuencias, estadísticas, informe
 y regla 11b del clasificador (pase completado/fallido, vuelo largo no es
 pase, secuencias por equipo, posesión 50/50, eventos y tiros contados,
 precisión de pase, informe md/csv, pase lento etiquetado como pase 0,70 y
-pase largo como pase clave).
-El análisis completo con vídeo real aún no se ha probado: hace falta un vídeo
-de partido.
+pase largo como pase clave), 10/10 checks de falta/gol con las reglas v2
+(falta sin árbitro, pase atrás al portero no es tiro, gol por saque de
+centro con tiempos totales) y 9/9 checks del mapa del campo (gol por cruce
+de línea, tiro hacia la portería rival, despeje hacia la propia no es tiro,
+entrada al área por metros, centro desde banda por metros, pase atrás con
+mapa no es pase clave, gol por colocación para el saque, homografía con 4
+esquinas y calidad baja con solo el centro, radar con balón en el centro).
+En vídeo real (10 min del Cirbonero B - Milagres, ventana 05:24-07:54) el
+gol del Cirbonero ~06:07 se detecta como gol del Cirbonero a las 06:16
+(por colocación para el saque); la validación completa de 10 min con los
+cortes y el radar está en curso.
 
 ## Limitaciones conocidas
 
 - **Cámara que sigue al balón**: la posición en imagen no es posición en el
   campo. La zona Z1-Z9 no se puede saber con seguridad en modo seguimiento;
   por eso queda "Sin especificar" (mejor no inventarla). En modo fija amplia
-  es solo una aproximación. La posición del portero mitiga esto en el área:
-  en seguimiento, el gol se detecta por el portero (balón rápido junto a él
-  que se pierde) y la entrada al área por su zona; sin portero visible, el
-  gol sale como tiro. El córner y el centro siguen necesitando fija amplia.
+  es solo una aproximación. **El mapa del campo (homografía) mitiga esto en
+  seguimiento**: con el campo calculado se sabe si el balón va a la portería
+  rival (tiro) o a la propia (despeje), si cruza la línea (gol) y si entra
+  al área; pero si solo se ve el centro del campo la coordenada x queda
+  comprimida y la corrección por porteros es la que la estira. En
+  seguimiento, el gol se detecta por la reanudación en el centro (tiro
+  rápido + balón perdido ≥4 s + saque de centro), no solo por el portero;
+  sin esa reanudación el gol sale como tiro. El córner sigue necesitando
+  fija amplia.
 - **Porteros**: solo se ven cuando la jugada está cerca de su área (ahí es
   donde importan). Si su camiseta se parece a la de su equipo o a la del
   árbitro, el voto por color puede confundirlos: el color del portero tiene
