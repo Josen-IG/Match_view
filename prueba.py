@@ -10,6 +10,15 @@ from pathlib import Path
 
 from video_ai import VideoProcessingError, analyze_video
 
+# ============================================================
+# PROTOTIPO — NO ES LA APP BASE. Usa match.py.
+# Este archivo fue la primera prueba del proyecto (análisis de vídeo
+# automático con video_ai.py + Groq). Contiene datos DEMO: si un CSV no
+# trae minuto o coordenadas, se rellenan con valores ALEATORIOS
+# (normalizar_csv_cargado) y generar_datos_preferente_demo crea 420
+# eventos inventados. No usar para analizar partidos reales.
+# ============================================================
+
 # ==========================================
 # CONFIGURACIÓN DE PÁGINA Y ESTILO OSCURO PRO
 # ==========================================
@@ -258,7 +267,10 @@ if "datos_partido" not in st.session_state:
     }
 
 def normalizar_csv_cargado(df_in, eq_loc_default, eq_vis_default):
-    """Adapta cualquier CSV de la botonera de Regional Preferente al formato completo del Dashboard."""
+    """Adapta cualquier CSV de la botonera de Regional Preferente al formato completo del Dashboard.
+    ATENCIÓN (demo): si el CSV no trae minuto o coordenadas, se rellenan
+    con valores ALEATORIOS (semilla 42). Son datos inventados, no reales.
+    """
     df = df_in.copy()
     np.random.seed(42)
 
@@ -404,13 +416,20 @@ if not st.session_state.authenticated:
         st.markdown('<div class="pro-card" style="text-align:center;">', unsafe_allow_html=True)
         st.markdown("## 🔒 Zona del Analista Pro")
         st.caption("REGIONAL PREFERENTE DE NAVARRA · ACCESO TÉCNICO")
-        pwd = st.text_input("Introduce la llave de acceso:", type="password", placeholder="Clave por defecto: 1234")
+        # La llave NO está en el código. Se lee de MATCH_VIEW_PASSWORD o
+        # de los secrets de Streamlit; si no hay ninguna, "1234".
+        try:
+            _llave = st.secrets.get("access_password")
+        except Exception:
+            _llave = None
+        _llave = _llave or os.environ.get("MATCH_VIEW_PASSWORD") or "1234"
+        pwd = st.text_input("Introduce la llave de acceso:", type="password")
         if st.button("Entrar al Panel", type="primary", use_container_width=True):
-            if pwd == "1234":
+            if pwd == _llave:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
-                st.error("Llave incorrecta (Clave por defecto: 1234)")
+                st.error("Llave incorrecta")
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 

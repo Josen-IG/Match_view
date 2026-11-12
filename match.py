@@ -138,6 +138,21 @@ if "datos_partido" not in st.session_state:
     }
 
 # --- 3. PANTALLA DE ACCESO ---
+# La llave NO está en el código (antes era "1234" fija y el mensaje de
+# error la revelaba). Se lee de la variable de entorno
+# MATCH_VIEW_PASSWORD o de los secrets de Streamlit
+# (.streamlit/secrets.toml con access_password = "..."). Si no hay
+# ninguna, se usa "1234" para no romper el acceso actual: cámbiala
+# poniendo MATCH_VIEW_PASSWORD en tu PC antes de arrancar Streamlit.
+import os as _os
+
+def _llave_acceso():
+    try:
+        return st.secrets.get("access_password")
+    except Exception:
+        pass
+    return _os.environ.get("MATCH_VIEW_PASSWORD") or "1234"
+
 if not st.session_state.authenticated:
     st.subheader("🔒 Acceso al Panel de Análisis")
     # Con st.form, pulsar Enter en la contraseña envía el formulario
@@ -146,11 +161,11 @@ if not st.session_state.authenticated:
         pwd = st.text_input("Introduce la llave de acceso:", type="password")
         entrar = st.form_submit_button("Entrar", type="primary")
     if entrar:
-        if pwd == "1234":
+        if pwd == _llave_acceso():
             st.session_state.authenticated = True
             st.rerun()
         else:
-            st.error("Llave incorrecta (Clave por defecto: 1234)")
+            st.error("Llave incorrecta")
     st.stop()
 
 FORMACIONES_COORDS = {

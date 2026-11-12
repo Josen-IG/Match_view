@@ -1,34 +1,57 @@
-# Fut_base
-Proporcionar a los entrenadores de inferiores una interfaz gráfica para visualizar el progreso de sus jugadores a lo largo de la temporada, pasando de la recolección manual de datos a dashboards interactivos.
+# Match_view / Fut_base
+
+Herramienta para entrenadores: registro de eventos de partido, análisis de
+vídeo con YOLO y dashboard postpartido. Regional Preferente de Navarra.
 
 ## Ejecutar la aplicación
 
-En Windows, instala las dependencias de Python y ejecuta la app:
+En Windows, instala las dependencias de Python y ejecuta la app base
+(`match.py`, no `prueba.py`, que es solo un prototipo):
 
 ```powershell
 py -m pip install -r requirements.txt
-py -m streamlit run prueba.py
+py -m streamlit run match.py
 ```
 
-La creación y el análisis de vídeo requieren que `ffmpeg` y `ffprobe` estén
-instalados y disponibles en `PATH`. En la pantalla de etiquetado, introduce la
-ruta local del vídeo; el archivo completo no se carga en Streamlit. Los clips
-generados se guardan en una carpeta `<nombre_del_video>_clips` junto al vídeo.
+La app tiene 4 pantallas: pre-partido (alineaciones y colores), etiquetado
+en vivo, vídeo y dashboard postpartido.
 
-Para el análisis asistido, configura la variable de entorno `GROQ_API_KEY` en
-PowerShell y ejecuta la aplicación desde esa misma terminal:
+## Acceso
 
-```powershell
-$env:GROQ_API_KEY = "tu_clave_nueva"
-py -m streamlit run prueba.py
-```
+La pantalla de acceso pide una llave. Se lee de la variable de entorno
+`MATCH_VIEW_PASSWORD` o de los secrets de Streamlit
+(`.streamlit/secrets.toml` con `access_password = "..."`). Si no hay
+ninguna, la llave es `1234`: cámbiala poniendo la variable de entorno
+antes de arrancar Streamlit.
 
-La clave no se pide en la interfaz ni se escribe en el código fuente.
+## Análisis de vídeo (YOLO, sin Groq)
 
-YOLO detecta y sigue personas y balón, y prioriza momentos según las detecciones
-y su movimiento; Groq clasifica una selección de esos fotogramas y FFmpeg genera
-clips H.264/AAC para las sugerencias con confianza suficiente. El informe muestra
-lo que YOLO detectó. Los fotogramas seleccionados se envían a Groq; el vídeo
-completo permanece local. Las etiquetas son sugerencias y deben revisarse: este
-flujo no garantiza detectar goles u otras acciones con precisión. La primera
-ejecución puede descargar los pesos del modelo YOLO.
+La pantalla de Vídeo analiza el partido con YOLO11 (`video_track.py`):
+detección y seguimiento propio de personas y balón, clasificación de
+equipos por color de camiseta (heredado de Alineaciones), homografía
+para posiciones reales en metros y radar con los jugadores. Genera los
+cortes como botones con un resumen breve; el guardado en eventos es
+manual, nunca automático.
+
+- El modelo de keypoints del campo (`pitch_keypoints.pt`, 85 MB) tiene
+  que estar junto a `video_track.py`. Sin él no hay mapa ni radar.
+  Enlace de descarga en `README_VIDEO.md`.
+- Los pesos YOLO (`yolo11s.pt`) están en el repositorio.
+- Requiere `ffmpeg` y `ffprobe` en `PATH`. Los clips se guardan en
+  `video_clips/` junto al vídeo.
+- El análisis completo de un partido (105 min) tarda ~3-4 h en CPU a
+  5 fps; en un Ryzen 7 se puede subir a 10 fps. Ver `README_VIDEO.md`
+  para el detalle de las reglas y las versiones.
+
+Groq se eliminó: la clasificación es solo con YOLO y las reglas de
+`video_track.py`. `video_ai.py` (flujo antiguo con Groq) y `prueba.py`
+(prototipo) se mantienen en el repo por referencia, no son la app base.
+
+## Datos
+
+- `Plantillas preferente.csv/.xlsx`: plantillas de los 16 equipos.
+- `FC26_20250921.csv`: datos FIFA 26 / Sofifa (19-09-2025).
+- `Futbase.ipynb`: análisis de jugadores base. Lee `Futbase.csv`, que
+  no está en el repositorio (punto 5, evaluación de cantera, fuera de
+  alcance por ahora).
+- `futbol_base.html`: formulario de registro de jugador base.

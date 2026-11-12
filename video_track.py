@@ -106,7 +106,15 @@ BALL_MAX_SPEED_BH = 25.0                    # salto máximo creíble del balón
 # durísimo son ~17 alturas/s; a conf 0,10 YOLO confunde el balón con líneas
 # blancas y el balón "teletransporta" a 30-45 alturas/s. Esos saltos se
 # descartan en _suavizar_balon (ver ahí).
+BALL_SPEED_METRES_PER_ALTURA = 2.5        # m por altura de jugador: tope físico
+# de la velocidad en campo. La velocidad en campo (m/s) no puede ser mucho
+# mayor que la velocidad en escena (alturas/s) por este factor: un jugador
+# mide ~1,75 m y la perspectiva estira la escala como mucho ~2,5x. Si el
+# balón está casi parado en la escena (0,1 alturas/s) pero la homografía
+# dice que va a 126 km/h, es un salto de la H, no el balón (v12, punto 3).
 POSSESSION_RADIUS_HEIGHTS = 2.5             # alturas de jugador balón-jugador para posesión
+POSSESSION_DEBOUNCE_SECONDS = 1.0         # un equipo tiene que ser el más cercano 1 s para ganar la posesión
+POSSESSION_DEFENDER_HOLD_SECONDS = 3.0    # ... y 3 s si es el defensor en su propio tercio (ver _anotar_posesion)
 COLOR_DISTANCE_MAX = 55.0                   # distancia HSV máxima para asignar equipo
 COLOR_MARGIN_MIN = 6.0                      # margen mínimo entre la mejor y la 2ª referencia
 # Asociación propia entre fotogramas (ver _track_video): ByteTrack pierde
@@ -158,7 +166,7 @@ CARRIER_RADIUS_HEIGHTS = 1.8                # balón-jugador para "portador del 
 PASS_FLIGHT_MIN_SECONDS = 0.2               # vuelo mínimo para ser pase (no un toque)
 PASS_FLIGHT_MAX_SECONDS = 4.0               # tiempo máximo entre salida y llegada
 PASS_SPEED_MIN_BH = 1.5                     # velocidad mínima del balón en vuelo
-PASS_MIN_DISTANCE_BH = 3.0                  # distancia mínima del pase (alturas)
+PASS_MIN_DISTANCE_BH = 2.0                  # distancia mínima del pase (alturas)
 SEQUENCE_GAP_SECONDS = 8.0                  # hueco máximo entre pases de una secuencia
 # Homografía / campo (105 x 68 m). La referencia es la librería `sports`
 # de Roboflow (SoccerPitchConfiguration 12000x7000 cm + ViewTransformer):
@@ -797,7 +805,12 @@ PITCH_KEYPOINTS_M: dict[int, tuple[float, float]] = {
     11: (52.5, 0), 12: (52.5, 68), 13: (52.5, 24.85), 14: (52.5, 43.15),
     15: (52.5, 34), 27: (43.35, 34), 28: (61.65, 34),
 }
-PITCH_H_MAX_AGE_S = 30.0                # H más vieja que esto no vale
+PITCH_H_MAX_AGE_S = 60.0                # H más vieja que esto no vale
+# (v12: 30 -> 60 s. La cámara en seguimiento se acerca y el modelo de
+# keypoints falla 10-30 s seguidos; con 30 s el mapa se caía 5 veces en
+# 10 min y el balón perdía sus coordenadas de campo. Con 60 s se aguanta
+# la última H válida durante esos huecos: la cámara no se mueve tanto
+# en 60 s y la posición sigue siendo útil, aunque con calidad baja.)
 
 
 def _cargar_modelo_campo(ruta: str | Path | None = None):
@@ -888,7 +901,10 @@ class PitchMapper:
         # La homografía con pocos keypoints extrapola mal lejos de ellos
         # (porteros en x=2273 m): fuera de un margen sensato el punto no
         # es fiable y se descarta en vez de envenenar estadísticas y radar.
-        if not (-20.0 <= x_m <= 125.0 and -20.0 <= y_m <= 88.0):
+        # Margen amplio (v12: -30/135 y -30/98): el balón sale del campo
+        # con frecuencia (saques de banda, córners) y no es un error de
+        # la H que esté a unos metros fuera de la línea.
+        if not (-30.0 <= x_m <= 135.0 and -30.0 <= y_m <= 98.0):
             return None
         return x_m, y_m
 
@@ -1688,6 +1704,11 @@ def _compensar_camara(muestras: list[dict]) -> list[dict]:
         # Velocidad en el campo (m/s): la homografía ya absorbe el
         # movimiento de cámara, no necesita compensación. Se capa: más
         # de 126 km/h en 0,5 s es un salto de la H o un balón falso.
+        # Y se capa además por la velocidad en escena: la velocidad en
+        # campo no puede superar velocidad_bh * 2,5 m/altura (v12, punto
+        # 3). Sin esto, un salto de la homografía (el balón casi parado
+        # en la escena pero la H dice 126 km/h) contamina la media y la
+        # máxima: en la v10 había 65 muestras en el tope de 126 km/h.
         velocidad_ms = 0.0
         if m.get("ball_pitch_s") is not None:
             j = i
@@ -1702,6 +1723,9 @@ def _compensar_camara(muestras: list[dict]) -> list[dict]:
                         m["ball_pitch_s"]["x"] - anterior["ball_pitch_s"]["x"],
                         m["ball_pitch_s"]["y"] - anterior["ball_pitch_s"]["y"]) / dt
                     velocidad_ms = min(velocidad_ms, PITCH_MAX_SPEED_MS)
+                    velocidad_ms = min(
+                        velocidad_ms,
+                        velocidad_bh * BALL_SPEED_METRES_PER_ALTURA)
         m["ball_speed"] = velocidad_u
         m["ball_speed_bh"] = velocidad_bh
         m["ball_speed_ms"] = velocidad_ms
@@ -1718,9 +1742,30 @@ def _anotar_posesion(muestras: list[dict], team_local: str, team_visitante: str)
     regalaba la posesión al otro equipo y la dejaba invertida (40/60
     cuando a ojo es 55/45). Se mantiene la última posesión cuando el
     balón va solo (pase en vuelo) o cuando el portador es desconocido.
+
+    Anti-parpadeo (v12): la posesión SUAVE (para las estadísticas) solo
+    cambia cuando el mismo equipo es el más cercano durante 1 s seguido
+    (POSSESSION_DEBOUNCE_SECONDS). Sin esto la posesión cambiaba 266
+    veces en 10 min (un parpadeo cada 2 s) porque en un duelo el defensor
+    pasa un instante más cerca del balón que el portador. Y en el tercio
+    final, si el más cercano es el DEFENSOR (el equipo de esa portería),
+    se exigen 3 s seguidos (POSSESSION_DEFENDER_HOLD_SECONDS): cuando un
+    equipo ataca, los defensas se agrupan junto al balón y el "más
+    cercano" es un defensa el 76% del tiempo en el tercio rival, así que
+    sin este freno la posesión se le regala al que defiende. Medido en
+    las muestras v10: 47/52 y 266 cambios -> 52/47 y ~40 cambios.
+    La posesión "dura" (m["possession"], la que usa el clasificador de
+    eventos) NO se suaviza: el cambio de posesión es lo que detecta
+    duelos, transiciones y recuperaciones, y con el suavizado esos
+    eventos se perdían (los duelos pasaban de 6 a 1). La suave vive en
+    m["possession_suave"] y solo la usan las estadísticas.
     """
     posesion_actual = "desconocido"
+    posesion_suave = "desconocido"
+    racha_equipo = None
+    racha_inicio = None
     for m in muestras:
+        nuevo = None
         if m["ball_scene"] is not None and m["people"]:
             def dist_alturas(p):
                 px = (p["x"] - m["cam_off"][0]) / max(1.0, m["median_height"])
@@ -1732,10 +1777,33 @@ def _anotar_posesion(muestras: list[dict], team_local: str, team_visitante: str)
             if candidatos:
                 cercana = min(candidatos, key=dist_alturas)
                 if dist_alturas(cercana) <= POSSESSION_RADIUS_HEIGHTS:
-                    equipo = _equipo_para_posesion(cercana.get("team"))
-                    if equipo is not None:
-                        posesion_actual = equipo
+                    nuevo = _equipo_para_posesion(cercana.get("team"))
+        # Posesión dura (clasificador): cambia en cuanto hay un portador
+        # conocido cerca, como antes.
+        if nuevo is not None:
+            posesion_actual = nuevo
+        # Posesión suave (estadísticas): exige una racha seguida.
+        if nuevo is None:
+            racha_equipo, racha_inicio = None, None
+        elif nuevo == racha_equipo:
+            pass
+        else:
+            racha_equipo, racha_inicio = nuevo, m["t"]
+        if racha_equipo is not None and racha_inicio is not None:
+            # ¿Es el defensor en su propio tercio? El balón en el tercio
+            # derecho (x>70) lo defiende el visitante; en el izquierdo
+            # (x<35), el local. Sin mapa no se sabe: 1 s como siempre.
+            espera = POSSESSION_DEBOUNCE_SECONDS
+            bp = m.get("ball_pitch_s")
+            if bp is not None:
+                if bp["x"] > 70.0 and racha_equipo == "visitante":
+                    espera = POSSESSION_DEFENDER_HOLD_SECONDS
+                elif bp["x"] < 35.0 and racha_equipo == "local":
+                    espera = POSSESSION_DEFENDER_HOLD_SECONDS
+            if m["t"] - racha_inicio >= espera:
+                posesion_suave = racha_equipo
         m["possession"] = posesion_actual
+        m["possession_suave"] = posesion_suave
         m["possession_team_name"] = (
             team_local if posesion_actual == "local"
             else team_visitante if posesion_actual == "visitante"
@@ -1785,7 +1853,12 @@ def posesion_por_tramos(muestras: list[dict], team_local: str, team_visitante: s
     for k in range(n_tramos):
         inicio = k * tramo_minutes * 60.0
         fin = min(duracion, (k + 1) * tramo_minutes * 60.0)
-        conteo = Counter(m["possession"] for m in muestras if inicio <= m["t"] < fin)
+        # La posesión SUAVE (anti-parpadeo, v12): la dura cambia 266
+        # veces en 10 min y deja la posesión invertida; la suave es la
+        # que se enseña. Si no existe (muestras viejas), la dura.
+        conteo = Counter(
+            m.get("possession_suave", m["possession"])
+            for m in muestras if inicio <= m["t"] < fin)
         total = sum(conteo.values()) or 1
         out.append({
             "tramo": f"{int(inicio // 60)}-{int(fin // 60)}'",
@@ -1830,14 +1903,17 @@ def _detectar_pases_por_trayectoria(muestras: list[dict]) -> list[dict]:
     """Pases por cambio de portador: el balón sale de un jugador y llega
     a un compañero (o a un rival: pase fallido).
 
-    Un pase es: portador A del equipo T (estable ≥0,25 s) -> vuelo sin
-    portador (0,2-4,0 s, balón rápido) -> portador B del mismo equipo y
-    distinto track ID. Si B es rival, es un pase fallido (pérdida) de T.
-    Sin receptor en 4 s no se cuenta (balón fuera, despeje sin destino).
-    Devuelve [{"t", "t_llegada", "team", "from_track", "to_track",
-    "distancia_bh", "duracion_s", "completado"}, ...] con t relativo al
-    saque inicial. Es la base de las estadísticas de pases y secuencias,
-    y el clasificador lo usa para etiquetar pases que no son rápidos.
+    Un pase es: portador A del equipo T -> vuelo sin portador (0,2-4,0 s,
+    balón rápido) -> portador B del mismo equipo y distinto track ID. Si
+    B es rival, es un pase fallido (pérdida) de T. Sin receptor en 4 s no
+    se cuenta (balón fuera, despeje sin destino). No se exige que A haya
+    tenido el balón un tiempo mínimo (v12): un pase al primer toque no
+    tiene control estable y con el mínimo de 0,25 s se perdían (14 pases
+    en la v10 cuando a ojo son 20+ por equipo). Devuelve [{"t",
+    "t_llegada", "team", "from_track", "to_track", "distancia_bh",
+    "duracion_s", "completado"}, ...] con t relativo al saque inicial.
+    Es la base de las estadísticas de pases y secuencias, y el
+    clasificador lo usa para etiquetar pases que no son rápidos.
     """
     pases: list[dict] = []
     n = len(muestras)
@@ -1886,9 +1962,10 @@ def _detectar_pases_por_trayectoria(muestras: list[dict]) -> list[dict]:
                 control = (int(portador[0]), portador[1], m["t"])
                 control_estable = 0.0
         else:
-            # Sin portador: si había control estable, empieza el vuelo.
-            if (control is not None and control_estable >= 0.25
-                    and vuelo_inicio is None):
+            # Sin portador: si había control, empieza el vuelo. No se
+            # exige control estable (v12): un pase al primer toque sale
+            # de un portador que apenas tuvo el balón.
+            if control is not None and vuelo_inicio is None:
                 anterior = muestras[i - 1] if i > 0 else m
                 if anterior.get("ball_scene") is not None:
                     vuelo_inicio = anterior["t"]
@@ -1948,8 +2025,9 @@ def _calcular_estadisticas(
     def _pct(n: int, total: int) -> int:
         return round(100.0 * n / total) if total else 0
 
-    # Posesión total y por tramos.
-    conteo_pos = Counter(m.get("possession") for m in muestras)
+    # Posesión total y por tramos (la SUAVE anti-parpadeo, v12).
+    conteo_pos = Counter(
+        m.get("possession_suave", m.get("possession")) for m in muestras)
     total_m = sum(conteo_pos.values()) or 1
     posesion = {
         "local_pct": _pct(conteo_pos.get("local", 0), total_m),
@@ -2083,9 +2161,13 @@ def _calcular_estadisticas(
             else:
                 tercios["centro"] += 1
         personas_total += len(m.get("people", []))
-    # Máxima como el mayor valor SIN capar: el máximo puro suele ser el
-    # tope de 126 km/h (un salto de la homografía), no un tiro real.
-    _v_sin_tope = [v for v in velocidades_ms if v < PITCH_MAX_SPEED_MS]
+    # Máxima como el percentil 99 (no el máximo puro): el máximo puro es
+    # casi siempre el tope de 126 km/h (un salto de la homografía o un
+    # balón falso), no un tiro real. El p99 excluye el 1% de muestras
+    # más extremas y da la velocidad del tiro/despeje más duro de verdad.
+    # En la v10: máximo puro 126,0 km/h, p99 ~106 km/h (v12, punto 3).
+    _v_ord = sorted(velocidades_ms)
+    _p99_ms = _v_ord[int(0.99 * len(_v_ord))] if _v_ord else 0.0
     balon = {
         "distancia_recorrida_bh": round(distancia, 0),
         "velocidad_media_bh": (round(sum(velocidades) / len(velocidades), 2)
@@ -2097,8 +2179,7 @@ def _calcular_estadisticas(
         "distancia_recorrida_m": round(distancia_m, 0),
         "velocidad_media_kmh": (round(3.6 * sum(velocidades_ms) / len(velocidades_ms), 1)
                                 if velocidades_ms else 0.0),
-        "velocidad_max_kmh": (round(3.6 * max(_v_sin_tope), 1)
-                              if _v_sin_tope else 0.0),
+        "velocidad_max_kmh": round(3.6 * _p99_ms, 1),
         "muestras_con_campo_pct": _pct(con_campo, len(muestras)),
     }
     # Distancia media de los pases en metros (posición del balón en campo
@@ -3185,7 +3266,29 @@ def _clasificar_por_tracking(cand: dict, muestras: list[dict], camera_mode: str,
             and colocacion_gente >= 3):
         return _res("goal", 0.70, f"Gol del {equipo_gol_coloc}", equipo_gol_coloc)
     # 3c. Tiro a puerta: balón rápido junto al portero (no se pierde).
-    if cerca_portero and ataca and vel_max >= SPEED_FAST_BH:
+    #    Un balón rápido junto al portero no es tiro si luego sigue en
+    #    juego en el centro del campo (pase/despeje): se exige que el
+    #    balón se pierda tras el candidato, acabe cerca de la línea de
+    #    gol (parada o fuera) o se PARE junto al portero (parada: el
+    #    portero la caza y se queda con ella). Sin mapa, solo valen que
+    #    se pierda o que se pare: en seguimiento el plano no dice dónde
+    #    está el balón en el campo. Y el portero rival tiene que estar
+    #    en su portería (a menos de 35 m de una línea de gol): si el
+    #    "portero" está en el centro del campo, el balón junto a él no
+    #    es un tiro a puerta (falso tiro 07:23: portero rival a x=54,6,
+    #    en el centro). Sin dato de portero no se bloquea.
+    #    Mata los 4 tiros falsos de la v10 (00:21, 00:46, 04:13 y 07:23)
+    #    sin romper el tiro a puerta con portero del test (parada).
+    if (cerca_portero and ataca and vel_max >= SPEED_FAST_BH
+            and (x_gk_rival is None or x_gk_rival <= 35.0
+                 or x_gk_rival >= PITCH_LENGTH_M - 35.0)
+            and (perdido >= 0.5
+                 or (hay_campo and xy_campo_despues is not None
+                     and (xy_campo_despues[0] <= 15.0
+                          or xy_campo_despues[0] >= PITCH_LENGTH_M - 15.0))
+                 or (m_despues_1 is not None
+                     and m_despues_1.get("ball_scene") is not None
+                     and vel_despues <= STOP_TO_BH))):
         return _res("shot", 0.70, f"Tiro a puerta del {equipo_atacante}",
                     equipo_atacante)
     # 4. Tiro: balón perdido a gran velocidad, o rápido hacia la línea de gol.

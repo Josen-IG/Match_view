@@ -185,6 +185,79 @@ el radar salía vacío en los momentos en los que casi todos eran
 desconocido. El radar es un vídeo (2 fps), no una foto fija: los
 puntos se mueven con los jugadores durante el corte.
 
+**Higiene del repo v12 (2026-11-12):** la llave de acceso "1234" estaba
+fija en el código de `match.py` y `prueba.py` y el mensaje de error la
+revelaba. Ahora se lee de la variable de entorno `MATCH_VIEW_PASSWORD`
+o de los secrets de Streamlit (`.streamlit/secrets.toml`); si no hay
+ninguna, sigue siendo "1234" para no romper el acceso. `README.md`
+reescrito: describía el flujo viejo con Groq y `prueba.py`; ahora dice
+que la app base es `match.py`, que el vídeo es solo YOLO (Groq
+eliminado) y que `Futbase.csv` no está en el repo. `prueba.py` marcado
+como prototipo con datos demo (rellena minuto/coordenadas con valores
+aleatorios si el CSV no los trae).
+
+**Cobertura del mapa v12 (2026-11-12):** el mapa se caía 5 veces en
+10 min (huecos de 10-30 s) porque la H caducaba a los 30 s sin
+keyframes y en seguimiento el modelo de keypoints falla cuando la
+cámara se acerca. Ahora la H vale 60 s (aguanta esos huecos: la cámara
+no se mueve tanto en 60 s) y `to_pitch` acepta puntos a unos metros
+fuera del campo (el balón sale con frecuencia; antes se descartaban).
+Medido en las muestras v10: los 5 huecos son de 10-30 s, todos < 60 s,
+así que el mapa ya no se cae; la cobertura del balón en campo sube del
+55% (limitada además por la detección del balón, 75%). Tests:
+test_pitch 18/18 (caducidad 60 s, to_pitch x=-25 m). La verificación
+completa (repasar los 10 min) queda para el remix, que usa la v12.
+
+**Pases v12 (2026-11-12):** solo se detectaban 14 pases cuando a ojo
+son 20+ por equipo. Causa: se exigía que el portador hubiera tenido el
+balón 0,25 s seguidos antes del pase, y un pase al primer toque no
+tiene control estable (el portador apenas toca el balón). Ahora no se
+exige control estable para iniciar el vuelo, y la distancia mínima baja
+de 3,0 a 2,0 alturas (pases cortos). Medido en las muestras v10: 42
+pases (21 local, 21 visitante; 24 completados), antes 14 (5/9). Los
+eventos no cambian. Tests: 38 checks, resto igual.
+
+**Velocidad del balón v12 (2026-11-12):** la velocidad máxima salía
+siempre 126 km/h (el tope) porque la homografía salta: el balón está
+casi parado en la escena pero su posición en campo salta 60 m de golpe
+(caso real t=125,1: balón a 0,1 alturas/s en escena, la H decía
+126 km/h). Ahora la velocidad en campo se capa por la velocidad en
+escena (2,5 m por altura de jugador: un jugador mide ~1,75 m y la
+perspectiva estira la escala como mucho 2,5x) y la máxima del informe
+es el percentil 99, no el máximo puro (que es casi siempre el tope).
+Medido en las muestras v10: media 24,7 -> 15,3 km/h, máxima 126,0 ->
+105,7 km/h, muestras en el tope 65 -> 10. Tests: test_pitch 18/18
+(2 nuevos), resto igual.
+
+**Posesión v12 (2026-11-12):** la posesión ya no se le regala al que
+defiende. Causa raíz: cuando un equipo ataca, los defensas se agrupan
+junto al balón y el "jugador más cercano" es un defensa el 76% del
+tiempo en el tercio rival, así que la posesión se invertía (47/52
+cuando a ojo es 55/45) y además parpadeaba 266 veces en 10 min. Ahora
+hay dos posesiones: la DURA (m["possession"], cambia en cuanto hay un
+portador cerca, la usa el clasificador de eventos para detectar duelos
+y transiciones) y la SUAVE (m["possession_suave"], solo para las
+estadísticas): cambia solo si el mismo equipo es el más cercano 1 s
+seguido, y 3 s si es el defensor en su propio tercio. Medido en las
+muestras v10: suave 52/47 (antes 47/52), 39 cambios (antes 266); los
+eventos no cambian (6 duelos, 1 gol, 0 tiros). Tests: test_pases 38
+checks (3 nuevos), resto igual.
+
+**Tiros falsos v12 (2026-11-12):** los 4 "tiros" de la v10 eran falsos
+(0 tiros reales en el análisis manual) y los 4 salían por la regla 3c
+("Tiro a puerta": balón rápido junto al portero). Esa regla no miraba
+qué pasa después con el balón. Ahora exige, además de estar junto al
+portero y que ataque el equipo con posesión: que el balón se pierda
+tras el candidato, acabe cerca de la línea de gol (parada o fuera) o
+se PARE junto al portero (parada: el portero la caza); y que el
+portero rival esté en su portería (a menos de 35 m de una línea de
+gol), porque si el "portero" está en el centro del campo el balón
+junto a él no es un tiro a puerta (falso tiro 07:23). Verificado en
+las muestras v10: 0 tiros (antes 4), gol real 06:13 sin cambios, los
+4 falsos ahora son recuperación/duelo/pase clave/falta. Tests:
+test_pitch 16/16 (3 nuevos para la 3c), test_porteros 35/35,
+test_faltas_goles 17/17, test_pases 35 checks.
+
 **Posesión v10 (2026-11-12):** la clasificación de color ahora manda
 el MATIZ. Causa raíz de la posesión invertida (42/58 cuando a ojo es
 55/45): el azul en sombra (S~99, V~65) quedaba a distancia ~82 del ref
