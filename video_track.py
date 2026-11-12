@@ -343,6 +343,21 @@ def export_radar_video(
         idx = min(max(j, i0), i1 - 1)
         if j > i0 and (j >= i1 or abs(tiempos[j - 1] - t_video) < abs(tiempos[j] - t_video)):
             idx = j - 1
+        # Si la muestra más cercana no tiene mapa (H caducada un
+        # momento), el radar saldría vacío: se usa la muestra CON mapa
+        # más cercana en el intervalo, para que los jugadores traqueados
+        # se vean siempre (el radar aguanta la última posición válida).
+        if not muestras[idx].get("pitch_ok"):
+            mejor = None
+            for d in range(1, max(i1 - i0, 1)):
+                for cand in (idx - d, idx + d):
+                    if i0 <= cand < i1 and muestras[cand].get("pitch_ok"):
+                        mejor = cand
+                        break
+                if mejor is not None:
+                    break
+            if mejor is not None:
+                idx = mejor
         img = draw_radar(muestras[idx], colores)
         if writer is None:
             writer = cv2.VideoWriter(
@@ -488,6 +503,21 @@ def _color_torso(frame, x0: int, y0: int, x1: int, y1: int):
         return None
     mediana = np.median(vivos, axis=0)
     return float(mediana[0]), float(mediana[1]), float(mediana[2])
+
+
+def _hsv_a_hex(hsv) -> str | None:
+    """Color HSV OpenCV -> hex RGB ('#RRGGBB'). Es el color real de la
+    camiseta tal como se ve en el vídeo: sirve para dibujar en el radar
+    a los jugadores "desconocido" con su color de verdad (azul/rojo/...),
+    no en gris."""
+    if hsv is None:
+        return None
+    import numpy as np
+    import cv2
+    px = np.uint8([[[int(round(hsv[0])), int(round(hsv[1])),
+                     int(round(hsv[2]))]]])
+    bgr = cv2.cvtColor(px, cv2.COLOR_HSV2BGR)[0][0]
+    return "#%02X%02X%02X" % (int(bgr[2]), int(bgr[1]), int(bgr[0]))
 
 
 def _clasificar_color(hsv, ref_local, ref_visitante,
@@ -942,8 +972,13 @@ def draw_radar(muestra: dict, colores: dict, ancho: int = 480,
         elif team == "arbitro":
             color = c_arbitro
         else:
-            # Desconocido: gris, para que el radar nunca salga vacío.
-            color = c_desconocido
+            # Desconocido: color REAL de la camiseta tal como se ve en el
+            # vídeo (guardado en color_rgb al traquear). Un azul oscuro
+            # que no llegó a clasificarse sale azul, no gris: en el radar
+            # se ven todos los jugadores traqueados con su color. Sin
+            # color guardado, gris.
+            hex_real = p.get("color_rgb")
+            color = _color_bgr(hex_real) if hex_real else c_desconocido
         # La homografía extrapola mal en los bordes (y<0 o y>68): el
         # punto se recorta al campo para que nunca desaparezca del radar.
         cx, cy = _px(min(max(p["pitch_x"], 0.0), PITCH_LENGTH_M),
@@ -1352,6 +1387,10 @@ def _track_video(
                             })
                             x0, y0, x1, y1 = det["caja"]
                             hsv = _color_torso(frame, x0, y0, x1, y1)
+                            # Color real de la camiseta en el vídeo: se
+                            # guarda en la persona para que el radar lo
+                            # dibuje con su color aunque sea "desconocido".
+                            personas[-1]["color_rgb"] = _hsv_a_hex(hsv)
                             equipo_det = _clasificar_color(
                                 hsv, ref_local, ref_visitante,
                                 ref_gk_local, ref_gk_visitante, ref_arbitro)

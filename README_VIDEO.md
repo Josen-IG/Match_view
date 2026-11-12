@@ -185,6 +185,17 @@ el radar salía vacío en los momentos en los que casi todos eran
 desconocido. El radar es un vídeo (2 fps), no una foto fija: los
 puntos se mueven con los jugadores durante el corte.
 
+**Radar v9 (2026-11-12, a petición del usuario):** se ven TODOS los
+jugadores traqueados, con el color de su camiseta tal como se ve en el
+vídeo. Cada persona guarda su color real de torso (`color_rgb`, del
+`_color_torso`): los "desconocido" ya no salen en gris, salen con su
+color azul/rojo/verde de verdad. Además, el vídeo del radar ya no se
+queda vacío cuando la homografía caduca un momento: cada fotograma usa
+la muestra CON mapa más cercana (aguanta la última posición válida).
+OJO: sin el modelo `pitch_keypoints.pt` junto a `video_track.py` no
+hay mapa y ningún jugador tiene posición: el radar sale vacío. Es el
+archivo de 85 MB del enlace de Drive. Test en test_pitch.py (13/13).
+
 **Radar v7 (2026-11-12, a petición del usuario):** más pequeño
 (480x300, antes 960x600), semitransparente (opacidad 0,70 en el
 overlay de FFmpeg) y con los desconocido en gris. Test en
