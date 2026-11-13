@@ -2363,6 +2363,88 @@ def _exportar_informe(informe: dict, estadisticas: dict, pases: list[dict],
             "estadisticas_csv": str(nombre_est)}
 
 
+# ---------------------------------------------------------------------------
+# Tracking JSON para la pantalla de análisis manual (analizador_video.html)
+# ---------------------------------------------------------------------------
+# La pantalla nueva NO genera tracking: lo lee de un JSON con este formato.
+# Cada muestra: t = tiempo absoluto del vídeo (t_video), b = balón [x, y]
+# en plano 0-100 o None, p = personas [x, y, w, h, team_code, track_id]
+# (x, y = centro del bbox en 0-100), o = posesión suave (0 local,
+# 1 visitante, -1 desconocido). Los eventos llevan `seconds` relativo al
+# saque inicial (la pantalla suma kickoff_s para saltar al vídeo).
+TRACKING_TEAM_CODE = {"local": 0, "visitante": 1, "gk_local": 2,
+                      "gk_visitante": 3, "arbitro": 4, "desconocido": 5}
+# OJO: m["possession_suave"] guarda 'local'/'visitante'/'desconocido'
+# (genérico), NO los nombres de los equipos. Mapear por nombre de equipo
+# deja toda la posesión en -1 (pasó al generar tracking_mitad1.json).
+TRACKING_POSESSION_CODE = {"local": 0, "visitante": 1, "desconocido": -1}
+
+
+def export_tracking_json(muestras: list[dict], informe: dict,
+                         estadisticas: dict | None,
+                         output_path: str | Path,
+                         formation_local: str = "",
+                         formation_visitante: str = "",
+                         camera_mode: str = "seguimiento") -> str:
+    """Escribe el tracking JSON que lee la pantalla de análisis manual.
+
+    ``muestras`` son las del análisis (tras _suavizar_balon,
+    _compensar_camara y _anotar_posesion); ``informe`` es el informe base
+    de _analizar_impl (results, possession_by_period, kickoff_offset_s,
+    match_duration_s, team_local/visitante, team_colors). Los equipos y
+    colores salen del contexto del análisis, nunca fijos: la pantalla
+    vale para cualquier partido. Devuelve la ruta escrita (str).
+    """
+    samples = []
+    for m in muestras:
+        b = m.get("ball")
+        ball = ([round(float(b["x"]), 1), round(float(b["y"]), 1)]
+                if b is not None else None)
+        people = []
+        for p in m.get("people", []):
+            people.append([
+                round(float(p["x"]), 1), round(float(p["y"]), 1),
+                round(float(p.get("w", 0.0)), 1), round(float(p.get("h", 0.0)), 1),
+                TRACKING_TEAM_CODE.get(p.get("team"), 5),
+                int(p.get("track_id", -1)),
+            ])
+        samples.append({
+            "t": round(float(m["t_video"]), 2),
+            "b": ball,
+            "p": people,
+            "o": TRACKING_POSESSION_CODE.get(
+                m.get("possession_suave", "desconocido"), -1),
+        })
+    formacion = " / ".join(f for f in (formation_local, formation_visitante) if f)
+    colores = dict(informe.get("team_colors") or {})
+    data = {
+        "version": 1,
+        "kickoff_s": informe.get("kickoff_offset_s", 0.0),
+        "match_duration_s": round(float(informe.get("match_duration_s", 0.0)), 1),
+        "teams": {"local": informe.get("team_local", "Local"),
+                  "visitante": informe.get("team_visitante", "Visitante")},
+        "colors": {
+            "local": colores.get("local", "#1E88E5"),
+            "visitante": colores.get("visitante", "#E53935"),
+            "gk_local": colores.get("gk_local", DEFAULT_GK_COLOR_LOCAL),
+            "gk_visitante": colores.get("gk_visitante", DEFAULT_GK_COLOR_VISITANTE),
+            "arbitro": colores.get("arbitro", DEFAULT_REFEREE_COLOR),
+        },
+        "formation": formacion,
+        "camera": camera_mode,
+        "team_code": dict(TRACKING_TEAM_CODE),
+        "events": informe.get("results", []),
+        "possession_by_period": informe.get("possession_by_period"),
+        "stats": estadisticas,
+        "samples": samples,
+    }
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(data, ensure_ascii=False),
+                           encoding="utf-8")
+    return str(output_path)
+
+
 def _detectar_candidatos(muestras: list[dict], camera_mode: str) -> list[dict]:
     """Candidatos a evento desde señales relativas del tracking.
 
@@ -3432,6 +3514,8 @@ def _analizar_impl(
     pitch_model: str | None = None,
     pitch_keyframe_seconds: float = PITCH_KEYFRAME_SECONDS,
     debug_muestras_path: str | Path | None = None,
+    formation_local: str = "",
+    formation_visitante: str = "",
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -3583,6 +3667,19 @@ def _analizar_impl(
     }
     rutas_informe = _exportar_informe(
         informe_base, estadisticas, pases, video_path, output_dir)
+    # Tracking JSON para la pantalla de análisis manual
+    # (analizador_video.html): si falla no se tira el análisis entero,
+    # el informe y los cortes ya están escritos.
+    try:
+        tracking_path = export_tracking_json(
+            muestras, informe_base, estadisticas,
+            output_dir / f"{video_path.stem}_tracking.json",
+            formation_local=formation_local,
+            formation_visitante=formation_visitante,
+            camera_mode=camera_mode,
+        )
+    except Exception:
+        tracking_path = None
     update("Análisis y generación de cortes completados.", 1.0)
     return {
         **informe_base,
@@ -3590,6 +3687,7 @@ def _analizar_impl(
         "pases": pases,
         "secuencias": secuencias,
         **rutas_informe,
+        "tracking_json": tracking_path,
     }
 
 
@@ -3672,6 +3770,8 @@ def analyze_video_full(
     conf: float = 0.10,
     pitch_model: str | None = None,
     debug_muestras_path: str | Path | None = None,
+    formation_local: str = "",
+    formation_visitante: str = "",
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -3680,12 +3780,16 @@ def analyze_video_full(
     "match_duration_s": ..., "video_duration_s": ...,
     "samples_analyzed": ..., "team_colors": {"local": ..., "visitante": ...},
     "estadisticas": {...}, "pases": [...], "secuencias": [...],
-    "informe_md": ..., "eventos_csv": ..., "estadisticas_csv": ...}
+    "informe_md": ..., "eventos_csv": ..., "estadisticas_csv": ...,
+    "tracking_json": ... (ruta del tracking JSON para la pantalla de
+    análisis manual, o None si no se pudo escribir)}
 
     Por defecto imgsz=960 y conf=0.10 (ver analyze_video).
 
     debug_muestras_path: si se pasa, guarda las muestras procesadas
     (pickle) ahí para diagnosticar sin volver a trackear el vídeo.
+    formation_local/visitante: tácticas (p. ej. "1-4-4-2") que se guardan
+    como contexto en el tracking JSON.
     """
     return _analizar_impl(
         video_path, color_local, color_visitante, team_local,
@@ -3696,6 +3800,8 @@ def analyze_video_full(
         color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
         conf=conf, pitch_model=pitch_model,
         debug_muestras_path=debug_muestras_path,
+        formation_local=formation_local,
+        formation_visitante=formation_visitante,
     )
 
 

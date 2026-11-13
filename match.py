@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime, date
 import time
@@ -778,6 +779,8 @@ elif st.session_state.pagina == "video":
                         kickoff_offset=kickoff_s,
                         camera_mode=("seguimiento" if camera_mode_txt.startswith("Seguimiento")
                                      else "fija_amplia"),
+                        formation_local=dp["form_local"],
+                        formation_visitante=dp["form_visitante"],
                         pitch_model=None,
                         progress=_progreso,
                     )
@@ -802,147 +805,54 @@ elif st.session_state.pagina == "video":
                 except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo del análisis
                     st.error(f"Error inesperado durante el análisis: {err}")
 
-    # --- Resultados ---
+    # --- Resultados: informe + tracking JSON ---
     informe = st.session_state.video_informe
     if informe:
-        resultados = informe.get("results", [])
         st.divider()
-        st.markdown("#### 📋 Cortes detectados")
+        st.markdown("#### 📋 Informe generado")
         st.caption(f"Saque inicial: {format_mmss(informe['kickoff_offset_s'])} · "
                    f"Partido analizado: {format_mmss(informe['match_duration_s'])} · "
                    f"Muestras YOLO: {informe['samples_analyzed']}")
-        # Posesión por tramos
-        tramos = informe.get("possession_by_period", [])
-        if tramos:
-            st.markdown("**Posesión por tramos:**")
-            st.dataframe(pd.DataFrame(tramos), use_container_width=True, hide_index=True)
-        # Estadísticas del partido (pases por trayectoria, tiros, territorio)
-        est = informe.get("estadisticas")
-        if est:
-            st.markdown("#### 📊 Estadísticas del partido")
-            pases_e = est.get("pases", {})
-            tiros_e = est.get("tiros", {})
-            filas_est = []
-            for etiqueta, clave, campo in (
-                    ("Pases intentados", "pases", "total"),
-                    ("Pases completados", "pases", "completados"),
-                    ("Precisión de pase (%)", "pases", "precision_pct"),
-                    ("Distancia media de pase (m)", "pases", "distancia_media_m"),
-                    ("Secuencias", "pases", "secuencias"),
-                    ("Secuencia más larga (pases)", "pases", "secuencia_max_pases"),
-                    ("Goles", "tiros", "goles"),
-                    ("Tiros a puerta", "tiros", "tiros_a_puerta"),
-                    ("Tiros fuera", "tiros", "tiros_fuera"),
-                    ("Duelos", None, None),
-                    ("Recuperaciones", None, None),
-                    ("Transiciones", None, None),
-                    ("Centros", None, None),
-                    ("Córners", None, None),
-                    ("Balón parado", None, None),
-                    ("Distribuciones de portero", None, None)):
-                if clave == "pases":
-                    filas_est.append({"Métrica": etiqueta,
-                                      dp["eq_local"]: pases_e["local"][campo],
-                                      dp["eq_visitante"]: pases_e["visitante"][campo]})
-                elif clave == "tiros":
-                    filas_est.append({"Métrica": etiqueta,
-                                      dp["eq_local"]: tiros_e["local"][campo],
-                                      dp["eq_visitante"]: tiros_e["visitante"][campo]})
-                else:
-                    mapa = {"Duelos": "duelos", "Recuperaciones": "recuperaciones",
-                            "Transiciones": "transiciones", "Centros": "centros",
-                            "Córners": "corners", "Balón parado": "balon_parado",
-                            "Distribuciones de portero": "distribuciones_portero"}
-                    sub = est.get(mapa[etiqueta], {})
-                    filas_est.append({"Métrica": etiqueta,
-                                      dp["eq_local"]: sub.get("local", 0),
-                                      dp["eq_visitante"]: sub.get("visitante", 0)})
-            filas_est.append({"Métrica": "Territorio de ataque (%)",
-                              dp["eq_local"]: est["territorio"]["local_pct"],
-                              dp["eq_visitante"]: est["territorio"]["visitante_pct"]})
-            filas_est.append({"Métrica": "Posesión (%)",
-                              dp["eq_local"]: est["posesion"]["local_pct"],
-                              dp["eq_visitante"]: est["posesion"]["visitante_pct"]})
-            st.dataframe(pd.DataFrame(filas_est), use_container_width=True, hide_index=True)
-            st.caption(f"Balón: {est['balon']['distancia_recorrida_bh']} alturas recorridas · "
-                       f"velocidad media {est['balon']['velocidad_media_bh']} alturas/s · "
-                       f"máxima {est['balon']['velocidad_max_bh']} · "
-                       f"detectado en el {est['balon']['muestras_con_balon_pct']}% de las muestras.")
-            if est["balon"].get("muestras_con_campo_pct"):
-                terc = est.get("tercios_campo") or {}
-                st.caption(f"Mapa del campo: {est['balon']['distancia_recorrida_m']} m recorridos · "
-                           f"velocidad media {est['balon']['velocidad_media_kmh']} km/h · "
-                           f"máxima {est['balon']['velocidad_max_kmh']} km/h · "
-                           f"campo calculado en el {est['balon']['muestras_con_campo_pct']}% "
-                           f"de las muestras · balón por tercios: izquierda {terc.get('izquierda_pct', 0)}% · "
-                           f"centro {terc.get('centro_pct', 0)}% · derecha {terc.get('derecha_pct', 0)}%.")
-            # Descargar informe (markdown + CSV) generado junto a los clips
-            st.markdown("**Informe completo:**")
-            c_d1, c_d2, c_d3 = st.columns(3)
-            for col, clave, etiqueta, nombre in (
-                    (c_d1, "informe_md", "⬇️ Informe (.md)", "informe.md"),
-                    (c_d2, "eventos_csv", "⬇️ Eventos (.csv)", "eventos.csv"),
-                    (c_d3, "estadisticas_csv", "⬇️ Estadísticas (.csv)", "estadisticas.csv")):
-                ruta_inf = informe.get(clave)
-                with col:
-                    if ruta_inf and os.path.isfile(ruta_inf):
-                        with open(ruta_inf, "rb") as fh:
-                            st.download_button(etiqueta, data=fh.read(),
-                                               file_name=os.path.basename(ruta_inf),
-                                               key=f"video_dl_{clave}",
-                                               use_container_width=True)
-        con_clip = [r for r in resultados if r["clip_path"]]
-        sin_clip = [r for r in resultados if not r["clip_path"]]
-        if not resultados:
-            st.warning("YOLO no encontró señales claras de jugada en el tramo analizado.")
-        for idx, res in enumerate(con_clip):
-            nombre = EVENT_NAMES_ES.get(res["event"], res["event"])
-            etiqueta = (f"{format_mmss(res['seconds'])} | {nombre} "
-                        f"({int(res['confidence'] * 100)}%) - {res['summary']}")
-            if st.button(etiqueta, key=f"video_btn_{idx}", use_container_width=True):
-                st.session_state.video_seleccionado = res
-                st.rerun()
-        # Clip seleccionado
-        sel = st.session_state.video_seleccionado
-        if sel is not None and sel.get("clip_path"):
-            st.divider()
-            nombre_sel = EVENT_NAMES_ES.get(sel["event"], sel["event"])
-            st.markdown(f"##### ▶️ {format_mmss(sel['seconds'])} | {nombre_sel} "
-                        f"({int(sel['confidence'] * 100)}%)")
-            st.write(sel["summary"])
-            st.video(sel["clip_path"])
-            if sel.get("radar_path") and os.path.isfile(sel["radar_path"]):
-                st.image(sel["radar_path"],
-                         caption="Mapa del campo en el momento de la jugada: "
-                                 "puntos de colores por jugador (porteros con borde) "
-                                 "y balón blanco. También va incrustado en el clip.",
-                         use_container_width=False)
-            st.caption(f"Equipo: {sel['team']} · Zona: {sel['zone']} · "
-                       f"Balón en plano X={sel['ball_x']}, Y={sel['ball_y']} · "
-                       f"YOLO: {sel['yolo_people']} personas, balón {'sí' if sel['yolo_ball'] else 'no'}")
-            st.caption(f"Señales: {sel['reason']}")
-            clave = f"{sel['seconds']}_{sel['event']}"
-            if clave in st.session_state.video_anadidos:
-                st.success("✅ Ya añadido a eventos.")
-            else:
-                if st.button("➕ Añadir a eventos", type="primary", key="video_add_btn"):
-                    evento = video_resultado_a_evento(sel, dp)
-                    if evento is None:
-                        st.warning("Esta jugada no se puede añadir a eventos.")
-                    else:
-                        st.session_state.eventos.append(evento)
-                        st.session_state.video_anadidos.add(clave)
-                        st.success(f"Añadido: {evento['Evento']} - {evento['Detalle']} "
-                                   f"({evento['Minuto']}, {evento['Equipo']}). "
-                                   "No se guarda en el CSV hasta que lo descargues en Final.")
-                        st.rerun()
-        # Descartados / inciertos
-        if sin_clip:
-            with st.expander(f"⚠️ Candidatos descartados / inciertos ({len(sin_clip)})", expanded=False):
-                st.caption("La clasificación no vio una jugada clara o la confianza fue baja. "
-                           "Se muestran para que veas por qué no se cortó el clip.")
-                for res in sin_clip:
-                    nombre = EVENT_NAMES_ES.get(res["event"], res["event"])
-                    st.write(f"- {format_mmss(res['seconds'])} | {nombre} "
-                             f"({int(res['confidence'] * 100)}%) - {res['summary']} "
-                             f"[{res['reason']}]")
+        st.markdown("**Descargas:**")
+        c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+        for col, clave, etiqueta in (
+                (c_d1, "informe_md", "⬇️ Informe (.md)"),
+                (c_d2, "eventos_csv", "⬇️ Eventos (.csv)"),
+                (c_d3, "estadisticas_csv", "⬇️ Estadísticas (.csv)"),
+                (c_d4, "tracking_json", "⬇️ Tracking (.json)")):
+            ruta_inf = informe.get(clave)
+            with col:
+                if ruta_inf and os.path.isfile(ruta_inf):
+                    with open(ruta_inf, "rb") as fh:
+                        st.download_button(etiqueta, data=fh.read(),
+                                           file_name=os.path.basename(ruta_inf),
+                                           key=f"video_dl_{clave}",
+                                           use_container_width=True)
+                elif clave == "tracking_json":
+                    st.caption("⚠️ El tracking JSON no se generó.")
+
+    # --- Parte 2: pantalla de análisis manual (nueva) ---
+    # Sustituye la visualización vieja de resultados (cortes como botones,
+    # radar y estadísticas en Streamlit): el análisis manual se hace en
+    # esta pantalla, que se alimenta del tracking JSON generado arriba (o de
+    # uno ya generado antes). La pantalla es un único HTML autocontenido
+    # (analizador_video.html, junto a match.py) y se incrusta tal cual.
+    st.divider()
+    st.markdown("#### 🎬 Análisis manual del vídeo")
+    st.caption(
+        "Aquí se analiza el partido a mano: carga el vídeo y el tracking JSON "
+        "que acaba de generar el análisis (botón ⬇️ Tracking (.json) "
+        "de arriba, o uno ya generado antes) y verás el tracking encima del "
+        "vídeo (cajas, balón, trayectoria), las estadísticas en vivo y "
+        "las herramientas para señalar jugadas (flechas, círculos, texto) y "
+        "marcar cortes. Todo lo que anotes se exporta en JSON al final. "
+        "La pantalla no lee los archivos sola: tienes que elegirlos con "
+        "los selectores de archivo de dentro."
+    )
+    ruta_pantalla = Path(__file__).resolve().parent / "analizador_video.html"
+    if ruta_pantalla.is_file():
+        html_pantalla = ruta_pantalla.read_text(encoding="utf-8")
+        components.html(html_pantalla, height=1100, scrolling=True)
+    else:
+        st.warning("⚠️ No se encontró analizador_video.html junto a match.py; "
+                   "la pantalla de análisis manual no se puede mostrar.")
