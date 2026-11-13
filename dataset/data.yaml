@@ -1,5 +1,10 @@
-# Dataset propio: Cirbonero B vs Milagres (VEO, 1920x1080)
+# Dataset propio YOLO — genérico (cualquier partido, no solo Cirbonero-Milagres)
+# 268 fotogramas, 214 train / 54 val (split 80/20 estratificado por fuente).
+# Fuentes: 210 del partido Cirbonero B vs Milagres (1 cada 30 s, todo el partido)
+# + 58 de la 2ª mitad del mismo partido (luz oscura, atardecer/noche, 1 cada 45 s).
 # Clases: 0=football (balón), 1=player (jugador). La 2=referee se añade en la corrección manual.
+# El modelo NO clasifica equipos por color: solo detecta balón y jugador;
+# los equipos se distinguen después por color de camiseta en video_track.py.
 path: dataset
 train: images/train
 val: images/val
