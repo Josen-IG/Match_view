@@ -43,6 +43,17 @@ Tracking:
   (0% de muestras con balón frente a ~20% con predict()).
 * Personas = clase COCO 0. Balón = clase COCO 32, suavizado EMA e
   interpolación de huecos de hasta 1 s.
+* Ideas VEO (informe de arquitectura, 2026-11-13): (1) empaquetado
+  temporal del balón: SE PROBÓ Y NO SE ENVÍA (el heurístico de
+  movimiento no distingue el balón de un pie en vídeo real; la vía es
+  el modelo YOLO propio); (2) filtro de Kalman de velocidad constante
+  sobre el balón: suaviza y predice huecos de hasta 3 s, marcado
+  "kalman"; (3) punto de los pies (p_pies) en la homografía: jugadores
+  y balón se proyectan desde el borde inferior del bbox, no desde el
+  centro; (4) compacidad táctica por periodo de 5' (Convex Hull,
+  anchura, profundidad, centroide) en las estadísticas; (5) máscara de
+  césped en HSV antes del color del torso, sin tocar la camiseta verde
+  del portero ni el amarillo del árbitro.
 * Compensación del movimiento de cámara: se estima el desplazamiento común
   de los jugadores (mediana por muestra) y se resta al balón; las velocidades
   y distancias se expresan también en "alturas de jugador por segundo", que
@@ -94,6 +105,36 @@ BALL_SPEED_METRES_PER_ALTURA = 2.5        # m por altura de jugador: tope físic
 # mide ~1,75 m y la perspectiva estira la escala como mucho ~2,5x. Si el
 # balón está casi parado en la escena (0,1 alturas/s) pero la homografía
 # dice que va a 126 km/h, es un salto de la H, no el balón (v12, punto 3).
+# --- Ideas VEO (informe de arquitectura, 2026-11-13) ---
+# 1. Empaquetado temporal del balón (WO 2019/141813 A1): SE PROBÓ Y NO SE
+# ENVÍA. Se implementó un detector por empaquetado temporal de 11
+# fotogramas (5 pasados, actual, 5 futuros) con gate de trayectoria, pero
+# medido en vídeo real no distingue el balón de un pie: los candidatos
+# se desviaban 30 unidades de la trayectoria del balón (frente a 1 de
+# las detecciones YOLO) y estaban a 1,1 unidades del jugador más cercano
+# (el balón YOLO está a 6,3). VEO lo resuelve con una red entrenada
+# (FCN), no con un heurístico de movimiento: la vía correcta aquí es el
+# modelo YOLO propio entrenado con nuestros datos (train_colab.ipynb).
+# El filtro de Kalman (idea 2) ya rellena los huecos de forma honesta.
+# 2. Filtro de Kalman del balón (VEO usa filtro de partículas con dinámica
+# newtoniana; aquí Kalman de velocidad constante: más barato y suficiente
+# para interpolar huecos cortos). Solo predice huecos de hasta 3 s.
+KALMAN_MAX_GAP_S = 3.0                # huecos más largos no se predicen
+KALMAN_R = 1.5                        # ruido de medida (unidades de plano 0-100)
+KALMAN_SIGMA_A = 30.0                 # ruido de aceleración (unidades/s^2)
+# 5. Máscara de césped (VEO clasifica el color en HSV excluyendo el verde
+# del césped). Medido en el vídeo real: césped H 23-74, S 20-184, V 52-131.
+# El portero visitante verde es (69, 201, 142) y el árbitro amarillo neón
+# (36, 255, 255): la banda se corta en S y V para no comerse ni la
+# camiseta verde ni el amarillo. Si la máscara deja muy pocos píxeles, se
+# usa el torso sin enmascarar (como antes).
+GRASS_H_MIN = 30.0
+GRASS_H_MAX = 80.0
+GRASS_S_MAX = 195.0
+GRASS_V_MAX = 140.0
+GRASS_MIN_FRAC = 0.10                 # fracción mínima de píxeles tras la máscara
+# 4. Compacidad táctica (VEO: Convex Hull de las posiciones del equipo).
+COMPACIDAD_PERIODO_MIN = 5            # minutos por periodo
 POSSESSION_RADIUS_HEIGHTS = 2.5             # alturas de jugador balón-jugador para posesión
 POSSESSION_DEBOUNCE_SECONDS = 1.0         # un equipo tiene que ser el más cercano 1 s para ganar la posesión
 POSSESSION_DEFENDER_HOLD_SECONDS = 3.0    # ... y 3 s si es el defensor en su propio tercio (ver _anotar_posesion)
@@ -464,12 +505,32 @@ def _distancia_hsv(h1: float, s1: float, v1: float,
     return math.sqrt((dh * 2.0) ** 2 + ((s1 - s2) * 0.25) ** 2 + ((v1 - v2) * 0.15) ** 2)
 
 
-def _color_torso(frame, x0: int, y0: int, x1: int, y1: int):
+def _es_cesped(h: float, s: float, v: float) -> bool:
+    """Píxel verde-césped (idea VEO: excluir el verde del césped al
+    clasificar la camiseta). El césped medido en el vídeo real es
+    H 23-74, S 20-184, V 52-131. La banda se corta en S y V para no
+    comerse la camiseta verde del portero visitante (H 69, S 201,
+    V 142) ni el amarillo neón del árbitro (H 36, S 255, V 255):
+    ambos superan S 195 y V 140, así que nunca se enmascaran."""
+    return (GRASS_H_MIN <= h <= GRASS_H_MAX and 40.0 <= s <= GRASS_S_MAX
+            and v < GRASS_V_MAX)
+
+
+def _color_torso(frame, x0: int, y0: int, x1: int, y1: int,
+                 mascara_cesped: bool = True):
     """Color mediano del torso (centro del bbox) en HSV OpenCV. None si no se puede.
 
     Mediana solo de la mitad más saturada: en camisetas a rayas la mitad
     blanca diluye el color y en contraluz el blanco lavado hace lo mismo;
     los píxeles de color (los de la camiseta) son los más saturados.
+
+    Con mascara_cesped (idea VEO), antes de la mediana se quitan los
+    píxeles verde-césped: cuando el jugador está lejos el torso es casi
+    todo césped y su verde saturado contamina el color de la camiseta
+    (es el fallo que hacía que KMeans eligiera el césped como camiseta).
+    Si la máscara deja muy pocos píxeles (p. ej. el torso era casi todo
+    césped), se usa el torso entero, como antes: la máscara nunca puede
+    dejar la clasificación peor que sin ella.
 
     NOTA: se probó KMeans (k=2, como en el proyecto football_analysis del
     vídeo) para separar la camiseta del fondo, con dos reglas de elección
@@ -495,6 +556,17 @@ def _color_torso(frame, x0: int, y0: int, x1: int, y1: int):
         return None
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     pixeles = hsv.reshape(-1, 3)
+    if mascara_cesped and len(pixeles) > 0:
+        es_cesped = ((pixeles[:, 0] >= GRASS_H_MIN)
+                     & (pixeles[:, 0] <= GRASS_H_MAX)
+                     & (pixeles[:, 1] >= 40.0)
+                     & (pixeles[:, 1] <= GRASS_S_MAX)
+                     & (pixeles[:, 2] < GRASS_V_MAX))
+        sin_cesped = pixeles[~es_cesped]
+        # Solo se aplica si queda bastante: si el torso era casi todo
+        # césped, la mediana sin máscara (método anterior) es más segura.
+        if len(sin_cesped) >= max(12, GRASS_MIN_FRAC * len(pixeles)):
+            pixeles = sin_cesped
     umbral_s = np.median(pixeles[:, 1])
     vivos = pixeles[pixeles[:, 1] >= umbral_s]
     if len(vivos) == 0:
@@ -1111,7 +1183,17 @@ def _anotar_campo_desde_video(
             p["px"] = p["x"] / 100.0 * ancho
             p["py"] = (p["y"] + p.get("h", 0.0) / 2.0) / 100.0 * alto
         if m.get("ball") is not None:
-            pp = _map(m["ball"]["x"], m["ball"]["y"])
+            # Pies del balón (idea VEO, p_pies): el punto de contacto con
+            # el césped es el borde inferior del bbox (centro + h/2). Los
+            # chunks viejos no guardan la altura del balón: se estima como
+            # el 12% de la altura mediana de los jugadores (22 cm de balón
+            # frente a ~175 cm de jugador).
+            h_balon = m["ball"].get("h")
+            if h_balon is None:
+                hs = [p.get("h", 0.0) for p in m.get("people", [])
+                      if p.get("h", 0.0) > 0]
+                h_balon = (0.12 * float(np.median(hs))) if hs else 0.0
+            pp = _map(m["ball"]["x"], m["ball"]["y"] + h_balon / 2.0)
             m["ball"]["pitch_x"], m["ball"]["pitch_y"] = pp
         m["pitch_ok"] = True
         m["pitch_calidad"] = calidad
@@ -1374,8 +1456,15 @@ def _track_video(
                             elif clase == 32:
                                 if balon is None or conf_det > balon["conf"]:
                                     balon = {"x": cx, "y": cy, "conf": float(conf_det),
+                                             # Pies del balón (idea VEO,
+                                             # p_pies): el punto de contacto
+                                             # con el césped es el borde
+                                             # inferior del bbox, no su
+                                             # centro (igual que las personas).
                                              "px": (x0 + x1) / 2.0,
-                                             "py": (y0 + y1) / 2.0,
+                                             "py": float(y1),
+                                             "w": (x1 - x0) / ancho * 100.0,
+                                             "h": (y1 - y0) / alto * 100.0,
                                              "pitch_x": None, "pitch_y": None}
                         # Asociar por confianza descendente: la más segura elige primero.
                         detecciones.sort(key=lambda d: -d["conf"])
@@ -1449,6 +1538,10 @@ def _track_video(
                                           t_video)
                     except Exception:
                         pass
+                # Marcar la fuente del balón (YOLO): el JSON la guarda
+                # en "bf" ("yolo" / "kalman" para las predicciones).
+                if balon is not None:
+                    balon["fuente"] = "yolo"
                 # Mapear pies/balón a metros de campo con la H vigente.
                 pitch_ok = (mapper.valido and mapper.ultima_t is not None
                             and t_video - mapper.ultima_t <= PITCH_H_MAX_AGE_S)
@@ -1625,6 +1718,79 @@ def _suavizar_balon(muestras: list[dict]) -> list[dict]:
             m["ball_s"] = {"x": ema[0], "y": ema[1]} if ema is not None else None
             m["ball_pitch_s"] = ({"x": ema_pitch[0], "y": ema_pitch[1]}
                                  if ema_pitch is not None else None)
+    return muestras
+
+
+def _filtro_kalman_balon(muestras: list[dict]) -> list[dict]:
+    """Filtro de Kalman (velocidad constante) sobre el balón suavizado.
+
+    Después de _suavizar_balon (EMA + interpolación lineal ≤2 s): el Kalman
+    corrige las detecciones (suaviza el ruido de posición de YOLO) y
+    PREDICE la posición en huecos de hasta KALMAN_MAX_GAP_S (3 s) cuando
+    el balón se pierde (oclusiones). Huecos más largos quedan en None: no
+    se inventan detecciones. Las posiciones predichas llevan
+    ball_s["fuente"] == "kalman" (las medidas, "medido"), y el JSON las
+    marca en "bf": la posesión y el territorio usan ball_scene, que sale
+    de ball_s, así que el puente de 3 s evita que la posesión se congele
+    en cada oclusión sin inventar juego que no existe.
+
+    Estado [x, y, vx, vy] en unidades de plano (0-100). Sin medición
+    durante más de 3 s el filtro se reinicia en la siguiente detección.
+    """
+    import numpy as np
+    estado: np.ndarray | None = None
+    P: np.ndarray | None = None
+    t_prev: float | None = None
+    t_ult_med: float | None = None
+    for m in muestras:
+        t = m["t"]
+        med = m.get("ball_s")
+        if estado is None:
+            if med is None:
+                continue
+            estado = np.array([med["x"], med["y"], 0.0, 0.0], dtype=float)
+            P = np.diag([1.0, 1.0, 100.0, 100.0])
+            t_prev = t
+            t_ult_med = t
+            m["ball_s"] = {"x": float(estado[0]), "y": float(estado[1]),
+                           "fuente": "medido"}
+            continue
+        dt = max(0.0, t - t_prev)
+        t_prev = t
+        # Predicción (velocidad constante).
+        F = np.array([[1, 0, dt, 0], [0, 1, 0, dt],
+                      [0, 0, 1, 0], [0, 0, 0, 1]], dtype=float)
+        q = KALMAN_SIGMA_A ** 2
+        Q = q * np.array([
+            [dt ** 4 / 4, 0, dt ** 3 / 2, 0],
+            [0, dt ** 4 / 4, 0, dt ** 3 / 2],
+            [dt ** 3 / 2, 0, dt ** 2, 0],
+            [0, dt ** 3 / 2, 0, dt ** 2]], dtype=float)
+        estado = F @ estado
+        P = F @ P @ F.T + Q
+        if med is not None:
+            # Corrección con la medida (EMA de _suavizar_balon).
+            H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], dtype=float)
+            R = np.eye(2) * KALMAN_R ** 2
+            z = np.array([med["x"], med["y"]], dtype=float)
+            S = H @ P @ H.T + R
+            K = P @ H.T @ np.linalg.inv(S)
+            estado = estado + K @ (z - H @ estado)
+            P = (np.eye(4) - K @ H) @ P
+            t_ult_med = t
+            m["ball_s"] = {"x": float(estado[0]), "y": float(estado[1]),
+                           "fuente": "medido"}
+        elif t_ult_med is not None and t - t_ult_med <= KALMAN_MAX_GAP_S:
+            # Hueco corto: posición predicha, marcada como tal.
+            m["ball_s"] = {"x": float(estado[0]), "y": float(estado[1]),
+                           "fuente": "kalman"}
+        else:
+            # Hueco largo: no se inventa nada; el filtro se reinicia en
+            # la siguiente detección.
+            m["ball_s"] = None
+            estado = None
+            P = None
+            t_ult_med = None
     return muestras
 
 
@@ -1994,6 +2160,119 @@ def _secuencias_de_pases(pases: list[dict]) -> list[dict]:
     return secuencias
 
 
+def _convex_hull_area(puntos: list[tuple[float, float]]) -> float:
+    """Área del Convex Hull (m²) de una lista de (x, y).
+
+    scipy.spatial.ConvexHull si está disponible (en 2D, `volume` es el
+    área); si no, cadena monótona de Andrew (sin dependencias). 0 si hay
+    menos de 3 puntos o son colineales.
+    """
+    if len(puntos) < 3:
+        return 0.0
+    try:
+        from scipy.spatial import ConvexHull
+        import numpy as np
+        hull = ConvexHull(np.array(puntos, dtype=float))
+        return float(hull.volume)
+    except Exception:
+        pass
+    pts = sorted(set(puntos))
+    if len(pts) < 3:
+        return 0.0
+
+    def _cruz(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    inferior: list[tuple[float, float]] = []
+    for p in pts:
+        while len(inferior) >= 2 and _cruz(inferior[-2], inferior[-1], p) <= 0:
+            inferior.pop()
+        inferior.append(p)
+    superior: list[tuple[float, float]] = []
+    for p in reversed(pts):
+        while len(superior) >= 2 and _cruz(superior[-2], superior[-1], p) <= 0:
+            superior.pop()
+        superior.append(p)
+    casco = inferior[:-1] + superior[:-1]
+    if len(casco) < 3:
+        return 0.0
+    area = 0.0
+    for i in range(len(casco)):
+        x1, y1 = casco[i]
+        x2, y2 = casco[(i + 1) % len(casco)]
+        area += x1 * y2 - x2 * y1
+    return abs(area) / 2.0
+
+
+def _compacidad_equipos(muestras: list[dict],
+                        tramo_minutes: int = COMPACIDAD_PERIODO_MIN
+                        ) -> list[dict]:
+    """Compacidad táctica por periodo (idea VEO: Convex Hull).
+
+    Por periodo y equipo (solo jugadores de campo, sin porteros ni
+    árbitro): área del Convex Hull de las posiciones en campo (m²),
+    anchura (max x - min x), profundidad (max y - min y) y centroide.
+    Se calcula por MUESTRA (la forma del equipo en ese instante) y se
+    toma la MEDIANA del periodo: la mediana por track inflaba el área
+    (un track fragmentado aporta varios puntos a lo largo de su
+    recorrido y el hull cubre el camino, no la forma). Con cámara en
+    seguimiento solo se ven los jugadores cercanos al balón, así que la
+    forma es la de los visibles en cada muestra y "jugadores" es la
+    mediana de visibles por muestra, no los 11 del equipo. Sin
+    coordenadas de campo en el periodo, los valores salen None.
+    """
+    import numpy as np
+    if not muestras:
+        return []
+    duracion = muestras[-1]["t"]
+    n_tramos = max(1, int(math.ceil(duracion / (tramo_minutes * 60.0))))
+    out: list[dict] = []
+    for k in range(n_tramos):
+        inicio = k * tramo_minutes * 60.0
+        fin = min(duracion, (k + 1) * tramo_minutes * 60.0)
+        fila: dict = {"tramo": f"{int(inicio // 60)}-{int(fin // 60)}'"}
+        for equipo in ("local", "visitante"):
+            areas: list[float] = []
+            anchos: list[float] = []
+            profs: list[float] = []
+            cxs: list[float] = []
+            cys: list[float] = []
+            ns: list[int] = []
+            for m in muestras:
+                if not (inicio <= m["t"] < fin):
+                    continue
+                pts = [(p["pitch_x"], p["pitch_y"])
+                       for p in m.get("people", [])
+                       if p.get("team") == equipo
+                       and p.get("pitch_x") is not None
+                       and p.get("pitch_y") is not None]
+                if len(pts) < 3:
+                    continue
+                xs = [q[0] for q in pts]
+                ys = [q[1] for q in pts]
+                areas.append(_convex_hull_area(pts))
+                anchos.append(max(xs) - min(xs))
+                profs.append(max(ys) - min(ys))
+                cxs.append(sum(xs) / len(xs))
+                cys.append(sum(ys) / len(ys))
+                ns.append(len(pts))
+            if areas:
+                fila[equipo] = {
+                    "area_m2": round(float(np.median(areas)), 1),
+                    "anchura_m": round(float(np.median(anchos)), 1),
+                    "profundidad_m": round(float(np.median(profs)), 1),
+                    "centroide_m": [round(float(np.median(cxs)), 1),
+                                    round(float(np.median(cys)), 1)],
+                    "jugadores": int(round(float(np.median(ns)))),
+                }
+            else:
+                fila[equipo] = {"area_m2": None, "anchura_m": None,
+                                "profundidad_m": None, "centroide_m": None,
+                                "jugadores": 0}
+        out.append(fila)
+    return out
+
+
 def _calcular_estadisticas(
     muestras: list[dict], resultados: list[dict], pases: list[dict],
     secuencias: list[dict], team_local: str, team_visitante: str,
@@ -2216,6 +2495,13 @@ def _calcular_estadisticas(
                                    for e in ("local", "visitante")},
         "entradas_area": {e: _cuenta(("area_entry", "key_pass"), e)
                           for e in ("local", "visitante")},
+        # Compacidad táctica (idea VEO): forma de cada equipo por periodo
+        # de 5' (área del Convex Hull, anchura, profundidad y centroide).
+        # Va en el informe y en el JSON de tracking (stats).
+        "compacidad": {
+            "periodo_min": COMPACIDAD_PERIODO_MIN,
+            "tramos": _compacidad_equipos(muestras),
+        },
     }
 
 
@@ -2392,6 +2678,16 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         b = m.get("ball")
         ball = ([round(float(b["x"]), 1), round(float(b["y"]), 1)]
                 if b is not None else None)
+        # Fuente del balón ("bf", campo nuevo; los antiguos no cambian):
+        # "yolo" (detección YOLO) o "kalman" (predicción del filtro en un
+        # hueco de hasta 3 s, sin detección: la posición es estimada, no
+        # medida). Si no hay balón ni predicción, no hay "bf".
+        bf = b.get("fuente", "yolo") if b is not None else None
+        if ball is None:
+            bs = m.get("ball_s")
+            if bs is not None and bs.get("fuente") == "kalman":
+                ball = [round(float(bs["x"]), 1), round(float(bs["y"]), 1)]
+                bf = "kalman"
         people = []
         for p in m.get("people", []):
             people.append([
@@ -2400,13 +2696,41 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                 TRACKING_TEAM_CODE.get(p.get("team"), 5),
                 int(p.get("track_id", -1)),
             ])
-        samples.append({
+        # Coordenadas de campo (mapas de calor, idea VEO): el balón y los
+        # jugadores llevan además su posición en metros de campo (105x68).
+        # "bp" es el balón (suavizado, ball_pitch_s; si no lo hay, la
+        # detección en bruto) y "pp" los jugadores con H válida. Sin H
+        # válida no hay coordenadas de campo: no se inventan. Los
+        # trackings antiguos no traen estos campos y el mapa de calor usa
+        # entonces las coordenadas del fotograma.
+        bp = None
+        bps = m.get("ball_pitch_s")
+        if bps is not None and bps.get("x") is not None and bps.get("y") is not None:
+            bp = [round(float(bps["x"]), 1), round(float(bps["y"]), 1)]
+        elif b is not None and b.get("pitch_x") is not None and b.get("pitch_y") is not None:
+            bp = [round(float(b["pitch_x"]), 1), round(float(b["pitch_y"]), 1)]
+        pp = []
+        for p in m.get("people", []):
+            if p.get("pitch_x") is not None and p.get("pitch_y") is not None:
+                pp.append([
+                    round(float(p["pitch_x"]), 1),
+                    round(float(p["pitch_y"]), 1),
+                    TRACKING_TEAM_CODE.get(p.get("team"), 5),
+                ])
+        muestra_json = {
             "t": round(float(m["t_video"]), 2),
             "b": ball,
             "p": people,
             "o": TRACKING_POSESSION_CODE.get(
                 m.get("possession_suave", "desconocido"), -1),
-        })
+        }
+        if bf is not None:
+            muestra_json["bf"] = bf
+        if bp is not None:
+            muestra_json["bp"] = bp
+        if pp:
+            muestra_json["pp"] = pp
+        samples.append(muestra_json)
     formacion = " / ".join(f for f in (formation_local, formation_visitante) if f)
     colores = dict(informe.get("team_colors") or {})
     data = {
@@ -3556,6 +3880,9 @@ def _analizar_impl(
     )
     update("Compensando el movimiento de cámara y suavizando el balón.", 0.45)
     muestras = _suavizar_balon(muestras)
+    # Filtro de Kalman (idea VEO): suaviza la trayectoria y predice el
+    # balón en huecos de hasta 3 s; va antes de la posesión/territorio.
+    muestras = _filtro_kalman_balon(muestras)
     muestras = _compensar_camara(muestras)
     muestras = _anotar_posesion(muestras, team_local, team_visitante)
     muestras = _anotar_porteros(muestras)
