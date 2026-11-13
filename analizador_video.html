@@ -72,6 +72,9 @@
       .stage-mismatch strong{ font-size:18px; display:block; margin-bottom:6px; }
       .stage-mismatch span{ display:block; font-size:14px; margin-bottom:4px; }
       .stage-mismatch .fn{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .stage-notrack{ position:absolute; left:0; right:0; top:0; z-index:6; padding:14px 20px; text-align:center; background:rgba(120,80,10,.94); color:#fff; }
+      .stage-notrack strong{ font-size:17px; display:block; margin-bottom:6px; }
+      .stage-notrack span{ display:block; font-size:13.5px; margin-bottom:4px; }
       /* Cámara virtual: el vídeo y los canvas viven en #stageInner y el
          zoom es una transformación CSS sobre ese div. */
       #stageInner{ position:absolute; inset:0; transform-origin:0 0; }
@@ -189,6 +192,7 @@
       <span><span class="dot" id="dotVideo"></span>Vídeo: <b id="stVideo">no cargado</b></span>
       <span><span class="dot" id="dotTrack"></span>Tracking: <b id="stTrack">no cargado</b></span>
       <span>Muestras: <b id="stSamples">0</b></span>
+      <span id="stRangeWrap" hidden>Tracking cubre: <b id="stRange">—</b></span>
       <span id="stEventsWrap">Eventos: <b id="stEvents">0</b></span>
       <span>Anotaciones: <b id="stAnnos">0</b></span>
       <span>Cortes: <b id="stCuts">0</b></span>
@@ -224,6 +228,10 @@
               <span>Tracking: <b class="fn" id="mismatchTrackName"></b></span>
               <span>Vídeo elegido: <b class="fn" id="mismatchVideoName"></b></span>
               <span>Las cajas no corresponden a este vídeo, por eso no se dibujan. Genera el tracking de este vídeo (al subirlo en la app o con el notebook de Colab) para analizarlo.</span>
+            </div>
+            <div class="stage-notrack" id="stageNoTrack" hidden>
+              <strong>Sin tracking para este momento</strong>
+              <span id="noTrackDetail"></span>
             </div>
           </div>
 
@@ -702,6 +710,11 @@
       $('stVideo').textContent = state.videoLoaded ? (state.videoName + (video.duration ? ' · ' + fmtClock(video.duration) : '')) : 'no cargado';
       $('stTrack').textContent = state.track ? 'cargado' : 'no cargado';
       $('stSamples').textContent = state.samples.length.toLocaleString('es-ES');
+      var rw = $('stRangeWrap');
+      if (rw){
+        rw.hidden = !state.samples.length;
+        if (state.samples.length) $('stRange').textContent = trackRangeText();
+      }
       $('stEvents').textContent = state.events.length;
       $('stAnnos').textContent = state.annotations.length;
       $('stCuts').textContent = state.cuts.length;
@@ -829,6 +842,48 @@
       return (t - b.t) <= (a.t - t) ? lo - 1 : lo;
     }
 
+    /* Umbral de validez del tracking: si el tiempo del vídeo está a
+       más de TRACK_GAP_S del sample más cercano, no hay tracking
+       válido para ese momento. Sin este umbral, nearestSampleIdx()
+       devuelve el primer/último sample y las cajas quedan congeladas
+       cuando el vídeo sobrepasa el rango del tracking (p. ej. un
+       tracking de 10 min en un vídeo de 138 min): el usuario ve que
+       "deja de seguir". */
+    var TRACK_GAP_S = 2;
+    function currentSampleIdx(t){
+      var idx = nearestSampleIdx(t);
+      if (idx < 0) return -1;
+      return Math.abs(state.samples[idx].t - t) <= TRACK_GAP_S ? idx : -1;
+    }
+    /* Rango temporal cubierto por el tracking, en tiempo de vídeo y en
+       minuto de partido (según el saque del contexto). */
+    function trackRangeText(){
+      if (!state.samples.length) return '';
+      var a = state.samples[0].t, b = state.samples[state.samples.length-1].t;
+      return 'Vídeo ' + fmtClock(a) + '–' + fmtClock(b) + ' · Partido ' + fmtMatch(a) + '–' + fmtMatch(b);
+    }
+    /* Aviso "sin tracking para este momento": distinto de "sin tracking
+       cargado" (stageEmpty) y de "tracking de otro vídeo"
+       (stageMismatch). Solo se muestra con vídeo y tracking cargados,
+       sin mismatch y con el tracking visible, cuando el momento actual
+       queda fuera del rango cubierto. */
+    var _noTrackShown = null;
+    function updateNoTrackBanner(){
+      var el = $('stageNoTrack');
+      var show = !!state.track && state.videoLoaded && !state.trackMismatch &&
+                 state.samples.length > 0 && $('showTrack').checked &&
+                 currentSampleIdx(video.currentTime || 0) < 0;
+      if (show !== _noTrackShown){
+        _noTrackShown = show;
+        el.hidden = !show;
+      }
+      if (show){
+        $('noTrackDetail').textContent = 'El tracking cubre ' + trackRangeText() +
+          '. Este momento (Vídeo ' + fmtClock(video.currentTime || 0) +
+          ') no está cubierto: genera el tracking de esa parte del vídeo.';
+      }
+    }
+
     /* ================= Dibujo del tracking ================= */
     function sizeCanvases(){
       var stage = $('stage');
@@ -850,11 +905,12 @@
     function drawTracking(){
       var W = trackCanvas.width, H = trackCanvas.height;
       tctx.clearRect(0,0,W,H);
+      updateNoTrackBanner();
       // Si el tracking es de otro vídeo, no se dibuja nada (las cajas
       // serían falsas); el aviso grande lo explica.
       if (!$('showTrack').checked || !state.samples.length || state.trackMismatch) return;
       var t = video.currentTime || 0;
-      var idx = nearestSampleIdx(t);
+      var idx = currentSampleIdx(t);
       if (idx < 0) return;
       var s = state.samples[idx];
       // Trayectoria del balón: últimos 3 s
@@ -974,7 +1030,7 @@
       var stageEl = $('stage');
       stageEl.addEventListener('pointerdown', function(e){
         if (state.tool !== 'none' || zoom.z <= 1) return;
-        if (e.target.closest && e.target.closest('.stage-empty,.stage-mismatch')) return;
+        if (e.target.closest && e.target.closest('.stage-empty,.stage-mismatch,.stage-notrack')) return;
         zoom.pan = { x0: e.clientX, y0: e.clientY, tx0: zoom.tx, ty0: zoom.ty, moved: false };
         stageEl.setPointerCapture(e.pointerId);
       });
@@ -1009,7 +1065,7 @@
        última posición conocida. */
     function updateFollowBall(){
       if (!zoom.follow || zoom.z <= 1) return;
-      var idx = nearestSampleIdx(video.currentTime || 0);
+      var idx = currentSampleIdx(video.currentTime || 0);
       if (idx >= 0){
         var s = state.samples[idx];
         if (s && s.b) zoom.lastBall = { x: s.b[0] / 100, y: s.b[1] / 100 };
@@ -1220,11 +1276,16 @@
         return;
       }
       // Posesión acumulada desde las muestras
-      var idx = nearestSampleIdx(t);
+      var idx = currentSampleIdx(t);
+      // Si el momento actual queda fuera del rango (p. ej. pasado el
+      // final del tracking), la posesión acumulada se congela en el
+      // último sample cubierto; el portador actual queda en '—'.
+      var idxAcc = idx;
+      if (idx < 0 && state.samples.length && t > state.samples[state.samples.length-1].t) idxAcc = state.samples.length - 1;
       var cL = 0, cV = 0, timeL = 0, timeV = 0;
-      if (idx >= 0){
+      if (idxAcc >= 0){
         var arr = state.samples;
-        for (var i = 0; i <= idx; i++){
+        for (var i = 0; i <= idxAcc; i++){
           var cur = arr[i];
           var nxt = arr[Math.min(i+1, arr.length-1)];
           var dt = clamp(nxt.t - cur.t, 0, 1);
