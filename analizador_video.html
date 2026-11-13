@@ -50,7 +50,7 @@
       #msgBar.show{ display:block; }
 
       /* ---------- Layout ---------- */
-      .layout{ display:grid; grid-template-columns:minmax(0,1fr) 350px; gap:16px; padding:14px 18px 26px; align-items:start; }
+      .layout{ display:grid; grid-template-columns:64px minmax(0,1fr) 340px; gap:14px; padding:14px 18px 26px; align-items:start; }
       @media (max-width:1020px){ .layout{ grid-template-columns:1fr; } }
 
       /* ---------- Escenario de vídeo ---------- */
@@ -156,6 +156,50 @@
       .ctx-color input[type="color"]{ width:46px; height:36px; min-height:36px; padding:2px; background:#0d1119; border:1px solid var(--line2); border-radius:8px; cursor:pointer; }
       .ctx-color .hex{ font-size:11.5px; color:var(--dim); font-variant-numeric:tabular-nums; }
       footer{ padding:0 18px 22px; color:var(--dim); font-size:12px; }
+
+      /* ---------- Barra de herramientas vertical (estilo pro) ---------- */
+      .layout.board-view{ grid-template-columns:minmax(0,1fr) 340px; }
+      .rail{ position:sticky; top:12px; display:flex; flex-direction:column; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:10px 6px; }
+      .rail-tool{ width:44px; height:44px; min-height:44px; padding:0; font-size:19px; display:flex; align-items:center; justify-content:center; border-radius:10px; }
+      .rail-tool.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
+      .rail-sep{ width:32px; height:1px; background:var(--line2); margin:4px 0; flex:none; }
+      .rail-swatches{ flex-direction:column; }
+      .rail-swatches .swatch{ width:28px; height:28px; min-height:28px; }
+      .rail-width{ display:flex; flex-direction:column; gap:4px; }
+      .rail-width .lw{ width:44px; min-height:30px; padding:2px 0; font-size:14px; }
+      .rail-width .lw.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
+      @media (max-width:1020px){
+        .rail{ position:static; flex-direction:row; flex-wrap:wrap; width:100%; }
+        .rail-swatches{ flex-direction:row; }
+        .rail-width{ flex-direction:row; }
+        .rail-sep{ width:1px; height:32px; margin:0 4px; }
+      }
+      /* ---------- Línea de tiempo multi-pista ---------- */
+      .timeline{ margin-top:14px; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:12px; }
+      .tl-head{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
+      .tl-head h2{ font-size:13px; letter-spacing:.5px; text-transform:uppercase; color:var(--mut); }
+      .tl-head .tl-range{ font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; }
+      .tl-grid{ display:grid; grid-template-columns:108px minmax(0,1fr); gap:0 10px; }
+      .tl-names{ display:flex; flex-direction:column; }
+      .tl-name{ display:flex; align-items:center; font-size:11.5px; color:var(--mut); font-weight:600; letter-spacing:.3px; text-transform:uppercase; white-space:nowrap; overflow:hidden; }
+      .tl-name.seek{ height:26px; } .tl-name.track{ height:26px; } .tl-name.annos{ height:30px; } .tl-name.cuts{ height:30px; } .tl-name.events{ height:22px; }
+      .tl-lanes{ position:relative; min-width:0; }
+      .tl-lanes .seekwrap{ height:26px; }
+      .tl-lane{ position:relative; height:30px; border-top:1px solid var(--line); overflow:hidden; }
+      .tl-lane[data-lane="tracking"]{ height:26px; }
+      .tl-lane[data-lane="events"]{ height:22px; }
+      .tl-track-bar{ position:absolute; left:0; right:0; top:4px; bottom:4px; background:linear-gradient(90deg, rgba(61,139,255,.28), rgba(61,139,255,.18)); border:1px solid rgba(61,139,255,.55); border-radius:5px; font-size:11px; color:#cfe2ff; display:flex; align-items:center; padding:0 8px; white-space:nowrap; overflow:hidden; }
+      .tl-clip{ position:absolute; top:3px; bottom:3px; min-width:4px; border:1px solid; border-radius:5px; background:rgba(255,210,31,.14); font-size:11px; line-height:22px; padding:0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+      .tl-clip.cut{ background:rgba(61,139,255,.16); border-color:var(--acc); color:#cfe2ff; }
+      .tl-clip:hover{ filter:brightness(1.35); }
+      .tl-event{ position:absolute; top:4px; width:10px; height:10px; transform:translateX(-50%) rotate(45deg); background:var(--acc2); border-radius:2px; cursor:pointer; }
+      .tl-empty{ font-size:11.5px; color:var(--dim); line-height:30px; padding:0 4px; }
+      .tl-lane[data-lane="tracking"] .tl-empty{ line-height:26px; }
+      .tl-lane[data-lane="events"] .tl-empty{ line-height:22px; }
+      .tl-playhead{ position:absolute; top:0; bottom:0; width:2px; background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,.45); z-index:5; pointer-events:none; transform:translateX(-1px); }
+      .tl-playhead::before{ content:""; position:absolute; top:0; left:-4px; border:5px solid transparent; border-top:6px solid #fff; }
+      .vista-row{ display:flex; flex-wrap:wrap; gap:4px 16px; align-items:center; margin-top:10px; }
+      .vista-row .vista-title{ font-size:11.5px; color:var(--mut); font-weight:600; letter-spacing:.4px; text-transform:uppercase; }
     </style>
   </head>
   <body>
@@ -197,6 +241,31 @@
     <div id="msgBar" role="status"></div>
 
     <div class="layout">
+      <aside class="rail" id="toolRail" aria-label="Herramientas de dibujo">
+        <button type="button" class="tool rail-tool active" data-tool="none" title="Mover / ver">✋</button>
+        <button type="button" class="tool rail-tool" data-tool="arrow" title="Flecha">➤</button>
+        <button type="button" class="tool rail-tool" data-tool="line" title="Línea">╱</button>
+        <button type="button" class="tool rail-tool" data-tool="ellipse" title="Círculo">◯</button>
+        <button type="button" class="tool rail-tool" data-tool="rect" title="Rectángulo">▭</button>
+        <button type="button" class="tool rail-tool" data-tool="free" title="Lápiz">✎</button>
+        <button type="button" class="tool rail-tool" data-tool="text" title="Texto">T</button>
+        <button type="button" class="tool rail-tool" data-tool="spotlight" title="Spotlight: resalta una zona oscureciendo el resto">◐</button>
+        <button type="button" class="tool rail-tool" data-tool="erase" title="Borrar: haz clic en una señalización para borrarla">⌫</button>
+        <div class="rail-sep"></div>
+        <div class="swatches rail-swatches" id="railSwatches">
+          <button type="button" class="swatch active" data-color="#FFD21F" style="background:#FFD21F" title="Amarillo" aria-label="Color amarillo"></button>
+          <button type="button" class="swatch" data-color="#FFFFFF" style="background:#FFFFFF" title="Blanco" aria-label="Color blanco"></button>
+          <button type="button" class="swatch" data-color="#FF3B30" style="background:#FF3B30" title="Rojo" aria-label="Color rojo"></button>
+          <button type="button" class="swatch" data-color="#3D8BFF" style="background:#3D8BFF" title="Azul" aria-label="Color azul"></button>
+          <button type="button" class="swatch" data-color="#35D07F" style="background:#35D07F" title="Verde" aria-label="Color verde"></button>
+        </div>
+        <div class="rail-sep"></div>
+        <div class="rail-width" role="group" aria-label="Grosor de línea">
+          <button type="button" class="lw" data-lw="2" title="Línea fina">–</button>
+          <button type="button" class="lw active" data-lw="3" title="Línea media">—</button>
+          <button type="button" class="lw" data-lw="5" title="Línea gruesa">━</button>
+        </div>
+      </aside>
       <div>
         <div class="view-tabs" role="tablist" aria-label="Vista principal">
           <button type="button" class="view-tab active" id="tabVideo" role="tab" aria-selected="true">📹 Vídeo</button>
@@ -228,11 +297,7 @@
             </div>
           </div>
 
-          <div class="controls">
-            <div class="seekwrap">
-              <div id="markers"></div>
-              <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Barra de búsqueda" />
-            </div>
+          <div class="controls" id="videoControls">
             <div class="ctrl-row">
               <button id="playBtn" type="button" title="Reproducir / Pausar (Espacio)">▶ Reproducir</button>
               <button id="backBtn" type="button" title="Retroceder 5 s (←)">⏪ 5 s</button>
@@ -263,6 +328,36 @@
               <span class="small" id="zoomVal">1×</span>
               <button type="button" id="followBallBtn" title="Centra la vista en el balón mientras se reproduce">◎ Seguir balón</button>
               <button type="button" id="zoomReset">Restablecer</button>
+            </div>
+            <div class="vista-row">
+              <span class="vista-title">Vista</span>
+              <label class="chk"><input type="checkbox" id="showTrack" checked /> Mostrar tracking</label>
+              <label class="chk"><input type="checkbox" id="dotsMode" /> Modo puntos (sin cajas)</label>
+              <label class="chk"><input type="checkbox" id="showAllAnnos" /> Mostrar todas las señalizaciones</label>
+            </div>
+          </div>
+        </section>
+
+        <section class="timeline" id="timeline" aria-label="Línea de tiempo">
+          <div class="tl-head"><h2>Línea de tiempo</h2><span class="tl-range" id="tlRange">—</span></div>
+          <div class="tl-grid">
+            <div class="tl-names" aria-hidden="true">
+              <div class="tl-name seek">Buscar</div>
+              <div class="tl-name track">Tracking IA</div>
+              <div class="tl-name annos">Señalizaciones</div>
+              <div class="tl-name cuts">Cortes</div>
+              <div class="tl-name events" id="tlNameEvents">Eventos</div>
+            </div>
+            <div class="tl-lanes" id="tlLanes">
+              <div class="seekwrap">
+                <div id="markers"></div>
+                <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Barra de búsqueda" />
+              </div>
+              <div class="tl-lane" data-lane="tracking" id="laneTracking"></div>
+              <div class="tl-lane" data-lane="annos" id="laneAnnos"></div>
+              <div class="tl-lane" data-lane="cuts" id="laneCuts"></div>
+              <div class="tl-lane" data-lane="events" id="laneEvents"></div>
+              <div class="tl-playhead" id="tlPlayhead" style="display:none"></div>
             </div>
           </div>
         </section>
@@ -308,34 +403,6 @@
           <p class="hint">Arrastra las fichas para moverlas: el local ataca de izquierda a derecha y el visitante al revés. Al cambiar de formación las fichas vuelven a su sitio; los dibujos se mantienen hasta que los borres. Funciona sin tracking: usa los nombres y colores del panel «Contexto del partido».</p>
         </section>
 
-        <section class="toolbar" id="videoToolbar">
-          <h2>Herramientas de señalización</h2>
-          <div class="tool-row" role="toolbar" aria-label="Herramientas de dibujo">
-            <button type="button" class="tool" data-tool="none">✋ Mover / ver</button>
-            <button type="button" class="tool" data-tool="arrow">➤ Flecha</button>
-            <button type="button" class="tool" data-tool="ellipse">◯ Círculo</button>
-            <button type="button" class="tool" data-tool="rect">▭ Rectángulo</button>
-            <button type="button" class="tool" data-tool="free">✎ Lápiz</button>
-            <button type="button" class="tool" data-tool="text">T Texto</button>
-          </div>
-          <div class="tool-row">
-            <span class="small muted">Color:</span>
-            <div class="swatches" id="swatches">
-              <button type="button" class="swatch active" data-color="#FFD21F" style="background:#FFD21F" title="Amarillo" aria-label="Color amarillo"></button>
-              <button type="button" class="swatch" data-color="#FFFFFF" style="background:#FFFFFF" title="Blanco" aria-label="Color blanco"></button>
-              <button type="button" class="swatch" data-color="#FF3B30" style="background:#FF3B30" title="Rojo" aria-label="Color rojo"></button>
-              <button type="button" class="swatch" data-color="#3D8BFF" style="background:#3D8BFF" title="Azul" aria-label="Color azul"></button>
-              <button type="button" class="swatch" data-color="#35D07F" style="background:#35D07F" title="Verde" aria-label="Color verde"></button>
-            </div>
-            <input type="text" id="annoLabel" placeholder="Etiqueta de la señalización (opcional)…" />
-          </div>
-          <div class="tool-row">
-            <label class="chk"><input type="checkbox" id="showTrack" checked /> Mostrar tracking</label>
-            <label class="chk"><input type="checkbox" id="dotsMode" /> Modo puntos (sin cajas)</label>
-            <label class="chk"><input type="checkbox" id="showAllAnnos" /> Mostrar todas las señalizaciones</label>
-          </div>
-          <p class="hint">Elige una herramienta y dibuja sobre el vídeo: la señalización se guarda con el minuto actual y se ve cuando el vídeo pasa por ese momento (±2 s). Con «Texto», escribe la etiqueta arriba y haz clic donde quieras colocarla. Vuelve a «Mover / ver» para seguir reproduciendo sin dibujar.</p>
-        </section>
       </div>
 
       <aside class="side">
@@ -411,7 +478,9 @@
 
         <section class="panel">
           <h2>Mis señalizaciones</h2>
+          <input type="text" id="annoLabel" placeholder="Etiqueta de la señalización (opcional)…" style="width:100%;margin-bottom:8px" />
           <ul class="list" id="annoList"><li class="empty" style="cursor:default">Todavía no has señalado ninguna acción.</li></ul>
+          <p class="hint">Elige una herramienta en la barra de la izquierda y dibuja sobre el vídeo: la señalización se guarda con el minuto actual y se ve cuando el vídeo pasa por ese momento (±2 s). Con «Texto», escribe la etiqueta arriba y haz clic donde quieras colocarla.</p>
           <div class="btn-row">
             <button type="button" class="danger" id="clearAnnos">Limpiar todo</button>
           </div>
@@ -468,7 +537,7 @@
       videoName: '', videoLoaded: false, videoFromServer: false,
       track: null, samples: [], events: [], trackMismatch: false,
       annotations: [], cuts: [],
-      tool: 'none', color: '#FFD21F',
+      tool: 'none', color: '#FFD21F', lineWidth: 3,
       zoom: { z: 1, tx: 0, ty: 0, follow: false, lastBall: null, pan: null },
       drawing: null,
       cutStart: null, cutEnd: null,
@@ -511,7 +580,7 @@
       return ctx;
     }
     var CODE_KEYS = ['local','visitante','gk_local','gk_visitante','arbitro','desconocido'];
-    var TOOL_NAMES = { arrow:'Flecha', ellipse:'Círculo', rect:'Rectángulo', free:'Lápiz', text:'Texto' };
+    var TOOL_NAMES = { arrow:'Flecha', line:'Línea', ellipse:'Círculo', rect:'Rectángulo', free:'Lápiz', text:'Texto', spotlight:'Spotlight', erase:'Borrar' };
 
     function $(id){ return document.getElementById(id); }
     function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
@@ -632,6 +701,7 @@
     video.addEventListener('loadedmetadata', function(){
       $('videoName').textContent = state.videoName + ' · ' + fmtClock(video.duration);
       buildMarkers();
+      renderTimeline();
       // Al cargar el vídeo, colocarlo en el inicio del rango del
       // tracking (el saque): el calentamiento anterior no se muestra.
       var r = trackRange();
@@ -684,6 +754,7 @@
       var fw = $('trackFallbackWrap');
       if (fw) fw.hidden = true;
       buildMarkers();
+      renderTimeline();
       renderEventList();
       renderFullSummary();
       state.lastStatsSecond = -1;
@@ -770,6 +841,7 @@
       for (var id in map) $(id.replace('Color','Hex')).textContent = ctx.colors[map[id]];
       // Re-aplicar en el acto: nombres, colores y saque afectan a todo lo visible
       buildMarkers();
+      renderTimeline();
       renderEventList();
       renderFullSummary();
       state.lastStatsSecond = -1;
@@ -836,6 +908,107 @@
         box.appendChild(m);
       });
     }
+
+    /* ================= Línea de tiempo multi-pista ================= */
+    /* Dominio de la línea de tiempo: el rango del tracking (a..b) si
+       lo hay (igual que la barra de búsqueda), si no la duración del
+       vídeo. Los clips y el playhead usan este mismo dominio, así que
+       van alineados con la barra de búsqueda. */
+    function tlDomain(){
+      var r = trackRange();
+      if (r) return { a: r.a, b: r.b };
+      var dur = video.duration || 0;
+      return dur > 0 ? { a: 0, b: dur } : null;
+    }
+    function renderTimeline(){
+      var dom = tlDomain();
+      var lt = $('laneTracking'); if (lt){
+        lt.innerHTML = '';
+        if (state.samples.length){
+          var bar = document.createElement('div'); bar.className = 'tl-track-bar';
+          bar.textContent = 'Tracking IA · ' + state.samples.length.toLocaleString('es-ES') + ' muestras';
+          lt.appendChild(bar);
+        } else {
+          lt.innerHTML = '<span class="tl-empty">Sin tracking</span>';
+        }
+      }
+      var la = $('laneAnnos'); if (la){
+        la.innerHTML = '';
+        if (!state.annotations.length) la.innerHTML = '<span class="tl-empty">Sin señalizaciones</span>';
+        state.annotations.forEach(function(a){
+          if (!dom) return;
+          var span = 4; /* visibilidad ±2 s */
+          var left = clamp((a.t - span/2 - dom.a)/(dom.b - dom.a)*100, 0, 100);
+          var w = clamp(span/(dom.b - dom.a)*100, 0.6, 100);
+          var c = document.createElement('div'); c.className = 'tl-clip';
+          c.style.left = left + '%'; c.style.width = w + '%';
+          c.style.borderColor = a.color; c.style.color = a.color;
+          c.textContent = (TOOL_NAMES[a.type] || a.type) + (a.label ? ' · ' + a.label : '');
+          c.title = (TOOL_NAMES[a.type] || a.type) + ' · ' + fmtMatch(a.t) + (a.label ? ' · ' + a.label : '');
+          c.addEventListener('click', function(ev){ ev.stopPropagation(); state.selectedAnno = a.id; jumpTo(a.t); });
+          la.appendChild(c);
+        });
+      }
+      var lc = $('laneCuts'); if (lc){
+        lc.innerHTML = '';
+        if (!state.cuts.length) lc.innerHTML = '<span class="tl-empty">Sin cortes</span>';
+        state.cuts.forEach(function(cut){
+          if (!dom) return;
+          var left = clamp((cut.start_s - dom.a)/(dom.b - dom.a)*100, 0, 100);
+          var w = clamp((cut.end_s - cut.start_s)/(dom.b - dom.a)*100, 0.6, 100);
+          var c = document.createElement('div'); c.className = 'tl-clip cut';
+          c.style.left = left + '%'; c.style.width = w + '%';
+          c.textContent = cut.label || 'Corte';
+          c.title = (cut.label || 'Corte') + ' · ' + fmtMatch(cut.start_s) + ' → ' + fmtMatch(cut.end_s);
+          c.addEventListener('click', function(ev){ ev.stopPropagation(); jumpTo(cut.start_s); video.play(); });
+          lc.appendChild(c);
+        });
+      }
+      var le = $('laneEvents'); var evName = $('tlNameEvents');
+      if (le){
+        le.innerHTML = '';
+        if (!state.events.length){
+          le.style.display = 'none';
+          if (evName) evName.style.display = 'none';
+        } else {
+          le.style.display = '';
+          if (evName) evName.style.display = '';
+          state.events.forEach(function(ev){
+            if (!dom) return;
+            var vt = kickoff() + (ev.seconds || 0);
+            var m = document.createElement('div'); m.className = 'tl-event';
+            m.style.left = clamp((vt - dom.a)/(dom.b - dom.a)*100, 0, 100) + '%';
+            m.title = (ev.event || 'Evento') + ' · ' + fmtClock(ev.seconds || 0);
+            m.addEventListener('click', function(ev2){ ev2.stopPropagation(); jumpTo(vt); });
+            le.appendChild(m);
+          });
+        }
+      }
+      var rl = $('tlRange'); if (rl) rl.textContent = dom ? ('Vídeo ' + fmtClock(dom.a) + ' – ' + fmtClock(dom.b)) : '—';
+    }
+    function updateTlPlayhead(){
+      var ph = $('tlPlayhead'); if (!ph) return;
+      var dom = tlDomain();
+      var t = video.currentTime || 0;
+      if (!dom || !state.videoLoaded){ ph.style.display = 'none'; return; }
+      ph.style.display = '';
+      ph.style.left = clamp((t - dom.a)/(dom.b - dom.a)*100, 0, 100) + '%';
+    }
+    /* Clic en la línea de tiempo (zona vacía de las pistas) busca a
+       ese momento. Los clips tienen su propio clic (stopPropagation),
+       y los clics sobre la barra de búsqueda se ignoran aquí porque
+       esa barra ya busca por sí misma. */
+    (function(){
+      var lanes = $('tlLanes'); if (!lanes) return;
+      lanes.addEventListener('pointerdown', function(e){
+        if (!state.videoLoaded) return;
+        if (e.target.closest && e.target.closest('.seekwrap')) return;
+        var dom = tlDomain(); if (!dom) return;
+        var r = lanes.getBoundingClientRect();
+        var frac = clamp((e.clientX - r.left)/r.width, 0, 1);
+        seekTo(dom.a + frac*(dom.b - dom.a));
+      });
+    })();
 
     /* Rango reproducible: con tracking cargado (y sin mismatch), el
        vídeo se recorta a [primer sample, último sample] (el primer
@@ -1117,10 +1290,17 @@
       });
     });
     document.querySelector('[data-tool="none"]').classList.add('active');
-    document.querySelectorAll('.swatch').forEach(function(sw){
+    document.querySelectorAll('#railSwatches .swatch').forEach(function(sw){
       sw.addEventListener('click', function(){
         state.color = sw.getAttribute('data-color');
-        document.querySelectorAll('.swatch').forEach(function(x){ x.classList.toggle('active', x === sw); });
+        document.querySelectorAll('#railSwatches .swatch').forEach(function(x){ x.classList.toggle('active', x === sw); });
+      });
+    });
+    /* Grosor de línea de las señalizaciones (barra vertical). */
+    document.querySelectorAll('.lw').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        state.lineWidth = parseInt(btn.getAttribute('data-lw'), 10) || 3;
+        document.querySelectorAll('.lw').forEach(function(x){ x.classList.toggle('active', x === btn); });
       });
     });
 
@@ -1131,6 +1311,7 @@
     annoCanvas.addEventListener('pointerdown', function(e){
       if (state.tool === 'none') return;
       var pos = canvasPos(e);
+      if (state.tool === 'erase'){ eraseAt(pos); return; }
       if (state.tool === 'text'){
         var txt = $('annoLabel').value.trim();
         if (!txt){ showMsg('Escribe primero el texto en el campo «Etiqueta».'); return; }
@@ -1159,6 +1340,49 @@
       }
     });
 
+    /* Herramienta Borrar: hace clic en una señalización visible en
+       este momento y la borra. Se busca de la más reciente a la más
+       antigua para borrar la de encima si hay varias solapadas. */
+    function annoHit(a, pos){
+      var tol = 0.03;
+      if (a.type === 'text'){
+        return Math.abs(a.x - pos.x) < 0.06 && Math.abs(a.y - pos.y) < 0.06;
+      }
+      if (a.type === 'free'){
+        if (!a.points) return false;
+        for (var i = 0; i < a.points.length; i++){
+          if (Math.hypot(a.points[i].x - pos.x, a.points[i].y - pos.y) < tol) return true;
+        }
+        return false;
+      }
+      if (a.type === 'arrow' || a.type === 'line'){
+        var dx = a.x2 - a.x1, dy = a.y2 - a.y1;
+        var len2 = dx*dx + dy*dy;
+        var tt = len2 ? clamp(((pos.x - a.x1)*dx + (pos.y - a.y1)*dy)/len2, 0, 1) : 0;
+        var px = a.x1 + tt*dx, py = a.y1 + tt*dy;
+        return Math.hypot(pos.x - px, pos.y - py) < tol;
+      }
+      var x1 = Math.min(a.x1, a.x2), x2 = Math.max(a.x1, a.x2);
+      var y1 = Math.min(a.y1, a.y2), y2 = Math.max(a.y1, a.y2);
+      return pos.x >= x1 - tol && pos.x <= x2 + tol && pos.y >= y1 - tol && pos.y <= y2 + tol;
+    }
+    function eraseAt(pos){
+      var t = video.currentTime || 0;
+      var showAll = $('showAllAnnos').checked;
+      for (var i = state.annotations.length - 1; i >= 0; i--){
+        var a = state.annotations[i];
+        if (!(showAll || Math.abs(t - a.t) <= 2 || a.id === state.selectedAnno)) continue;
+        if (annoHit(a, pos)){
+          state.annotations.splice(i, 1);
+          if (state.selectedAnno === a.id) state.selectedAnno = null;
+          renderAnnoList(); updateStatus(); renderTimeline();
+          showMsg('Señalización borrada: ' + (TOOL_NAMES[a.type] || a.type) + (a.label ? ' — ' + a.label : ''));
+          return;
+        }
+      }
+      showMsg('No hay ninguna señalización en ese punto.');
+    }
+
     function addAnnotation(geo){
       var ann = {
         id: Date.now() + '_' + Math.floor(Math.random()*1e6),
@@ -1170,24 +1394,49 @@
       state.annotations.push(ann);
       state.annotations.sort(function(a,b){ return a.t - b.t; });
       renderAnnoList();
+      renderTimeline();
       updateStatus();
     }
 
     function drawOneAnnotation(a, W, H){
       actx.strokeStyle = a.color; actx.fillStyle = a.color;
-      actx.lineWidth = 3; actx.lineJoin = 'round'; actx.lineCap = 'round';
+      actx.lineWidth = state.lineWidth || 3; actx.lineJoin = 'round'; actx.lineCap = 'round';
       var tagX = null, tagY = null;
       if (a.type === 'arrow'){
         var x1 = a.x1*W, y1 = a.y1*H, x2 = a.x2*W, y2 = a.y2*H;
         actx.beginPath(); actx.moveTo(x1,y1); actx.lineTo(x2,y2); actx.stroke();
-        var ang = Math.atan2(y2-y1, x2-x1), hl = 14;
+        /* Punta de flecha rellena (triángulo): se ve limpia y
+           profesional, mejor que las dos rayas de antes. */
+        var ang = Math.atan2(y2-y1, x2-x1), hl = 16, hw = 7;
+        var bx = x2 - hl*Math.cos(ang), by = y2 - hl*Math.sin(ang);
+        var px = Math.cos(ang + Math.PI/2), py = Math.sin(ang + Math.PI/2);
         actx.beginPath();
         actx.moveTo(x2, y2);
-        actx.lineTo(x2 - hl*Math.cos(ang-0.42), y2 - hl*Math.sin(ang-0.42));
-        actx.moveTo(x2, y2);
-        actx.lineTo(x2 - hl*Math.cos(ang+0.42), y2 - hl*Math.sin(ang+0.42));
-        actx.stroke();
+        actx.lineTo(bx + hw*px, by + hw*py);
+        actx.lineTo(bx - hw*px, by - hw*py);
+        actx.closePath();
+        actx.fill();
         tagX = x1; tagY = y1;
+      } else if (a.type === 'line'){
+        actx.beginPath(); actx.moveTo(a.x1*W, a.y1*H); actx.lineTo(a.x2*W, a.y2*H); actx.stroke();
+        tagX = a.x1*W; tagY = a.y1*H;
+      } else if (a.type === 'spotlight'){
+        /* Spotlight: oscurece todo el vídeo salvo la región elegida
+           (un "agujero" claro con borde de color). Se dibuja con un
+           relleno evenodd sobre el canvas de anotaciones, que está
+           encima del vídeo: el vídeo se ve a través del agujero. */
+        var sx = Math.min(a.x1,a.x2)*W, sy = Math.min(a.y1,a.y2)*H;
+        var sw = Math.abs(a.x2-a.x1)*W, sh = Math.abs(a.y2-a.y1)*H;
+        actx.save();
+        actx.beginPath();
+        actx.rect(0, 0, W, H);
+        actx.rect(sx, sy, sw, sh);
+        actx.fillStyle = 'rgba(0,0,0,0.55)';
+        actx.fill('evenodd');
+        actx.restore();
+        actx.strokeStyle = a.color;
+        actx.strokeRect(sx, sy, sw, sh);
+        tagX = sx; tagY = sy;
       } else if (a.type === 'ellipse'){
         actx.beginPath();
         actx.ellipse((a.x1+a.x2)/2*W, (a.y1+a.y2)/2*H, Math.abs(a.x2-a.x1)/2*W, Math.abs(a.y2-a.y1)/2*H, 0, 0, 6.2832);
@@ -1198,9 +1447,16 @@
         tagX = Math.min(a.x1,a.x2)*W; tagY = Math.min(a.y1,a.y2)*H;
       } else if (a.type === 'free'){
         if (a.points && a.points.length > 1){
+          /* Trazo suavizado con curvas cuadráticas por los puntos
+             medios: se ve limpio en vez de dentado. */
           actx.beginPath();
           actx.moveTo(a.points[0].x*W, a.points[0].y*H);
-          for (var i=1;i<a.points.length;i++) actx.lineTo(a.points[i].x*W, a.points[i].y*H);
+          for (var i = 1; i < a.points.length - 1; i++){
+            var mx = (a.points[i].x + a.points[i+1].x)/2*W, my = (a.points[i].y + a.points[i+1].y)/2*H;
+            actx.quadraticCurveTo(a.points[i].x*W, a.points[i].y*H, mx, my);
+          }
+          var lp = a.points[a.points.length-1];
+          actx.lineTo(lp.x*W, lp.y*H);
           actx.stroke();
           tagX = a.points[0].x*W; tagY = a.points[0].y*H;
         }
@@ -1257,7 +1513,7 @@
           ev.stopPropagation();
           state.annotations = state.annotations.filter(function(x){ return x.id !== a.id; });
           if (state.selectedAnno === a.id) state.selectedAnno = null;
-          renderAnnoList(); updateStatus();
+          renderAnnoList(); renderTimeline(); updateStatus();
         });
         li.appendChild(t); li.appendChild(b); li.appendChild(del);
         li.addEventListener('click', function(){
@@ -1269,7 +1525,7 @@
     }
     $('clearAnnos').addEventListener('click', function(){
       state.annotations = []; state.selectedAnno = null;
-      renderAnnoList(); updateStatus();
+      renderAnnoList(); renderTimeline(); updateStatus();
       showMsg('Se han borrado todas las señalizaciones.');
     });
     $('showAllAnnos').addEventListener('change', function(){ state.selectedAnno = null; });
@@ -1442,7 +1698,7 @@
       state.cuts.push({ start_s: +a.toFixed(2), end_s: +b.toFixed(2), label: $('cutLabel').value.trim() || 'Corte' });
       state.cuts.sort(function(x,y){ return x.start_s - y.start_s; });
       $('cutLabel').value = '';
-      renderCuts(); updateStatus();
+      renderCuts(); renderTimeline(); updateStatus();
     });
     function renderCuts(){
       var ul = $('cutList'); ul.innerHTML = '';
@@ -1462,7 +1718,7 @@
         del.addEventListener('click', function(ev){
           ev.stopPropagation();
           state.cuts.splice(i, 1);
-          renderCuts(); updateStatus();
+          renderCuts(); renderTimeline(); updateStatus();
         });
         li.appendChild(t); li.appendChild(b); li.appendChild(del);
         li.addEventListener('click', function(){ jumpTo(c.start_s); video.play(); });
@@ -1506,7 +1762,7 @@
             buildMarkers(); renderEventList(); renderFullSummary();
             state.lastStatsSecond = -1;
           }
-          renderAnnoList(); renderCuts(); updateStatus();
+          renderAnnoList(); renderCuts(); renderTimeline(); updateStatus();
           showMsg('Análisis importado: ' + state.annotations.length + ' señalizaciones y ' + state.cuts.length + ' cortes restaurados.');
         } catch(err){
           showMsg('No se pudo importar ese archivo: ' + err.message);
@@ -1774,7 +2030,10 @@
     function setView(view){
       var isBoard = view === 'board';
       $('stageWrap').hidden = isBoard;
-      $('videoToolbar').hidden = isBoard;
+      $('videoControls').hidden = isBoard;
+      $('timeline').hidden = isBoard;
+      $('toolRail').hidden = isBoard;
+      document.querySelector('.layout').classList.toggle('board-view', isBoard);
       $('boardWrap').hidden = !isBoard;
       $('tabVideo').classList.toggle('active', !isBoard);
       $('tabBoard').classList.toggle('active', isBoard);
@@ -1822,11 +2081,13 @@
         $('timeVideo').textContent = 'Vídeo ' + fmtClock(t) + (dur ? ' / ' + fmtClock(dur) : '');
       }
       $('timeMatch').textContent = 'Partido ' + fmtMatch(t);
+      updateTlPlayhead();
       updateLiveStats();
       requestAnimationFrame(loop);
     }
     syncContextUI();
     updateStatus();
+    renderTimeline();
     /* Tracking inyectado (p. ej. por Streamlit, window.TRACKING_DATA): se
        carga solo, sin pedir el archivo. Sin él (HTML standalone), se
        muestra el enlace discreto para cargar el JSON a mano. */
