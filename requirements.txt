@@ -1,6 +1,8 @@
 streamlit
 pandas
 numpy
+matplotlib
+mplsoccer
 plotly
 scipy
 groq

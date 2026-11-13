@@ -13,6 +13,10 @@ py -m pip install -r requirements.txt
 py -m streamlit run match.py
 ```
 
+`requirements.txt` incluye `matplotlib` y `mplsoccer`, que la app usa para
+renderizar el campo y el mapa de calor; si faltan, la aplicación cae a un
+fallback manual sin romper la ejecución.
+
 La app tiene 4 pantallas: pre-partido (alineaciones y colores), etiquetado
 en vivo, vídeo y dashboard postpartido.
 
