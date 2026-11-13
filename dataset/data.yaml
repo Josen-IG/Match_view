@@ -1,0 +1,9 @@
+# Dataset propio: Cirbonero B vs Milagres (VEO, 1920x1080)
+# Clases: 0=football (balón), 1=player (jugador). La 2=referee se añade en la corrección manual.
+path: dataset
+train: images/train
+val: images/val
+nc: 2
+names:
+  0: football
+  1: player
