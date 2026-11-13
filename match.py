@@ -6,7 +6,42 @@ from datetime import datetime, date
 import shutil
 import time
 import os
+import subprocess
+import tempfile
+import bisect
 from pathlib import Path
+
+# OpenCV solo se necesita para exportar clips con overlay; si no está,
+# la exportación usa ffmpeg por CLI (corte sin overlay) o avisa.
+try:
+    import cv2
+    CV2_DISPONIBLE = True
+except Exception:  # noqa: BLE001
+    cv2 = None
+    CV2_DISPONIBLE = False
+
+# matplotlib/numpy vienen con Streamlit; se importan con guarda para que
+# la app no caiga si faltan (los mapas de calor avisarían en ese caso).
+try:
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    MPL_DISPONIBLE = True
+except Exception:  # noqa: BLE001
+    np = None
+    plt = None
+    LinearSegmentedColormap = None
+    MPL_DISPONIBLE = False
+
+# mplsoccer dibuja el campo; si no está, se dibuja a mano con matplotlib.
+try:
+    from mplsoccer import Pitch
+    MPLSOCER_DISPONIBLE = True
+except Exception:  # noqa: BLE001
+    Pitch = None
+    MPLSOCER_DISPONIBLE = False
 
 # El análisis YOLO (generar tracking) es opcional en local: si el módulo
 # no está disponible en este equipo, la pantalla manual sigue funcionando
@@ -165,6 +200,337 @@ FORMACIONES_COORDS = {
     "1-3-5-2": [(8,50), (20,25), (20,50), (20,75), (34,15), (34,32), (32,50), (34,68), (34,85), (46,35), (46,65)],
     "1-5-3-2": [(8,50), (20,15), (20,32), (20,50), (20,68), (20,85), (34,30), (34,50), (34,70), (46,35), (46,65)]
 }
+
+
+# --- 6b. AYUDAS GENÉRICAS: mapas de calor, biblioteca y clips ---
+# Todo genérico: equipos, colores, kickoff y duraciones salen del JSON
+# de tracking que se cargue; nada está hardcodeado a ningún partido.
+
+def _hex_a_rgb(hex_color):
+    """'#RRGGBB' -> (r, g, b) 0-255. Si no es válido, gris."""
+    try:
+        h = str(hex_color).lstrip("#")
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except Exception:  # noqa: BLE001
+        return (128, 128, 128)
+
+
+def _hex_a_bgr(hex_color):
+    r, g, b = _hex_a_rgb(hex_color)
+    return (b, g, r)
+
+
+def _cmap_equipo(hex_color):
+    """Colormap blanco -> color del equipo para el mapa de calor."""
+    return LinearSegmentedColormap.from_list(
+        "equipo", ["#ffffff", str(hex_color or "#888888")])
+
+
+def _mmss(segundos):
+    segundos = max(0, int(segundos))
+    return f"{segundos // 60:02d}:{segundos % 60:02d}"
+
+
+@st.cache_data(show_spinner=False)
+def cargar_tracking_json(ruta_str, mtime):
+    """Lee un tracking JSON (cacheado; se invalida si cambia el archivo)."""
+    with open(ruta_str, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def tramos_partido(match_duration_s):
+    """Tramos seleccionables (etiqueta, inicio_s, fin_s) en minutos de
+    partido: todo, mitades y tramos de 15' según la duración real."""
+    dur = float(match_duration_s or 0)
+    tramos = [("Todo el partido", 0.0, dur)]
+    if dur > 2700:
+        tramos.append(("1ª mitad (0-45')", 0.0, 2700.0))
+        tramos.append(("2ª mitad (45'-fin)", 2700.0, dur))
+    elif dur > 0:
+        tramos.append(("1ª mitad (0-45')", 0.0, dur))
+    ini = 0.0
+    while ini < dur:
+        fin = min(ini + 900.0, dur)
+        tramos.append((f"{int(ini // 60)}-{int(fin // 60)}'", ini, fin))
+        ini = fin
+    return tramos
+
+
+def _puntos_mapa_calor(tracking, sujeto, t_ini_video, t_fin_video):
+    """Puntos (xs, ys, usa_campo) para el mapa de calor en un tramo de
+    tiempo de vídeo. sujeto: 'local' | 'visitante' | 'balon'.
+    Si las muestras traen coordenadas de campo (pp/bp, metros 105x68)
+    se usan; si no, las del fotograma (p/b, 0-100)."""
+    muestras = tracking.get("samples") or []
+    tc = tracking.get("team_code") or {}
+    codigos = {"local": {tc.get("local", 0), tc.get("gk_local", 2)},
+               "visitante": {tc.get("visitante", 1), tc.get("gk_visitante", 3)}}.get(sujeto)
+    usa_campo = any(("pp" in s or "bp" in s) for s in muestras[:200])
+    xs, ys = [], []
+    for s in muestras:
+        t = float(s.get("t", 0) or 0)
+        if t < t_ini_video or t >= t_fin_video:
+            continue
+        if usa_campo:
+            if sujeto == "balon":
+                bp = s.get("bp")
+                if bp:
+                    xs.append(float(bp[0])); ys.append(float(bp[1]))
+            else:
+                for pt in s.get("pp") or []:
+                    if len(pt) >= 3 and pt[2] in codigos:
+                        xs.append(float(pt[0])); ys.append(float(pt[1]))
+        else:
+            if sujeto == "balon":
+                b = s.get("b")
+                if b:
+                    xs.append(float(b[0])); ys.append(float(b[1]))
+            else:
+                for per in s.get("p") or []:
+                    if len(per) >= 5 and per[4] in codigos:
+                        xs.append(float(per[0])); ys.append(float(per[1]))
+    return xs, ys, usa_campo
+
+
+def _dibujar_campo_mano(ax):
+    """Campo 105x68 dibujado a mano con matplotlib (fallback sin
+    mplsoccer): rectángulo, línea central, círculo, áreas y porterías."""
+    import matplotlib.patches as mpatches
+    ax.add_patch(mpatches.Rectangle((0, 0), 105, 68, fill=False, lw=1.5, ec="#333333"))
+    ax.plot([52.5, 52.5], [0, 68], color="#333333", lw=1.5)
+    ax.add_patch(mpatches.Circle((52.5, 34), 9.15, fill=False, lw=1.5, ec="#333333"))
+    ax.plot([52.5], [34], marker="o", ms=3, color="#333333")
+    for x0 in (0, 105):
+        sgn = 1 if x0 == 0 else -1
+        ax.add_patch(mpatches.Rectangle((min(x0, x0 + sgn * 16.5), 13.84), 16.5, 40.32,
+                                        fill=False, lw=1.5, ec="#333333"))
+        ax.add_patch(mpatches.Rectangle((min(x0, x0 + sgn * 5.5), 24.84), 5.5, 18.32,
+                                        fill=False, lw=1.5, ec="#333333"))
+        ax.plot([x0 + sgn * 11], [34], marker="o", ms=3, color="#333333")
+        ax.add_patch(mpatches.Rectangle((min(x0, x0 - sgn * 2.44), 30.34), 2.44, 7.32,
+                                        fill=False, lw=1.5, ec="#333333"))
+
+
+def generar_figura_mapa_calor(tracking, sujeto, tramo):
+    """Figura matplotlib del mapa de calor. tramo: (etiqueta, ini_s, fin_s)
+    en segundos de partido. Devuelve (fig, nota) o (None, motivo)."""
+    if not MPL_DISPONIBLE:
+        return None, "matplotlib no está disponible en este equipo."
+    kickoff = float(tracking.get("kickoff_s") or 0)
+    _, ini_p, fin_p = tramo
+    xs, ys, usa_campo = _puntos_mapa_calor(
+        tracking, sujeto, kickoff + ini_p, kickoff + fin_p)
+    if not xs:
+        return None, "Sin detecciones en ese tramo para lo seleccionado."
+    teams = tracking.get("teams") or {}
+    colors = tracking.get("colors") or {}
+    if sujeto == "balon":
+        titulo = "Balón"
+        color_hex = "#FFD21F"
+    elif sujeto == "local":
+        titulo = teams.get("local", "Local")
+        color_hex = colors.get("local", "#1E88E5")
+    else:
+        titulo = teams.get("visitante", "Visitante")
+        color_hex = colors.get("visitante", "#E53935")
+    cmap = _cmap_equipo(color_hex)
+    fig = plt.figure(figsize=(10, 6.8))
+    if usa_campo:
+        hist, _, _ = np.histogram2d(xs, ys, bins=[35, 23],
+                                    range=[[0, 105], [0, 68]])
+        if MPLSOCER_DISPONIBLE:
+            pitch = Pitch(pitch_type="custom", pitch_length=105, pitch_width=68,
+                          pitch_color="white", line_color="#333333", linewidth=1.5)
+            fig, ax = pitch.draw(figsize=(10, 6.8))
+        else:
+            ax = fig.add_subplot(111)
+            ax.set_xlim(0, 105)
+            ax.set_ylim(0, 68)
+            ax.set_aspect("equal")
+            _dibujar_campo_mano(ax)
+        im = ax.imshow(hist.T, extent=(0, 105, 0, 68), origin="lower",
+                       cmap=cmap, alpha=0.85, aspect="auto", interpolation="bilinear")
+        ax.set_title(f"Mapa de calor — {titulo} ({tramo[0]})", fontsize=13)
+        fig.colorbar(im, ax=ax, shrink=0.8, label="Nº de detecciones")
+        nota = "Coordenadas de campo (105×68 m)."
+    else:
+        hist, _, _ = np.histogram2d(xs, ys, bins=[50, 28],
+                                    range=[[0, 100], [0, 100]])
+        ax = fig.add_subplot(111)
+        ax.set_xlim(0, 100)
+        ax.set_ylim(100, 0)
+        ax.set_aspect("equal")
+        ax.add_patch(plt.Rectangle((0, 0), 100, 100, fill=False, lw=1.5, ec="#333333"))
+        im = ax.imshow(hist.T, extent=(0, 100, 0, 100), origin="upper",
+                       cmap=cmap, alpha=0.85, aspect="auto", interpolation="bilinear")
+        ax.set_title(f"Mapa de calor — {titulo} ({tramo[0]})", fontsize=13)
+        ax.set_xticks([]); ax.set_yticks([])
+        fig.colorbar(im, ax=ax, shrink=0.8, label="Nº de detecciones")
+        nota = ("Concentración en la imagen (este tracking no trae "
+                "coordenadas de campo).")
+    fig.tight_layout()
+    return fig, nota
+
+
+def leer_metadatos_tracking(ruta):
+    """Metadatos de un tracking sin quedarse con las muestras en memoria.
+    Devuelve dict o None si el archivo no se puede leer."""
+    try:
+        with open(ruta, encoding="utf-8") as f:
+            datos = json.load(f)
+        n_muestras = len(datos.get("samples") or [])
+        teams = datos.get("teams") or {}
+        local = teams.get("local", "?")
+        visitante = teams.get("visitante", "?")
+        dur = float(datos.get("match_duration_s") or 0)
+        # Las muestras no salen de aquí: solo se cuenta cuántas hay.
+        fecha = datetime.fromtimestamp(os.path.getmtime(ruta)).strftime("%d/%m/%Y")
+        return {"partido": f"{local} vs {visitante}",
+                "fecha": fecha,
+                "duracion": _mmss(dur),
+                "muestras": n_muestras,
+                "archivo": Path(ruta).name,
+                "ruta": str(ruta)}
+    except Exception:  # noqa: BLE001 - archivo corrupto: se salta
+        return None
+
+
+def buscar_biblioteca(carpeta_app):
+    """Todos los tracking_*.json bajo la carpeta de la app (recursivo),
+    con sus metadatos. Los corruptos se ignoran."""
+    biblioteca = []
+    for ruta in sorted(Path(carpeta_app).glob("**/tracking_*.json")):
+        meta = leer_metadatos_tracking(ruta)
+        if meta is not None:
+            biblioteca.append(meta)
+    return biblioteca
+
+
+def _muestra_cercana(muestras, tiempos, t_frame):
+    """Muestra con t más cercano (y <= t_frame) por búsqueda binaria."""
+    idx = bisect.bisect_right(tiempos, t_frame) - 1
+    return muestras[idx] if idx >= 0 else None
+
+
+def _dibujar_overlay_cv2(frame, tracking, muestras, tiempos, t_frame, ancho, alto):
+    """Overlay como la pantalla manual: cajas con el color del equipo
+    (porteros con la caja rellena), balón con círculo + triángulo y
+    trayectoria del balón de los últimos 3 s. p = [x, y, w, h, code,
+    track_id] con x,y = centro (0-100)."""
+    muestra = _muestra_cercana(muestras, tiempos, t_frame)
+    if muestra is None:
+        return
+    colors = tracking.get("colors") or {}
+    tc = tracking.get("team_code") or {}
+    mapa_color = {
+        tc.get("local", 0): colors.get("local", "#1E88E5"),
+        tc.get("visitante", 1): colors.get("visitante", "#E53935"),
+        tc.get("gk_local", 2): colors.get("gk_local", "#FFEB3B"),
+        tc.get("gk_visitante", 3): colors.get("gk_visitante", "#FF9800"),
+        tc.get("arbitro", 4): colors.get("arbitro", "#000000"),
+    }
+    codigos_portero = {tc.get("gk_local", 2), tc.get("gk_visitante", 3)}
+    grosor = max(2, ancho // 640)
+    # Trayectoria del balón: últimos 3 s (como la pantalla manual).
+    pts = []
+    idx = bisect.bisect_right(tiempos, t_frame) - 1
+    for i in range(idx, -1, -1):
+        if t_frame - float(muestras[i].get("t", 0) or 0) > 3:
+            break
+        b = muestras[i].get("b")
+        if b:
+            pts.append((int(float(b[0]) / 100 * ancho), int(float(b[1]) / 100 * alto)))
+    if len(pts) > 1:
+        for j in range(len(pts) - 1):
+            alfa = 0.85 * (1 - j / len(pts))
+            color = (int(255 * alfa), int(139 * alfa), int(61 * alfa))
+            cv2.line(frame, pts[j], pts[j + 1], color, grosor)
+    # Jugadores.
+    for per in muestra.get("p") or []:
+        if len(per) < 5:
+            continue
+        x, y, w, h, code = (float(v) for v in per[:5])
+        col = _hex_a_bgr(mapa_color.get(int(code), "#888888"))
+        x1 = int((x - w / 2) / 100 * ancho)
+        y1 = int((y - h / 2) / 100 * alto)
+        x2 = int((x + w / 2) / 100 * ancho)
+        y2 = int((y + h / 2) / 100 * alto)
+        cx, cy = int(x / 100 * ancho), int(y / 100 * alto)
+        if int(code) in codigos_portero:
+            relleno = frame.copy()
+            cv2.rectangle(relleno, (x1, y1), (x2, y2), col, -1)
+            cv2.addWeighted(relleno, 0.45, frame, 0.55, 0, frame)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), grosor)
+        else:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), col, grosor)
+        tri = np.array([[cx - 6, y1 - 4], [cx + 6, y1 - 4], [cx, y1 + 8]], dtype=np.int32)
+        cv2.fillPoly(frame, [tri], col)
+    # Balón: círculo + triángulo amarillo (como la pantalla manual).
+    b = muestra.get("b")
+    if b:
+        bx, by = int(float(b[0]) / 100 * ancho), int(float(b[1]) / 100 * alto)
+        tri_b = np.array([[bx - 7, by - 24], [bx + 7, by - 24], [bx, by - 12]], dtype=np.int32)
+        cv2.fillPoly(frame, [tri_b], (31, 210, 255))
+        cv2.circle(frame, (bx, by), max(5, ancho // 160), (31, 210, 255), -1)
+        cv2.circle(frame, (bx, by), max(5, ancho // 160), (17, 17, 17), 2)
+
+
+def render_clip_cv2(ruta_video, tracking, inicio_s, fin_s, progreso_cb=None):
+    """Renderiza el clip [inicio_s, fin_s] (segundos de vídeo) con el
+    overlay del tracking y devuelve los bytes del .mp4 (codec mp4v).
+    Lanza ValueError si el vídeo no se puede abrir."""
+    if not CV2_DISPONIBLE:
+        raise RuntimeError("OpenCV (cv2) no está disponible.")
+    cap = cv2.VideoCapture(str(ruta_video))
+    if not cap.isOpened():
+        raise ValueError(f"No se pudo abrir el vídeo: {ruta_video}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    ancho = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    alto = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    muestras = tracking.get("samples") or []
+    tiempos = [float(s.get("t", 0) or 0) for s in muestras]
+    cap.set(cv2.CAP_PROP_POS_MSEC, float(inicio_s) * 1000.0)
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    tmp.close()
+    try:
+        vw = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*"mp4v"),
+                             fps, (ancho, alto))
+        n_total = max(1, int((fin_s - inicio_s) * fps))
+        n = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            t_frame = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if t_frame > fin_s:
+                break
+            _dibujar_overlay_cv2(frame, tracking, muestras, tiempos,
+                                 t_frame, ancho, alto)
+            vw.write(frame)
+            n += 1
+            if progreso_cb is not None:
+                progreso_cb(min(1.0, n / n_total), f"Fotograma {n}/{n_total}")
+        vw.release()
+        if n == 0:
+            raise ValueError("No se leyó ningún fotograma en ese tramo.")
+        return Path(tmp.name).read_bytes()
+    finally:
+        cap.release()
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+def cortar_clip_ffmpeg(ruta_video, inicio_s, fin_s, salida):
+    """Corte en bruto con ffmpeg (sin overlay). Devuelve True si va bien."""
+    if shutil.which("ffmpeg") is None:
+        return False
+    cmd = ["ffmpeg", "-y", "-ss", str(inicio_s), "-to", str(fin_s),
+           "-i", str(ruta_video), "-c", "copy", str(salida)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    return res.returncode == 0 and Path(salida).is_file()
+
 
 
 # --- 4. PANTALLA 1: MENÚ PRINCIPAL (ALINEACIONES Y CONFIGURACIÓN) ---
@@ -712,6 +1078,7 @@ elif st.session_state.pagina == "video":
     ruta_pantalla = carpeta_app / "analizador_video.html"
     if ruta_pantalla.is_file():
         html_pantalla = ruta_pantalla.read_text(encoding="utf-8")
+        datos_tracking = None
         if tracking_elegido is not None:
             try:
                 datos_tracking = json.loads(tracking_elegido.read_text(encoding="utf-8"))
@@ -726,7 +1093,241 @@ elif st.session_state.pagina == "video":
             except (ValueError, OSError) as err:
                 st.warning(f"⚠️ No se pudo cargar {tracking_elegido.name}: {err}. "
                            "La pantalla cargará sin tracking.")
+        # Compacidad táctica (idea VEO): si el tracking trae las
+        # estadísticas, enseñar la forma de cada equipo por periodo.
+        compacidad = {}
+        if isinstance(datos_tracking, dict):
+            compacidad = datos_tracking.get("stats", {}).get("compacidad", {}) or {}
+        tramos_comp = compacidad.get("tramos") if isinstance(compacidad, dict) else None
+        if tramos_comp:
+            filas_comp = []
+            for fila in tramos_comp:
+                loc = fila.get("local") or {}
+                vis = fila.get("visitante") or {}
+                filas_comp.append({
+                    "Tramo": fila.get("tramo", ""),
+                    "Área local (m²)": loc.get("area_m2"),
+                    "Área visitante (m²)": vis.get("area_m2"),
+                    "Anchura local (m)": loc.get("anchura_m"),
+                    "Anchura visitante (m)": vis.get("anchura_m"),
+                    "Profundidad local (m)": loc.get("profundidad_m"),
+                    "Profundidad visitante (m)": vis.get("profundidad_m"),
+                })
+            with st.expander("📐 Compacidad táctica (forma del equipo por periodo)",
+                             expanded=False):
+                st.caption("Área del Convex Hull de las posiciones en campo: "
+                           "menos área = equipo más compacto. Anchura y "
+                           "profundidad en metros.")
+                st.dataframe(filas_comp, use_container_width=True, hide_index=True)
         components.html(html_pantalla, height=1100, scrolling=True)
     else:
         st.warning("⚠️ No se encontró analizador_video.html junto a match.py; "
                    "la pantalla de análisis manual no se puede mostrar.")
+
+    # --- 7b. MAPAS DE CALOR ---
+    st.divider()
+    st.markdown("#### 🔥 Mapas de calor")
+    if tracking_elegido is None:
+        st.info("ℹ️ Carga un tracking (proporciona el vídeo arriba o pon un "
+                "tracking_*.json en la carpeta) para ver los mapas de calor.")
+    else:
+        try:
+            datos_hm = cargar_tracking_json(
+                str(tracking_elegido), tracking_elegido.stat().st_mtime)
+        except Exception as err:  # noqa: BLE001
+            datos_hm = None
+            st.error(f"No se pudo leer {tracking_elegido.name}: {err}")
+        if datos_hm is not None:
+            teams_hm = datos_hm.get("teams") or {}
+            nombre_local = teams_hm.get("local", "Local")
+            nombre_visitante = teams_hm.get("visitante", "Visitante")
+            dur_hm = float(datos_hm.get("match_duration_s") or 0)
+            c_hm1, c_hm2 = st.columns(2)
+            with c_hm1:
+                sujeto_hm = st.selectbox(
+                    "Qué mostrar",
+                    ["local", "visitante", "balon"],
+                    format_func=lambda v: {
+                        "local": f"{nombre_local} (local)",
+                        "visitante": f"{nombre_visitante} (visitante)",
+                        "balon": "Balón"}[v],
+                    key="hm_sujeto",
+                )
+            with c_hm2:
+                tramos_hm = tramos_partido(dur_hm)
+                tramo_hm = st.selectbox(
+                    "Tramo", tramos_hm,
+                    format_func=lambda t: t[0],
+                    key="hm_tramo",
+                )
+            fig_hm, nota_hm = generar_figura_mapa_calor(
+                datos_hm, sujeto_hm, tramo_hm)
+            if fig_hm is None:
+                st.warning(f"⚠️ {nota_hm}")
+            else:
+                st.pyplot(fig_hm, use_container_width=True)
+                st.caption(nota_hm)
+                plt.close(fig_hm)
+
+    # --- 7c. BIBLIOTECA DE PARTIDOS ---
+    st.divider()
+    st.markdown("#### 📚 Biblioteca de partidos")
+    st.caption("Todos los tracking_*.json encontrados bajo la carpeta de la app.")
+    biblioteca = buscar_biblioteca(carpeta_app)
+    if not biblioteca:
+        st.info("ℹ️ No hay ningún tracking (tracking_*.json) en la carpeta ni "
+                "en sus subcarpetas. Genera uno proporcionando el vídeo "
+                "arriba o con el notebook de Colab.")
+    else:
+        df_bib = pd.DataFrame([{
+            "Partido": m["partido"],
+            "Fecha": m["fecha"],
+            "Duración": m["duracion"],
+            "Muestras": m["muestras"],
+            "Archivo": m["archivo"],
+        } for m in biblioteca])
+        st.dataframe(df_bib, use_container_width=True, hide_index=True)
+        opciones_bib = [f"{m['partido']} · {m['archivo']}" for m in biblioteca]
+        sel_bib = st.selectbox(
+            "Elige un partido para cargarlo en la pantalla manual",
+            opciones_bib, key="bib_select")
+        if st.button("📥 Cargar en la pantalla manual", key="bib_cargar"):
+            idx_bib = opciones_bib.index(sel_bib)
+            st.session_state["tracking_del_video"] = biblioteca[idx_bib]["ruta"]
+            st.success(f"✅ {biblioteca[idx_bib]['partido']} cargado en la "
+                       "pantalla manual.")
+            st.rerun()
+
+    # --- 7d. EXPORTAR CLIPS COMO VÍDEO ---
+    st.divider()
+    st.markdown("#### 🎬 Exportar clips como vídeo")
+    st.caption("Renderiza un corte corto con el overlay del tracking "
+               "(cajas, balón y trayectoria) y descárgalo como .mp4.")
+    ruta_clip = st.text_input(
+        "Vídeo",
+        value=st.session_state.get("video_gen_path", ""),
+        key="clip_video_path",
+        placeholder=r"C:\Videos\partido.mp4",
+    ).strip().strip('"').strip("'").strip()
+    # Aviso si el tracking es de otro vídeo que el elegido.
+    if tracking_elegido is not None and ruta_clip:
+        try:
+            datos_clip = cargar_tracking_json(
+                str(tracking_elegido), tracking_elegido.stat().st_mtime)
+            vf_clip = datos_clip.get("video_filename")
+            if vf_clip and Path(ruta_clip).name != vf_clip:
+                st.warning(f"⚠️ El tracking es del vídeo «{vf_clip}» y el "
+                           f"vídeo elegido es «{Path(ruta_clip).name}»: "
+                           "el clip saldría con el tracking de otro partido.")
+        except Exception:  # noqa: BLE001 - el aviso es opcional
+            pass
+    origen_clip = st.radio(
+        "Corte a exportar",
+        ["JSON exportado desde la pantalla manual", "Inicio/fin manuales"],
+        horizontal=True, key="clip_origen",
+    )
+    inicio_clip = fin_clip = None
+    etiqueta_clip = "jugada"
+    if origen_clip.startswith("JSON"):
+        archivo_cortes = st.file_uploader(
+            "Sube analisis_match_view.json (exportado desde la pantalla manual)",
+            type=["json"], key="clip_json")
+        if archivo_cortes is not None:
+            try:
+                datos_cortes = json.loads(archivo_cortes.read().decode("utf-8"))
+                cortes = datos_cortes.get("cuts") or []
+                if not cortes:
+                    st.warning("⚠️ Ese JSON no trae cortes (cuts).")
+                else:
+                    opciones_cortes = [
+                        f"{c.get('label', 'corte')} "
+                        f"({_mmss(c.get('start_s', 0))}–{_mmss(c.get('end_s', 0))})"
+                        for c in cortes]
+                    sel_corte = st.selectbox(
+                        "Elige un corte", opciones_cortes, key="clip_corte")
+                    corte = cortes[opciones_cortes.index(sel_corte)]
+                    inicio_clip = float(corte.get("start_s", 0))
+                    fin_clip = float(corte.get("end_s", 0))
+                    etiqueta_clip = str(corte.get("label", "jugada"))
+                    st.caption(f"Inicio {inicio_clip:.1f} s – fin {fin_clip:.1f} s "
+                               "(segundos de vídeo).")
+            except (ValueError, UnicodeDecodeError) as err:
+                st.error(f"No se pudo leer ese JSON: {err}")
+    else:
+        c_clip1, c_clip2, c_clip3 = st.columns(3)
+        with c_clip1:
+            inicio_clip = st.number_input(
+                "Inicio (s de vídeo)", min_value=0.0, value=0.0, step=1.0,
+                key="clip_inicio")
+        with c_clip2:
+            fin_clip = st.number_input(
+                "Fin (s de vídeo)", min_value=0.0, value=10.0, step=1.0,
+                key="clip_fin")
+        with c_clip3:
+            etiqueta_clip = st.text_input(
+                "Etiqueta", value="jugada", key="clip_etiqueta")
+    nombre_clip = ("clip_" + "".join(
+        ch if ch.isalnum() or ch in "-_" else "_" for ch in etiqueta_clip
+    ).strip("_")[:40] + f"_{int(inicio_clip or 0)}.mp4") if inicio_clip is not None else ""
+    if st.button("🎬 Exportar clip", type="primary", key="clip_exportar"):
+        if not ruta_clip or not os.path.isfile(ruta_clip):
+            st.error("⚠️ Indica la ruta de un vídeo que exista en este equipo.")
+        elif tracking_elegido is None:
+            st.error("⚠️ No hay ningún tracking cargado para dibujar el overlay.")
+        elif inicio_clip is None or fin_clip is None:
+            st.error("⚠️ Elige un corte o pon inicio y fin.")
+        elif fin_clip <= inicio_clip:
+            st.error("⚠️ El fin tiene que ser mayor que el inicio.")
+        elif fin_clip - inicio_clip > 300:
+            st.error("⚠️ El clip es demasiado largo (máx. 5 min).")
+        else:
+            try:
+                datos_clip = cargar_tracking_json(
+                    str(tracking_elegido), tracking_elegido.stat().st_mtime)
+            except Exception as err:  # noqa: BLE001
+                datos_clip = None
+                st.error(f"No se pudo leer {tracking_elegido.name}: {err}")
+            if datos_clip is not None:
+                if CV2_DISPONIBLE:
+                    barra_clip = st.progress(0.0)
+                    estado_clip = st.empty()
+                    try:
+                        bytes_clip = render_clip_cv2(
+                            ruta_clip, datos_clip, inicio_clip, fin_clip,
+                            progreso_cb=lambda f, m: (
+                                barra_clip.progress(f), estado_clip.write(m)))
+                        st.session_state["clip_bytes"] = bytes_clip
+                        st.session_state["clip_nombre"] = nombre_clip
+                        estado_clip.write("✅ Clip renderizado con overlay.")
+                    except Exception as err:  # noqa: BLE001
+                        st.error(f"No se pudo renderizar el clip: {err}")
+                elif shutil.which("ffmpeg") is not None:
+                    tmp_clip = tempfile.NamedTemporaryFile(
+                        suffix=".mp4", delete=False)
+                    tmp_clip.close()
+                    try:
+                        if cortar_clip_ffmpeg(ruta_clip, inicio_clip, fin_clip,
+                                              tmp_clip.name):
+                            st.session_state["clip_bytes"] = Path(tmp_clip.name).read_bytes()
+                            st.session_state["clip_nombre"] = nombre_clip
+                            st.warning("⚠️ Clip exportado sin overlay: ffmpeg "
+                                       "no puede dibujar el tracking encima "
+                                       "(OpenCV no está disponible).")
+                        else:
+                            st.error("ffmpeg falló al cortar el clip.")
+                    finally:
+                        try:
+                            os.unlink(tmp_clip.name)
+                        except OSError:
+                            pass
+                else:
+                    st.error("⚠️ Ni OpenCV ni ffmpeg están disponibles en este "
+                             "equipo: no se puede exportar el clip.")
+    if st.session_state.get("clip_bytes"):
+        st.download_button(
+            label=f"📥 Descargar {st.session_state.get('clip_nombre', 'clip.mp4')}",
+            data=st.session_state["clip_bytes"],
+            file_name=st.session_state.get("clip_nombre", "clip.mp4"),
+            mime="video/mp4",
+            key="clip_descargar",
+        )

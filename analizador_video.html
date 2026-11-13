@@ -72,6 +72,24 @@
       .stage-mismatch strong{ font-size:18px; display:block; margin-bottom:6px; }
       .stage-mismatch span{ display:block; font-size:14px; margin-bottom:4px; }
       .stage-mismatch .fn{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+      /* Cámara virtual: el vídeo y los canvas viven en #stageInner y el
+         zoom es una transformación CSS sobre ese div. */
+      #stageInner{ position:absolute; inset:0; transform-origin:0 0; }
+      .stage{ touch-action:none; }
+      .zoom-btn.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
+      #zoomRange{ width:130px; }
+      #followBallBtn.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
+      /* Pestañas Vídeo / Pizarra */
+      .view-tabs{ display:flex; gap:8px; margin-bottom:10px; }
+      .view-tab.active{ background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+      /* Pizarra táctica */
+      .board-wrap{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:12px; }
+      .board-head{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+      .board-teams{ display:flex; gap:14px; align-items:center; font-weight:650; }
+      .bdot{ display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:6px; vertical-align:-1px; border:1px solid rgba(255,255,255,.35); }
+      #boardCanvas{ width:100%; height:auto; display:block; border-radius:6px; touch-action:none; }
+      button.btool.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
+      .bswatch.active{ border-color:#fff; box-shadow:0 0 0 2px var(--line2); }
 
       .controls{ margin-top:12px; }
       .seekwrap{ position:relative; height:26px; display:flex; align-items:center; }
@@ -179,11 +197,17 @@
 
     <div class="layout">
       <div>
-        <section class="stage-wrap">
+        <div class="view-tabs" role="tablist" aria-label="Vista principal">
+          <button type="button" class="view-tab active" id="tabVideo" role="tab" aria-selected="true">📹 Vídeo</button>
+          <button type="button" class="view-tab" id="tabBoard" role="tab" aria-selected="false">⚽ Pizarra táctica</button>
+        </div>
+        <section class="stage-wrap" id="stageWrap">
           <div class="stage" id="stage">
-            <video id="video" playsinline preload="metadata"></video>
-            <canvas id="trackCanvas"></canvas>
-            <canvas id="annoCanvas"></canvas>
+            <div id="stageInner">
+              <video id="video" playsinline preload="metadata"></video>
+              <canvas id="trackCanvas"></canvas>
+              <canvas id="annoCanvas"></canvas>
+            </div>
             <div class="stage-empty" id="stageEmpty">
               <div id="stageEmptyDefault">
                 <strong>Carga el vídeo del partido para empezar</strong>
@@ -228,10 +252,62 @@
                 <input type="range" id="volRange" min="0" max="1" step="0.05" value="1" />
               </div>
             </div>
+            <div class="ctrl-row">
+              <span class="small muted">Cámara virtual</span>
+              <button type="button" class="zoom-btn active" data-zoom="1">1×</button>
+              <button type="button" class="zoom-btn" data-zoom="1.5">1,5×</button>
+              <button type="button" class="zoom-btn" data-zoom="2">2×</button>
+              <button type="button" class="zoom-btn" data-zoom="3">3×</button>
+              <input type="range" id="zoomRange" min="1" max="3" step="0.25" value="1" aria-label="Nivel de zoom" />
+              <span class="small" id="zoomVal">1×</span>
+              <button type="button" id="followBallBtn" title="Centra la vista en el balón mientras se reproduce">◎ Seguir balón</button>
+              <button type="button" id="zoomReset">Restablecer</button>
+            </div>
           </div>
         </section>
 
-        <section class="toolbar">
+        <section class="board-wrap" id="boardWrap" hidden>
+          <div class="board-head">
+            <div class="board-teams">
+              <span><span class="bdot" id="boardLocalDot"></span><span id="boardLocalName">Local</span></span>
+              <span class="muted">vs</span>
+              <span><span class="bdot" id="boardVisDot"></span><span id="boardVisName">Visitante</span></span>
+            </div>
+            <label class="small muted" for="boardFormation">Formación
+              <select id="boardFormation">
+                <option value="1-4-4-2" selected>1-4-4-2</option>
+                <option value="1-4-3-3">1-4-3-3</option>
+                <option value="1-3-3-1">1-3-3-1</option>
+                <option value="1-4-2-3-1">1-4-2-3-1</option>
+                <option value="1-3-5-2">1-3-5-2</option>
+                <option value="1-5-3-2">1-5-3-2</option>
+              </select>
+            </label>
+          </div>
+          <canvas id="boardCanvas" width="1050" height="680"></canvas>
+          <div class="tool-row" style="margin-top:10px" role="toolbar" aria-label="Herramientas de la pizarra">
+            <button type="button" class="btool active" data-btool="move">✋ Mover fichas</button>
+            <button type="button" class="btool" data-btool="arrow">➤ Flecha</button>
+            <button type="button" class="btool" data-btool="rect">▭ Rectángulo</button>
+            <button type="button" class="btool" data-btool="ellipse">◯ Círculo</button>
+            <span class="small muted">Color:</span>
+            <div class="swatches" id="boardSwatches">
+              <button type="button" class="swatch bswatch active" data-color="#FFD21F" style="background:#FFD21F" title="Amarillo" aria-label="Color amarillo"></button>
+              <button type="button" class="swatch bswatch" data-color="#FFFFFF" style="background:#FFFFFF" title="Blanco" aria-label="Color blanco"></button>
+              <button type="button" class="swatch bswatch" data-color="#FF3B30" style="background:#FF3B30" title="Rojo" aria-label="Color rojo"></button>
+              <button type="button" class="swatch bswatch" data-color="#3D8BFF" style="background:#3D8BFF" title="Azul" aria-label="Color azul"></button>
+              <button type="button" class="swatch bswatch" data-color="#35D07F" style="background:#35D07F" title="Verde" aria-label="Color verde"></button>
+            </div>
+            <button type="button" id="boardClearDraw">Limpiar dibujos</button>
+          </div>
+          <div class="btn-row">
+            <button type="button" id="boardReset">Limpiar todo</button>
+            <button type="button" class="primary" id="boardExport">Exportar PNG</button>
+          </div>
+          <p class="hint">Arrastra las fichas para moverlas: el local ataca de izquierda a derecha y el visitante al revés. Al cambiar de formación las fichas vuelven a su sitio; los dibujos se mantienen hasta que los borres. Funciona sin tracking: usa los nombres y colores del panel «Contexto del partido».</p>
+        </section>
+
+        <section class="toolbar" id="videoToolbar">
           <h2>Herramientas de señalización</h2>
           <div class="tool-row" role="toolbar" aria-label="Herramientas de dibujo">
             <button type="button" class="tool" data-tool="none">✋ Mover / ver</button>
@@ -391,6 +467,7 @@
       track: null, samples: [], events: [], trackMismatch: false,
       annotations: [], cuts: [],
       tool: 'none', color: '#FFD21F',
+      zoom: { z: 1, tx: 0, ty: 0, follow: false, lastBall: null, pan: null },
       drawing: null,
       cutStart: null, cutEnd: null,
       selectedAnno: null,
@@ -558,6 +635,7 @@
       state.track = data;
       state.context = contextFromData(data);
       syncContextUI();
+      syncBoardFromContext();
       state.samples = data.samples.slice().sort(function(a,b){ return a.t-b.t; });
       state.events = Array.isArray(data.events) ? data.events.slice().sort(function(a,b){ return a.seconds-b.seconds; }) : [];
       updateStageEmpty();
@@ -791,6 +869,117 @@
         tctx.beginPath(); tctx.arc(bx, by, Math.max(4.5, W*0.0055), 0, 6.2832); tctx.fill();
         tctx.lineWidth = 1.6; tctx.strokeStyle = '#111'; tctx.stroke();
       }
+    }
+
+    /* ================= Cámara virtual / zoom ================= */
+    /* El vídeo y los dos canvas viven dentro de #stageInner; el zoom es
+       una transformación CSS translate+scale sobre ese div, con
+       transform-origin 0 0. El .stage tiene overflow:hidden, así que el
+       zoom recorta la vista. canvasPos() sigue funcionando: usa
+       getBoundingClientRect(), que devuelve el rect ya transformado, por
+       lo que las coords normalizadas 0-1 no cambian. */
+    var zoom = state.zoom;
+    function stageSize(){
+      var st = $('stage');
+      return { w: st.clientWidth, h: st.clientHeight };
+    }
+    function clampPan(){
+      var s = stageSize();
+      zoom.tx = clamp(zoom.tx, Math.min(0, s.w * (1 - zoom.z)), 0);
+      zoom.ty = clamp(zoom.ty, Math.min(0, s.h * (1 - zoom.z)), 0);
+    }
+    function applyZoom(){
+      clampPan();
+      $('stageInner').style.transform = 'translate(' + zoom.tx.toFixed(1) + 'px,' + zoom.ty.toFixed(1) + 'px) scale(' + zoom.z + ')';
+      document.querySelectorAll('.zoom-btn').forEach(function(b){
+        b.classList.toggle('active', parseFloat(b.getAttribute('data-zoom')) === zoom.z);
+      });
+      var r = $('zoomRange'); if (r) r.value = String(zoom.z);
+      var v = $('zoomVal'); if (v) v.textContent = (Math.round(zoom.z * 100) / 100) + '×';
+      $('followBallBtn').classList.toggle('active', zoom.follow);
+    }
+    function setZoom(z, keepNx, keepNy){
+      var s = stageSize();
+      if (keepNx == null){
+        // Mantener centrado el punto que ahora está en el centro de la vista
+        keepNx = (s.w / 2 - zoom.tx) / (zoom.z * s.w || 1);
+        keepNy = (s.h / 2 - zoom.ty) / (zoom.z * s.h || 1);
+      }
+      zoom.z = clamp(z, 1, 3);
+      zoom.tx = s.w / 2 - zoom.z * keepNx * s.w;
+      zoom.ty = s.h / 2 - zoom.z * keepNy * s.h;
+      applyZoom();
+    }
+    function centerOn(nx, ny){
+      var s = stageSize();
+      zoom.tx = s.w / 2 - zoom.z * nx * s.w;
+      zoom.ty = s.h / 2 - zoom.z * ny * s.h;
+      applyZoom();
+    }
+    function setFollow(v){
+      zoom.follow = !!v;
+      if (!zoom.follow) zoom.lastBall = null;
+      applyZoom();
+    }
+    function resetZoom(){
+      zoom.z = 1; zoom.tx = 0; zoom.ty = 0;
+      setFollow(false);
+      applyZoom();
+    }
+    document.querySelectorAll('.zoom-btn').forEach(function(b){
+      b.addEventListener('click', function(){ setZoom(parseFloat(b.getAttribute('data-zoom'))); });
+    });
+    $('zoomRange').addEventListener('input', function(){ setZoom(parseFloat(this.value)); });
+    $('followBallBtn').addEventListener('click', function(){ setFollow(!zoom.follow); });
+    $('zoomReset').addEventListener('click', resetZoom);
+    /* Desplazamiento: con zoom > 1 y la herramienta «Mover / ver»,
+       arrastrar mueve la vista; un clic sin arrastrar centra el zoom
+       en ese punto. Un desplazamiento manual desactiva «Seguir balón». */
+    (function(){
+      var stageEl = $('stage');
+      stageEl.addEventListener('pointerdown', function(e){
+        if (state.tool !== 'none' || zoom.z <= 1) return;
+        if (e.target.closest && e.target.closest('.stage-empty,.stage-mismatch')) return;
+        zoom.pan = { x0: e.clientX, y0: e.clientY, tx0: zoom.tx, ty0: zoom.ty, moved: false };
+        stageEl.setPointerCapture(e.pointerId);
+      });
+      stageEl.addEventListener('pointermove', function(e){
+        if (!zoom.pan) return;
+        var dx = e.clientX - zoom.pan.x0, dy = e.clientY - zoom.pan.y0;
+        if (Math.abs(dx) + Math.abs(dy) > 4) zoom.pan.moved = true;
+        if (zoom.pan.moved){
+          if (zoom.follow) setFollow(false);
+          zoom.tx = zoom.pan.tx0 + dx;
+          zoom.ty = zoom.pan.ty0 + dy;
+          applyZoom();
+        }
+      });
+      function endPan(e){
+        if (!zoom.pan) return;
+        var wasDrag = zoom.pan.moved;
+        zoom.pan = null;
+        if (!wasDrag){
+          var r = stageEl.getBoundingClientRect();
+          var nx = clamp((e.clientX - r.left) / r.width, 0, 1);
+          var ny = clamp((e.clientY - r.top) / r.height, 0, 1);
+          if (zoom.follow) setFollow(false);
+          centerOn(nx, ny);
+        }
+      }
+      stageEl.addEventListener('pointerup', endPan);
+      stageEl.addEventListener('pointercancel', function(){ zoom.pan = null; });
+    })();
+    /* «Seguir balón»: en cada fotograma centra la vista en el balón de
+       la muestra más cercana; sin balón en esa muestra, mantiene la
+       última posición conocida. */
+    function updateFollowBall(){
+      if (!zoom.follow || zoom.z <= 1) return;
+      var idx = nearestSampleIdx(video.currentTime || 0);
+      if (idx >= 0){
+        var s = state.samples[idx];
+        if (s && s.b) zoom.lastBall = { x: s.b[0] / 100, y: s.b[1] / 100 };
+      }
+      if (zoom.lastBall) centerOn(zoom.lastBall.x, zoom.lastBall.y);
     }
 
     /* ================= Anotaciones ================= */
@@ -1162,6 +1351,7 @@
           if (data.context){
             state.context = contextFromData(data);
             syncContextUI();
+            syncBoardFromContext();
             buildMarkers(); renderEventList(); renderFullSummary();
             state.lastStatsSecond = -1;
           }
@@ -1196,11 +1386,266 @@
       }, 'image/png');
     });
 
+    /* ================= Pizarra táctica 2D ================= */
+    /* Campo 105×68 m dibujado con Canvas 2D, sin dependencias. Fichas y
+       dibujos usan coords normalizadas 0-1 del campo; nombres y colores
+       salen de state.context (del tracking o del panel), así que funciona
+       sin tracking y con cualquier partido. */
+    var boardCanvas = $('boardCanvas');
+    var bctx = boardCanvas.getContext('2d');
+    var BOARD_W = 1050, BOARD_H = 680;
+    /* Coords de formación en % del campo (x: 0 = portería propia,
+       1 = portería rival; y: 0 = banda superior). El visitante es la
+       misma formación espejada (rotación 180°). Dorsal = posición en la
+       lista: 1 portero, luego líneas de atrás hacia adelante. */
+    var FORMATIONS = {
+      '1-4-4-2': [[.05,.50],[.20,.14],[.20,.38],[.20,.62],[.20,.86],[.44,.14],[.44,.38],[.44,.62],[.44,.86],[.70,.35],[.70,.65]],
+      '1-4-3-3': [[.05,.50],[.20,.14],[.20,.38],[.20,.62],[.20,.86],[.44,.28],[.44,.50],[.44,.72],[.72,.18],[.72,.50],[.72,.82]],
+      /* La 1-3-3-1 es un sistema de 8 (Benjamín); en la pizarra de 11
+         se completa con dos carrileros y un mediapunta para que las 11
+         fichas tengan sitio. */
+      '1-3-3-1': [[.05,.50],[.20,.24],[.20,.50],[.20,.76],[.45,.24],[.45,.50],[.45,.76],[.60,.12],[.60,.88],[.62,.50],[.78,.50]],
+      '1-4-2-3-1': [[.05,.50],[.20,.14],[.20,.38],[.20,.62],[.20,.86],[.38,.34],[.38,.66],[.58,.20],[.58,.50],[.58,.80],[.76,.50]],
+      '1-3-5-2': [[.05,.50],[.20,.24],[.20,.50],[.20,.76],[.44,.10],[.44,.31],[.44,.50],[.44,.69],[.44,.90],[.70,.35],[.70,.65]],
+      '1-5-3-2': [[.05,.50],[.20,.10],[.20,.30],[.20,.50],[.20,.70],[.20,.90],[.45,.28],[.45,.50],[.45,.72],[.70,.35],[.70,.65]]
+    };
+    var board = {
+      formation: '1-4-4-2',
+      tokens: { local: [], visitante: [] },
+      drawings: [],
+      tool: 'move',
+      color: '#FFD21F',
+      drag: null,
+      drawing: null
+    };
+    function buildBoardTokens(formation){
+      var coords = FORMATIONS[formation] || FORMATIONS['1-4-4-2'];
+      function one(mirror){
+        return coords.map(function(c, i){
+          return { n: i + 1, x: mirror ? 1 - c[0] : c[0], y: mirror ? 1 - c[1] : c[1] };
+        });
+      }
+      return { local: one(false), visitante: one(true) };
+    }
+    board.tokens = buildBoardTokens(board.formation);
+    function applyBoardFormation(name){
+      board.formation = FORMATIONS[name] ? name : '1-4-4-2';
+      board.tokens = buildBoardTokens(board.formation);
+      var sel = $('boardFormation'); if (sel) sel.value = board.formation;
+      state.context.formation = board.formation;
+      var ctxF = $('ctxFormation'); if (ctxF) ctxF.value = board.formation;
+      drawBoard();
+    }
+    function syncBoardFromContext(){
+      var f = state.context && state.context.formation;
+      if (f && FORMATIONS[f]) applyBoardFormation(f);
+      else drawBoard();
+    }
+    function boardTextColor(hex){
+      // Texto oscuro sobre colores claros (p. ej. portero amarillo)
+      var m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+      if (!m) return '#fff';
+      var r = parseInt(m[1].substr(0,2),16), g = parseInt(m[1].substr(2,2),16), b = parseInt(m[1].substr(4,2),16);
+      return (0.299*r + 0.587*g + 0.114*b) > 150 ? '#111' : '#fff';
+    }
+    function drawPitch(){
+      var s = Math.min(BOARD_W / 105, BOARD_H / 68);
+      var fw = 105 * s, fh = 68 * s;
+      var ox = (BOARD_W - fw) / 2, oy = (BOARD_H - fh) / 2;
+      function X(m){ return ox + m * s; }
+      function Y(m){ return oy + m * s; }
+      // Césped con franjas
+      bctx.fillStyle = '#2e7d32';
+      bctx.fillRect(0, 0, BOARD_W, BOARD_H);
+      bctx.fillStyle = '#35853a';
+      for (var i = 0; i < 10; i += 2) bctx.fillRect(X(i * 10.5), Y(0), 10.5 * s, fh);
+      // Líneas
+      bctx.strokeStyle = 'rgba(255,255,255,.92)';
+      bctx.lineWidth = 2;
+      bctx.fillStyle = 'rgba(255,255,255,.92)';
+      function rect(x, y, w, h){ bctx.strokeRect(X(x), Y(y), w * s, h * s); }
+      function line(x1, y1, x2, y2){ bctx.beginPath(); bctx.moveTo(X(x1), Y(y1)); bctx.lineTo(X(x2), Y(y2)); bctx.stroke(); }
+      rect(0, 0, 105, 68);
+      line(52.5, 0, 52.5, 68);
+      bctx.beginPath(); bctx.arc(X(52.5), Y(34), 9.15 * s, 0, 6.2832); bctx.stroke();
+      bctx.beginPath(); bctx.arc(X(52.5), Y(34), 3, 0, 6.2832); bctx.fill();
+      // Áreas, puntos de penalti, arcos y porterías (ambos lados)
+      [0, 1].forEach(function(side){
+        var gx = side === 0 ? 0 : 105;
+        var dir = side === 0 ? 1 : -1;
+        rect(Math.min(gx, gx + dir * 16.5), 13.84, 16.5, 40.32);
+        rect(Math.min(gx, gx + dir * 5.5), 5.5, 18.32);
+        bctx.beginPath(); bctx.arc(X(gx + dir * 11), Y(34), 3, 0, 6.2832); bctx.fill();
+        // Arco del área (radio 9,15 m desde el punto de penalti; sus
+        // extremos caen justo sobre la línea del área grande)
+        bctx.beginPath();
+        bctx.arc(X(gx + dir * 11), Y(34), 9.15 * s, side === 0 ? -0.93 : Math.PI - 0.93, side === 0 ? 0.93 : Math.PI + 0.93);
+        bctx.stroke();
+        // Portería (7,32 m de ancho, 2 m de fondo, fuera del campo)
+        bctx.strokeRect(X(gx) + (side === 0 ? -2 * s : 0), Y(30.34), 2 * s, 7.32 * s);
+      });
+    }
+    function drawBoardDrawing(d){
+      bctx.strokeStyle = d.color; bctx.fillStyle = d.color;
+      bctx.lineWidth = 3; bctx.lineJoin = 'round'; bctx.lineCap = 'round';
+      var x1 = d.x1 * BOARD_W, y1 = d.y1 * BOARD_H, x2 = d.x2 * BOARD_W, y2 = d.y2 * BOARD_H;
+      if (d.type === 'arrow'){
+        bctx.beginPath(); bctx.moveTo(x1, y1); bctx.lineTo(x2, y2); bctx.stroke();
+        var ang = Math.atan2(y2 - y1, x2 - x1), hl = 14;
+        bctx.beginPath();
+        bctx.moveTo(x2, y2);
+        bctx.lineTo(x2 - hl * Math.cos(ang - 0.42), y2 - hl * Math.sin(ang - 0.42));
+        bctx.moveTo(x2, y2);
+        bctx.lineTo(x2 - hl * Math.cos(ang + 0.42), y2 - hl * Math.sin(ang + 0.42));
+        bctx.stroke();
+      } else if (d.type === 'rect'){
+        bctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+      } else if (d.type === 'ellipse'){
+        bctx.beginPath();
+        bctx.ellipse((x1 + x2) / 2, (y1 + y2) / 2, Math.abs(x2 - x1) / 2, Math.abs(y2 - y1) / 2, 0, 0, 6.2832);
+        bctx.stroke();
+      }
+    }
+    function drawBoard(){
+      if (!boardCanvas) return;
+      drawPitch();
+      board.drawings.forEach(drawBoardDrawing);
+      if (board.drawing) drawBoardDrawing(board.drawing);
+      var colors = teamColors();
+      var names = teamNames();
+      // Cabecera con los nombres y colores actuales del contexto
+      var ln = $('boardLocalName'), vn = $('boardVisName');
+      if (ln) ln.textContent = names.local;
+      if (vn) vn.textContent = names.visitante;
+      var ld = $('boardLocalDot'), vd = $('boardVisDot');
+      if (ld) ld.style.background = colors.local;
+      if (vd) vd.style.background = colors.visitante;
+      // Fichas: el dorsal 1 (portero) lleva el color de portero
+      [['local', colors.local, colors.gk_local], ['visitante', colors.visitante, colors.gk_visitante]].forEach(function(cfg){
+        var team = cfg[0], col = cfg[1], gkCol = cfg[2];
+        board.tokens[team].forEach(function(tk){
+          var cx = tk.x * BOARD_W, cy = tk.y * BOARD_H;
+          var fill = tk.n === 1 ? gkCol : col;
+          bctx.beginPath(); bctx.arc(cx, cy, 16, 0, 6.2832);
+          bctx.fillStyle = fill; bctx.fill();
+          bctx.lineWidth = 2; bctx.strokeStyle = 'rgba(0,0,0,.55)'; bctx.stroke();
+          bctx.fillStyle = boardTextColor(fill);
+          bctx.font = '700 13px "Segoe UI", system-ui, sans-serif';
+          bctx.textAlign = 'center'; bctx.textBaseline = 'middle';
+          bctx.fillText(String(tk.n), cx, cy + 0.5);
+        });
+      });
+      bctx.textAlign = 'left'; bctx.textBaseline = 'alphabetic';
+    }
+    function boardPos(evt){
+      var r = boardCanvas.getBoundingClientRect();
+      return { x: clamp((evt.clientX - r.left) / r.width, 0, 1), y: clamp((evt.clientY - r.top) / r.height, 0, 1) };
+    }
+    function boardTokenAt(pos){
+      var px = pos.x * BOARD_W, py = pos.y * BOARD_H;
+      var best = null, bestD = 22;
+      ['local', 'visitante'].forEach(function(team){
+        board.tokens[team].forEach(function(tk, i){
+          var d = Math.hypot(tk.x * BOARD_W - px, tk.y * BOARD_H - py);
+          if (d < bestD){ bestD = d; best = { team: team, idx: i }; }
+        });
+      });
+      return best;
+    }
+    boardCanvas.addEventListener('pointerdown', function(e){
+      var pos = boardPos(e);
+      if (board.tool === 'move'){
+        var hit = boardTokenAt(pos);
+        if (hit){
+          var tk = board.tokens[hit.team][hit.idx];
+          board.drag = { team: hit.team, idx: hit.idx, dx: tk.x - pos.x, dy: tk.y - pos.y };
+          boardCanvas.setPointerCapture(e.pointerId);
+        }
+        return;
+      }
+      boardCanvas.setPointerCapture(e.pointerId);
+      board.drawing = { type: board.tool, x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, color: board.color };
+    });
+    boardCanvas.addEventListener('pointermove', function(e){
+      var pos = boardPos(e);
+      if (board.drag){
+        var tk = board.tokens[board.drag.team][board.drag.idx];
+        tk.x = clamp(pos.x + board.drag.dx, 0, 1);
+        tk.y = clamp(pos.y + board.drag.dy, 0, 1);
+        drawBoard();
+        return;
+      }
+      if (board.drawing){
+        board.drawing.x2 = pos.x; board.drawing.y2 = pos.y;
+        drawBoard();
+      }
+    });
+    boardCanvas.addEventListener('pointerup', function(){
+      if (board.drag){ board.drag = null; return; }
+      var d = board.drawing; board.drawing = null;
+      if (!d) return;
+      if (Math.abs(d.x2 - d.x1) < 0.008 && Math.abs(d.y2 - d.y1) < 0.008) return;
+      board.drawings.push(d);
+      drawBoard();
+    });
+    boardCanvas.addEventListener('pointercancel', function(){ board.drag = null; board.drawing = null; });
+    document.querySelectorAll('.btool').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        board.tool = btn.getAttribute('data-btool');
+        document.querySelectorAll('.btool').forEach(function(b){ b.classList.toggle('active', b === btn); });
+        boardCanvas.style.cursor = board.tool === 'move' ? 'default' : 'crosshair';
+      });
+    });
+    document.querySelectorAll('.bswatch').forEach(function(sw){
+      sw.addEventListener('click', function(){
+        board.color = sw.getAttribute('data-color');
+        document.querySelectorAll('.bswatch').forEach(function(x){ x.classList.toggle('active', x === sw); });
+      });
+    });
+    $('boardFormation').addEventListener('change', function(){ applyBoardFormation(this.value); });
+    $('boardClearDraw').addEventListener('click', function(){
+      board.drawings = []; board.drawing = null; drawBoard();
+    });
+    $('boardReset').addEventListener('click', function(){
+      board.drawings = []; board.drawing = null;
+      applyBoardFormation(board.formation);
+      showMsg('Pizarra limpia: fichas en la formación ' + board.formation + ' y dibujos borrados.');
+    });
+    $('boardExport').addEventListener('click', function(){
+      drawBoard();
+      boardCanvas.toBlob(function(blob){
+        if (blob) download('pizarra_tactica.png', blob);
+      }, 'image/png');
+    });
+
+    /* Pestañas Vídeo / Pizarra: la pizarra sustituye al escenario y a
+       la barra de herramientas de vídeo; al abrirla se pausa el vídeo. */
+    function setView(view){
+      var isBoard = view === 'board';
+      $('stageWrap').hidden = isBoard;
+      $('videoToolbar').hidden = isBoard;
+      $('boardWrap').hidden = !isBoard;
+      $('tabVideo').classList.toggle('active', !isBoard);
+      $('tabBoard').classList.toggle('active', isBoard);
+      $('tabVideo').setAttribute('aria-selected', String(!isBoard));
+      $('tabBoard').setAttribute('aria-selected', String(isBoard));
+      if (isBoard){
+        video.pause();
+        drawBoard();
+      } else {
+        sizeCanvases();
+      }
+    }
+    $('tabVideo').addEventListener('click', function(){ setView('video'); });
+    $('tabBoard').addEventListener('click', function(){ setView('board'); });
+
     /* ================= Bucle principal ================= */
     function loop(){
       sizeCanvases();
       drawTracking();
       drawAnnotations();
+      updateFollowBall();
+      if (!$('boardWrap').hidden) drawBoard();
       var t = video.currentTime || 0;
       var dur = video.duration || 0;
       seek.value = dur > 0 ? String(Math.round(t/dur*1000)) : '0';
