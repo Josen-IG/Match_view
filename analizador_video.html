@@ -200,6 +200,30 @@
       .tl-playhead::before{ content:""; position:absolute; top:0; left:-4px; border:5px solid transparent; border-top:6px solid #fff; }
       .vista-row{ display:flex; flex-wrap:wrap; gap:4px 16px; align-items:center; margin-top:10px; }
       .vista-row .vista-title{ font-size:11.5px; color:var(--mut); font-weight:600; letter-spacing:.4px; text-transform:uppercase; }
+
+      /* ---------- Panel de propiedades / línea de tiempo (LIVETAG PRO) ---------- */
+      .prop-grid{ display:grid; grid-template-columns:1fr 1fr; gap:9px 12px; }
+      .prop-grid .full{ grid-column:1 / -1; }
+      .prop-grid label{ display:block; font-size:11.5px; color:var(--mut); font-weight:600; margin-bottom:3px; }
+      .prop-grid input[type="text"], .prop-grid select{ width:100%; }
+      .prop-grid input[type="color"]{ width:100%; height:36px; padding:2px; background:#0d1119; border:1px solid var(--line2); border-radius:8px; cursor:pointer; }
+      .prop-grid input[type="range"]{ width:100%; }
+      .prop-val{ background:#0d1119; border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:13px; min-height:36px; display:flex; align-items:center; }
+      .list li.selected{ background:var(--panel2); border-color:var(--acc2); }
+      .rail-dash{ display:flex; flex-direction:column; gap:4px; }
+      .rail-dash .dash{ width:44px; min-height:30px; padding:2px 0; font-size:14px; }
+      .rail-dash .dash.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
+      .tl-head{ flex-wrap:wrap; gap:6px 14px; }
+      .tl-head-right{ display:flex; align-items:center; gap:14px; }
+      .tl-zoom{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--mut); }
+      .tl-zoom input{ width:110px; }
+      .tl-name.ruler{ height:18px; } .tl-name.fx{ height:30px; }
+      .tl-lanes{ overflow-x:auto; }
+      .tl-scroll{ position:relative; width:100%; }
+      .tl-ruler{ position:relative; height:18px; border-bottom:1px solid var(--line); }
+      .tl-tick{ position:absolute; top:0; bottom:0; border-left:1px solid var(--line2); font-size:10px; color:var(--dim); padding-left:3px; line-height:18px; white-space:nowrap; }
+      .tl-lane[data-lane="fx"]{ height:30px; }
+      .tl-clip.sel{ background:rgba(255,210,31,.45); box-shadow:0 0 0 1px var(--acc2); }
     </style>
   </head>
   <body>
@@ -247,10 +271,14 @@
         <button type="button" class="tool rail-tool" data-tool="line" title="Línea">╱</button>
         <button type="button" class="tool rail-tool" data-tool="ellipse" title="Círculo">◯</button>
         <button type="button" class="tool rail-tool" data-tool="rect" title="Rectángulo">▭</button>
+        <button type="button" class="tool rail-tool" data-tool="triangle" title="Triángulo">△</button>
         <button type="button" class="tool rail-tool" data-tool="free" title="Lápiz">✎</button>
         <button type="button" class="tool rail-tool" data-tool="text" title="Texto">T</button>
+        <button type="button" class="tool rail-tool" data-tool="numero" title="Marcador numerado: coloca un número (1, 2, 3…)">①</button>
         <button type="button" class="tool rail-tool" data-tool="spotlight" title="Spotlight: resalta una zona oscureciendo el resto">◐</button>
         <button type="button" class="tool rail-tool" data-tool="erase" title="Borrar: haz clic en una señalización para borrarla">⌫</button>
+        <div class="rail-sep"></div>
+        <button type="button" class="rail-tool" id="undoBtn" title="Deshacer (Ctrl+Z)" disabled>↩</button>
         <div class="rail-sep"></div>
         <div class="swatches rail-swatches" id="railSwatches">
           <button type="button" class="swatch active" data-color="#FFD21F" style="background:#FFD21F" title="Amarillo" aria-label="Color amarillo"></button>
@@ -264,6 +292,11 @@
           <button type="button" class="lw" data-lw="2" title="Línea fina">–</button>
           <button type="button" class="lw active" data-lw="3" title="Línea media">—</button>
           <button type="button" class="lw" data-lw="5" title="Línea gruesa">━</button>
+        </div>
+        <div class="rail-sep"></div>
+        <div class="rail-dash" role="group" aria-label="Estilo de línea">
+          <button type="button" class="dash active" data-dash="solid" title="Línea sólida">—</button>
+          <button type="button" class="dash" data-dash="dashed" title="Línea discontinua">┄</button>
         </div>
       </aside>
       <div>
@@ -339,25 +372,31 @@
         </section>
 
         <section class="timeline" id="timeline" aria-label="Línea de tiempo">
-          <div class="tl-head"><h2>Línea de tiempo</h2><span class="tl-range" id="tlRange">—</span></div>
+          <div class="tl-head"><h2>Línea de tiempo</h2><div class="tl-head-right"><span class="tl-zoom"><label for="tlZoom">Zoom</label><input type="range" id="tlZoom" min="1" max="8" step="0.5" value="1" /><span id="tlZoomVal">1×</span></span><span class="tl-range" id="tlRange">—</span></div></div>
           <div class="tl-grid">
             <div class="tl-names" aria-hidden="true">
+              <div class="tl-name ruler">Tiempo</div>
               <div class="tl-name seek">Buscar</div>
               <div class="tl-name track">Tracking IA</div>
               <div class="tl-name annos">Señalizaciones</div>
+              <div class="tl-name fx">Efectos</div>
               <div class="tl-name cuts">Cortes</div>
               <div class="tl-name events" id="tlNameEvents">Eventos</div>
             </div>
             <div class="tl-lanes" id="tlLanes">
-              <div class="seekwrap">
-                <div id="markers"></div>
-                <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Barra de búsqueda" />
+              <div class="tl-scroll" id="tlScroll">
+                <div class="tl-ruler" id="tlRuler"></div>
+                <div class="seekwrap">
+                  <div id="markers"></div>
+                  <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Barra de búsqueda" />
+                </div>
+                <div class="tl-lane" data-lane="tracking" id="laneTracking"></div>
+                <div class="tl-lane" data-lane="annos" id="laneAnnos"></div>
+                <div class="tl-lane" data-lane="fx" id="laneFx"></div>
+                <div class="tl-lane" data-lane="cuts" id="laneCuts"></div>
+                <div class="tl-lane" data-lane="events" id="laneEvents"></div>
+                <div class="tl-playhead" id="tlPlayhead" style="display:none"></div>
               </div>
-              <div class="tl-lane" data-lane="tracking" id="laneTracking"></div>
-              <div class="tl-lane" data-lane="annos" id="laneAnnos"></div>
-              <div class="tl-lane" data-lane="cuts" id="laneCuts"></div>
-              <div class="tl-lane" data-lane="events" id="laneEvents"></div>
-              <div class="tl-playhead" id="tlPlayhead" style="display:none"></div>
             </div>
           </div>
         </section>
@@ -480,9 +519,27 @@
           <h2>Mis señalizaciones</h2>
           <input type="text" id="annoLabel" placeholder="Etiqueta de la señalización (opcional)…" style="width:100%;margin-bottom:8px" />
           <ul class="list" id="annoList"><li class="empty" style="cursor:default">Todavía no has señalado ninguna acción.</li></ul>
-          <p class="hint">Elige una herramienta en la barra de la izquierda y dibuja sobre el vídeo: la señalización se guarda con el minuto actual y se ve cuando el vídeo pasa por ese momento (±2 s). Con «Texto», escribe la etiqueta arriba y haz clic donde quieras colocarla.</p>
+          <p class="hint">Elige una herramienta en la barra de la izquierda y dibuja sobre el vídeo: la señalización se guarda con el minuto actual y se ve cuando el vídeo pasa por ese momento (±2 s). Con «Texto», escribe la etiqueta arriba y haz clic donde quieras colocarla. Con «Nº», cada clic coloca el siguiente número (1, 2, 3…). Haz clic en una señalización para seleccionarla y editar sus propiedades; Ctrl+Z deshace el último cambio.</p>
           <div class="btn-row">
             <button type="button" class="danger" id="clearAnnos">Limpiar todo</button>
+          </div>
+        </section>
+
+        <section class="panel" id="propsPanel">
+          <h2>Propiedades</h2>
+          <div id="propsEmpty" class="empty">Haz clic en una señalización (en el vídeo, en la lista o en la línea de tiempo) para ver y editar sus propiedades.</div>
+          <div id="propsForm" hidden>
+            <div class="prop-grid">
+              <div><label>Tipo</label><div class="prop-val" id="propType">—</div></div>
+              <div><label>Momento</label><div class="prop-val" id="propTime">—</div></div>
+              <div class="full"><label for="propLabel">Etiqueta</label><input type="text" id="propLabel" /></div>
+              <div id="propNumWrap" hidden><label>Número</label><div class="prop-val" id="propNum">—</div></div>
+              <div><label for="propColor">Color</label><input type="color" id="propColor" value="#FFD21F" /></div>
+              <div><label for="propLw">Grosor</label><select id="propLw"><option value="2">Fino (2)</option><option value="3" selected>Medio (3)</option><option value="5">Grueso (5)</option></select></div>
+              <div><label for="propDashed">Estilo de línea</label><select id="propDashed"><option value="solid">Sólida</option><option value="dashed">Discontinua</option></select></div>
+              <div><label for="propOpacity">Opacidad · <span id="propOpacityVal">100%</span></label><input type="range" id="propOpacity" min="0.1" max="1" step="0.05" value="1" /></div>
+            </div>
+            <div class="btn-row"><button type="button" class="danger" id="propDelete">Eliminar señalización</button></div>
           </div>
         </section>
 
@@ -537,7 +594,7 @@
       videoName: '', videoLoaded: false, videoFromServer: false,
       track: null, samples: [], events: [], trackMismatch: false,
       annotations: [], cuts: [],
-      tool: 'none', color: '#FFD21F', lineWidth: 3,
+      tool: 'none', color: '#FFD21F', lineWidth: 3, dashed: false,
       zoom: { z: 1, tx: 0, ty: 0, follow: false, lastBall: null, pan: null },
       drawing: null,
       cutStart: null, cutEnd: null,
@@ -580,7 +637,20 @@
       return ctx;
     }
     var CODE_KEYS = ['local','visitante','gk_local','gk_visitante','arbitro','desconocido'];
-    var TOOL_NAMES = { arrow:'Flecha', line:'Línea', ellipse:'Círculo', rect:'Rectángulo', free:'Lápiz', text:'Texto', spotlight:'Spotlight', erase:'Borrar' };
+    var TOOL_NAMES = { arrow:'Flecha', line:'Línea', ellipse:'Círculo', rect:'Rectángulo', triangle:'Triángulo', free:'Lápiz', text:'Texto', numero:'Nº', spotlight:'Spotlight', erase:'Borrar' };
+    /* Nombre que se muestra de una señalización (el marcador numerado
+       muestra su número: "Nº 1", "Nº 2"...). */
+    function annoDisplayName(a){
+      return a.type === 'numero' ? ('Nº ' + (a.num || '')) : (TOOL_NAMES[a.type] || a.type);
+    }
+    /* Siguiente número del marcador numerado: el mayor usado + 1 (1 si
+       no hay ninguno). Al borrar todas se reinicia solo, porque la
+       lista queda vacía. */
+    function nextNum(){
+      var m = 0;
+      state.annotations.forEach(function(a){ if (a.type === 'numero' && a.num > m) m = a.num; });
+      return m + 1;
+    }
 
     function $(id){ return document.getElementById(id); }
     function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
@@ -887,7 +957,8 @@
     document.addEventListener('keydown', function(e){
       var tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.code === 'Space'){ e.preventDefault(); togglePlay(); }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')){ e.preventDefault(); undo(); }
+      else if (e.code === 'Space'){ e.preventDefault(); togglePlay(); }
       else if (e.key === 'ArrowRight'){ seekTo(video.currentTime + 5); }
       else if (e.key === 'ArrowLeft'){ seekTo(video.currentTime - 5); }
     });
@@ -932,21 +1003,25 @@
           lt.innerHTML = '<span class="tl-empty">Sin tracking</span>';
         }
       }
+      renderTlRuler();
       var la = $('laneAnnos'); if (la){
         la.innerHTML = '';
-        if (!state.annotations.length) la.innerHTML = '<span class="tl-empty">Sin señalizaciones</span>';
+        var hasAnnos = state.annotations.some(function(a){ return a.type !== 'spotlight'; });
+        if (!hasAnnos) la.innerHTML = '<span class="tl-empty">Sin señalizaciones</span>';
         state.annotations.forEach(function(a){
-          if (!dom) return;
-          var span = 4; /* visibilidad ±2 s */
-          var left = clamp((a.t - span/2 - dom.a)/(dom.b - dom.a)*100, 0, 100);
-          var w = clamp(span/(dom.b - dom.a)*100, 0.6, 100);
-          var c = document.createElement('div'); c.className = 'tl-clip';
-          c.style.left = left + '%'; c.style.width = w + '%';
-          c.style.borderColor = a.color; c.style.color = a.color;
-          c.textContent = (TOOL_NAMES[a.type] || a.type) + (a.label ? ' · ' + a.label : '');
-          c.title = (TOOL_NAMES[a.type] || a.type) + ' · ' + fmtMatch(a.t) + (a.label ? ' · ' + a.label : '');
-          c.addEventListener('click', function(ev){ ev.stopPropagation(); state.selectedAnno = a.id; jumpTo(a.t); });
-          la.appendChild(c);
+          if (!dom || a.type === 'spotlight') return;
+          la.appendChild(makeAnnoClip(a, dom));
+        });
+      }
+      /* Pista "Efectos": el Spotlight va separado de los dibujos, como
+         en LIVETAG PRO (Keying/Appearance aparte de Lines/Arrow). */
+      var lf = $('laneFx'); if (lf){
+        lf.innerHTML = '';
+        var hasFx = state.annotations.some(function(a){ return a.type === 'spotlight'; });
+        if (!hasFx) lf.innerHTML = '<span class="tl-empty">Sin efectos</span>';
+        state.annotations.forEach(function(a){
+          if (!dom || a.type !== 'spotlight') return;
+          lf.appendChild(makeAnnoClip(a, dom));
         });
       }
       var lc = $('laneCuts'); if (lc){
@@ -986,6 +1061,54 @@
       }
       var rl = $('tlRange'); if (rl) rl.textContent = dom ? ('Vídeo ' + fmtClock(dom.a) + ' – ' + fmtClock(dom.b)) : '—';
     }
+    /* Un clip de señalización en la línea de tiempo: etiquetado por
+       tipo, en su momento, con su color; clic → se selecciona (panel
+       de propiedades) y salta a ese momento. El clip seleccionado se
+       resalta en amarillo, como el "Lines" del vídeo de referencia. */
+    function makeAnnoClip(a, dom){
+      var span = 4; /* visibilidad ±2 s */
+      var left = clamp((a.t - span/2 - dom.a)/(dom.b - dom.a)*100, 0, 100);
+      var w = clamp(span/(dom.b - dom.a)*100, 0.6, 100);
+      var c = document.createElement('div'); c.className = 'tl-clip';
+      if (a.id === state.selectedAnno) c.classList.add('sel');
+      c.style.left = left + '%'; c.style.width = w + '%';
+      c.style.borderColor = a.color; c.style.color = a.color;
+      var nm = annoDisplayName(a);
+      c.textContent = nm + (a.label ? ' · ' + a.label : '');
+      c.title = nm + ' · ' + fmtMatch(a.t) + (a.label ? ' · ' + a.label : '');
+      c.addEventListener('click', function(ev){ ev.stopPropagation(); selectAnno(a.id); jumpTo(a.t); });
+      return c;
+    }
+    /* Regla de tiempo de la línea de tiempo (00:03, 00:06... en el
+       vídeo de referencia): marcas en tiempo de vídeo, con un paso
+       redondo según la duración del rango. Va dentro del área con
+       scroll, así que sigue alineada con los clips al ampliar. */
+    function renderTlRuler(){
+      var r = $('tlRuler'); if (!r) return;
+      r.innerHTML = '';
+      var dom = tlDomain(); if (!dom) return;
+      var span = dom.b - dom.a;
+      if (!(span > 0)) return;
+      var steps = [1,2,5,10,15,30,60,120,300,600,900];
+      var step = steps[steps.length - 1];
+      for (var i = 0; i < steps.length; i++){ if (span / steps[i] <= 24){ step = steps[i]; break; } }
+      var first = Math.ceil(dom.a / step) * step;
+      for (var t = first; t <= dom.b; t += step){
+        var d = document.createElement('div'); d.className = 'tl-tick';
+        d.style.left = ((t - dom.a) / span * 100) + '%';
+        d.textContent = fmtClock(t);
+        r.appendChild(d);
+      }
+    }
+    /* Zoom horizontal de la línea de tiempo (1×–8×): ensancha el área
+       con scroll; los clips, el playhead y la regla usan % de esa
+       área, así que siguen alineados al ampliar. */
+    var tlZoom = 1;
+    function applyTlZoom(){
+      var sc = $('tlScroll'); if (sc) sc.style.width = (tlZoom * 100) + '%';
+      var v = $('tlZoomVal'); if (v) v.textContent = (tlZoom % 1 ? tlZoom.toFixed(1) : tlZoom) + '×';
+    }
+    $('tlZoom').addEventListener('input', function(){ tlZoom = parseFloat(this.value) || 1; applyTlZoom(); });
     function updateTlPlayhead(){
       var ph = $('tlPlayhead'); if (!ph) return;
       var dom = tlDomain();
@@ -1004,7 +1127,8 @@
         if (!state.videoLoaded) return;
         if (e.target.closest && e.target.closest('.seekwrap')) return;
         var dom = tlDomain(); if (!dom) return;
-        var r = lanes.getBoundingClientRect();
+        var sc = $('tlScroll');
+        var r = sc ? sc.getBoundingClientRect() : lanes.getBoundingClientRect();
         var frac = clamp((e.clientX - r.left)/r.width, 0, 1);
         seekTo(dom.a + frac*(dom.b - dom.a));
       });
@@ -1260,12 +1384,30 @@
           var r = stageEl.getBoundingClientRect();
           var nx = clamp((e.clientX - r.left) / r.width, 0, 1);
           var ny = clamp((e.clientY - r.top) / r.height, 0, 1);
+          // Clic sobre una señalización visible: se selecciona (panel
+          // de propiedades) en vez de centrar el zoom.
+          var hit = visibleAnnoAt({ x: nx, y: ny });
+          if (hit){ selectAnno(hit.id); return; }
           if (zoom.follow) setFollow(false);
           centerOn(nx, ny);
         }
       }
       stageEl.addEventListener('pointerup', endPan);
       stageEl.addEventListener('pointercancel', function(){ zoom.pan = null; });
+    })();
+    /* Clic en el vídeo con la herramienta «Mover / ver» (zoom 1×,
+       donde no hay desplazamiento): si cae sobre una señalización
+       visible, se selecciona. Con zoom > 1 lo hace endPan(). */
+    (function(){
+      var stageEl2 = $('stage');
+      stageEl2.addEventListener('click', function(e){
+        if (state.tool !== 'none' || zoom.z > 1) return;
+        if (e.target.closest && e.target.closest('.stage-empty,.stage-mismatch')) return;
+        var r = stageEl2.getBoundingClientRect();
+        var pos = { x: clamp((e.clientX - r.left) / r.width, 0, 1), y: clamp((e.clientY - r.top) / r.height, 0, 1) };
+        var hit = visibleAnnoAt(pos);
+        if (hit) selectAnno(hit.id);
+      });
     })();
     /* «Seguir balón»: en cada fotograma centra la vista en el balón de
        la muestra más cercana; sin balón en esa muestra, mantiene la
@@ -1303,6 +1445,42 @@
         document.querySelectorAll('.lw').forEach(function(x){ x.classList.toggle('active', x === btn); });
       });
     });
+    /* Estilo de línea Sólida / Discontinua (barra vertical): la
+       discontinua es la que se ve en la barra del vídeo de referencia
+       y en su frame 25 (línea blanca sobre el campo). */
+    document.querySelectorAll('.dash').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        state.dashed = btn.getAttribute('data-dash') === 'dashed';
+        document.querySelectorAll('.dash').forEach(function(x){ x.classList.toggle('active', x === btn); });
+      });
+    });
+    /* Deshacer: botón de la barra y Ctrl+Z. */
+    $('undoBtn').addEventListener('click', undo);
+
+    /* ================= Deshacer ================= */
+    /* Pila de estados de las señalizaciones (copias JSON, máx. 50):
+       antes de cada cambio (añadir, borrar, limpiar, importar, editar
+       propiedades) se guarda el estado actual; deshacer lo restaura.
+       Cubre añadir/borrar y también la edición de propiedades (la
+       copia se guarda al entrar en el campo, antes de editar). */
+    var undoStack = [];
+    function pushUndo(){
+      var snap = JSON.stringify(state.annotations);
+      if (undoStack.length && undoStack[undoStack.length - 1] === snap) return;
+      undoStack.push(snap);
+      if (undoStack.length > 50) undoStack.shift();
+      updateUndoBtn();
+    }
+    function updateUndoBtn(){
+      var b = $('undoBtn'); if (b) b.disabled = !undoStack.length;
+    }
+    function undo(){
+      if (!undoStack.length){ showMsg('No hay nada que deshacer.'); return; }
+      state.annotations = JSON.parse(undoStack.pop());
+      if (state.selectedAnno && !state.annotations.some(function(a){ return a.id === state.selectedAnno; })) state.selectedAnno = null;
+      renderAnnoList(); renderTimeline(); renderProps(); updateStatus(); updateUndoBtn();
+      showMsg('Deshecho.');
+    }
 
     function canvasPos(evt){
       var r = annoCanvas.getBoundingClientRect();
@@ -1316,6 +1494,10 @@
         var txt = $('annoLabel').value.trim();
         if (!txt){ showMsg('Escribe primero el texto en el campo «Etiqueta».'); return; }
         addAnnotation({ type:'text', x:pos.x, y:pos.y, label: txt });
+        return;
+      }
+      if (state.tool === 'numero'){
+        addAnnotation({ type:'numero', x:pos.x, y:pos.y, num: nextNum(), label: $('annoLabel').value.trim() });
         return;
       }
       annoCanvas.setPointerCapture(e.pointerId);
@@ -1345,7 +1527,7 @@
        antigua para borrar la de encima si hay varias solapadas. */
     function annoHit(a, pos){
       var tol = 0.03;
-      if (a.type === 'text'){
+      if (a.type === 'text' || a.type === 'numero'){
         return Math.abs(a.x - pos.x) < 0.06 && Math.abs(a.y - pos.y) < 0.06;
       }
       if (a.type === 'free'){
@@ -1366,29 +1548,41 @@
       var y1 = Math.min(a.y1, a.y2), y2 = Math.max(a.y1, a.y2);
       return pos.x >= x1 - tol && pos.x <= x2 + tol && pos.y >= y1 - tol && pos.y <= y2 + tol;
     }
-    function eraseAt(pos){
+    /* Señalización visible en un punto del vídeo (la más reciente
+       primero, para coger la de encima si hay varias solapadas). */
+    function visibleAnnoAt(pos){
       var t = video.currentTime || 0;
       var showAll = $('showAllAnnos').checked;
       for (var i = state.annotations.length - 1; i >= 0; i--){
         var a = state.annotations[i];
         if (!(showAll || Math.abs(t - a.t) <= 2 || a.id === state.selectedAnno)) continue;
-        if (annoHit(a, pos)){
-          state.annotations.splice(i, 1);
-          if (state.selectedAnno === a.id) state.selectedAnno = null;
-          renderAnnoList(); updateStatus(); renderTimeline();
-          showMsg('Señalización borrada: ' + (TOOL_NAMES[a.type] || a.type) + (a.label ? ' — ' + a.label : ''));
-          return;
-        }
+        if (annoHit(a, pos)) return a;
+      }
+      return null;
+    }
+    function eraseAt(pos){
+      var a = visibleAnnoAt(pos);
+      if (a){
+        pushUndo();
+        state.annotations = state.annotations.filter(function(x){ return x.id !== a.id; });
+        if (state.selectedAnno === a.id) state.selectedAnno = null;
+        renderAnnoList(); updateStatus(); renderTimeline(); renderProps();
+        showMsg('Señalización borrada: ' + annoDisplayName(a) + (a.label ? ' — ' + a.label : ''));
+        return;
       }
       showMsg('No hay ninguna señalización en ese punto.');
     }
 
     function addAnnotation(geo){
+      pushUndo();
       var ann = {
         id: Date.now() + '_' + Math.floor(Math.random()*1e6),
         t: video.currentTime || 0,
         color: state.color,
-        label: geo.label || ''
+        label: geo.label || '',
+        lw: state.lineWidth,
+        dashed: !!state.dashed,
+        opacity: 1
       };
       for (var k in geo) ann[k] = geo[k];
       state.annotations.push(ann);
@@ -1400,7 +1594,13 @@
 
     function drawOneAnnotation(a, W, H){
       actx.strokeStyle = a.color; actx.fillStyle = a.color;
-      actx.lineWidth = state.lineWidth || 3; actx.lineJoin = 'round'; actx.lineCap = 'round';
+      actx.lineWidth = a.lw || state.lineWidth || 3; actx.lineJoin = 'round'; actx.lineCap = 'round';
+      /* Opacidad y trazo discontinuo propios de cada señalización (se
+         guardan en la anotación y se respetan al exportar y en la
+         captura PNG, que dibuja este mismo canvas). */
+      actx.save();
+      if (a.opacity != null) actx.globalAlpha = a.opacity;
+      if (a.dashed) actx.setLineDash([10, 7]);
       var tagX = null, tagY = null;
       if (a.type === 'arrow'){
         var x1 = a.x1*W, y1 = a.y1*H, x2 = a.x2*W, y2 = a.y2*H;
@@ -1464,7 +1664,31 @@
         actx.font = '600 17px "Segoe UI", system-ui, sans-serif';
         actx.fillText(a.label || '', a.x*W, a.y*H);
         tagX = a.x*W; tagY = a.y*H - 20;
+      } else if (a.type === 'triangle'){
+        var tx1 = Math.min(a.x1, a.x2)*W, tx2 = Math.max(a.x1, a.x2)*W;
+        var ty1 = Math.min(a.y1, a.y2)*H, ty2 = Math.max(a.y1, a.y2)*H;
+        actx.beginPath();
+        actx.moveTo((tx1 + tx2)/2, ty1);
+        actx.lineTo(tx2, ty2);
+        actx.lineTo(tx1, ty2);
+        actx.closePath();
+        actx.stroke();
+        tagX = tx1; tagY = ty1;
+      } else if (a.type === 'numero'){
+        /* Marcador numerado: círculo relleno con el número dentro
+           (texto en color de contraste, como las fichas de la pizarra). */
+        var nx = a.x*W, ny = a.y*H;
+        actx.beginPath(); actx.arc(nx, ny, 16, 0, 6.2832);
+        actx.fillStyle = a.color; actx.fill();
+        actx.lineWidth = 2; actx.strokeStyle = 'rgba(0,0,0,.5)'; actx.stroke();
+        actx.fillStyle = boardTextColor(a.color);
+        actx.font = '700 15px "Segoe UI", system-ui, sans-serif';
+        actx.textAlign = 'center'; actx.textBaseline = 'middle';
+        actx.fillText(String(a.num || ''), nx, ny + 0.5);
+        actx.textAlign = 'left'; actx.textBaseline = 'alphabetic';
+        tagX = nx; tagY = ny - 20;
       }
+      actx.restore();
       // Etiqueta + marca de tiempo
       actx.font = '600 11px "Segoe UI", system-ui, sans-serif';
       var parts = [];
@@ -1491,9 +1715,73 @@
       });
       if (state.drawing){
         var d = state.drawing;
-        drawOneAnnotation({ type:d.type, x1:d.x1, y1:d.y1, x2:d.x2, y2:d.y2, points:d.points, color: state.color, label:'', t: t }, W, H);
+        drawOneAnnotation({ type:d.type, x1:d.x1, y1:d.y1, x2:d.x2, y2:d.y2, points:d.points, color: state.color, label:'', t: t, lw: state.lineWidth, dashed: state.dashed, opacity: 1 }, W, H);
       }
     }
+
+    /* Señalización seleccionada: se muestra en el panel de
+       propiedades (derecha), se resalta en la lista y en la línea de
+       tiempo, y sigue visible sobre el vídeo aunque el vídeo no esté
+       en su momento. Se selecciona desde la lista, un clip de la
+       línea de tiempo o haciendo clic sobre ella en el vídeo. */
+    function selectedAnno(){
+      if (!state.selectedAnno) return null;
+      for (var i = 0; i < state.annotations.length; i++) if (state.annotations[i].id === state.selectedAnno) return state.annotations[i];
+      return null;
+    }
+    function selectAnno(id){
+      state.selectedAnno = id;
+      renderProps();
+      renderAnnoList();
+      renderTimeline();
+    }
+    function renderProps(){
+      var a = selectedAnno();
+      var empty = $('propsEmpty'), form = $('propsForm');
+      if (!a){ if (empty) empty.hidden = false; if (form) form.hidden = true; return; }
+      if (empty) empty.hidden = true;
+      if (form) form.hidden = false;
+      $('propType').textContent = annoDisplayName(a);
+      $('propTime').textContent = 'Partido ' + fmtMatch(a.t) + ' · Vídeo ' + fmtClock(a.t);
+      $('propLabel').value = a.label || '';
+      var nw = $('propNumWrap');
+      if (nw) nw.hidden = a.type !== 'numero';
+      if (a.type === 'numero') $('propNum').textContent = String(a.num || '');
+      $('propColor').value = validHex(a.color) ? a.color : '#FFD21F';
+      $('propLw').value = String(a.lw || state.lineWidth || 3);
+      $('propDashed').value = a.dashed ? 'dashed' : 'solid';
+      $('propOpacity').value = String(a.opacity != null ? a.opacity : 1);
+      $('propOpacityVal').textContent = Math.round((a.opacity != null ? a.opacity : 1) * 100) + '%';
+    }
+    /* Edición de propiedades: cada cambio actualiza la señalización
+       en vivo (vídeo, lista y línea de tiempo). La copia para
+       deshacer se guarda al entrar en el campo, antes de editar. */
+    function propEdit(mut){
+      var a = selectedAnno(); if (!a) return;
+      mut(a);
+      renderAnnoList(); renderTimeline(); updateStatus();
+    }
+    ['propLabel','propColor','propLw','propDashed','propOpacity'].forEach(function(id){
+      var el = $(id);
+      el.addEventListener('focus', function(){ pushUndo(); });
+    });
+    $('propLabel').addEventListener('input', function(){ propEdit(function(a){ a.label = $('propLabel').value; }); });
+    $('propColor').addEventListener('input', function(){ propEdit(function(a){ a.color = $('propColor').value; }); });
+    $('propLw').addEventListener('change', function(){ propEdit(function(a){ a.lw = parseInt($('propLw').value, 10) || 3; }); });
+    $('propDashed').addEventListener('change', function(){ propEdit(function(a){ a.dashed = $('propDashed').value === 'dashed'; }); });
+    $('propOpacity').addEventListener('input', function(){
+      var v = parseFloat($('propOpacity').value);
+      $('propOpacityVal').textContent = Math.round(v * 100) + '%';
+      propEdit(function(a){ a.opacity = v; });
+    });
+    $('propDelete').addEventListener('click', function(){
+      var a = selectedAnno(); if (!a) return;
+      pushUndo();
+      state.annotations = state.annotations.filter(function(x){ return x.id !== a.id; });
+      state.selectedAnno = null;
+      renderAnnoList(); renderTimeline(); renderProps(); updateStatus();
+      showMsg('Señalización borrada: ' + annoDisplayName(a) + (a.label ? ' — ' + a.label : ''));
+    });
 
     function renderAnnoList(){
       var ul = $('annoList'); ul.innerHTML = '';
@@ -1506,29 +1794,33 @@
         var t = document.createElement('span'); t.className = 't'; t.textContent = fmtMatch(a.t);
         var b = document.createElement('div'); b.className = 'b';
         var ttl = document.createElement('div'); ttl.className = 'ttl';
-        ttl.textContent = (TOOL_NAMES[a.type] || a.type) + (a.label ? ' — ' + a.label : '');
+        ttl.textContent = annoDisplayName(a) + (a.label ? ' — ' + a.label : '');
         b.appendChild(ttl);
         var del = document.createElement('button'); del.type = 'button'; del.className = 'del danger'; del.textContent = 'Borrar';
         del.addEventListener('click', function(ev){
           ev.stopPropagation();
+          pushUndo();
           state.annotations = state.annotations.filter(function(x){ return x.id !== a.id; });
           if (state.selectedAnno === a.id) state.selectedAnno = null;
-          renderAnnoList(); renderTimeline(); updateStatus();
+          renderAnnoList(); renderTimeline(); renderProps(); updateStatus();
         });
+        if (a.id === state.selectedAnno) li.classList.add('selected');
         li.appendChild(t); li.appendChild(b); li.appendChild(del);
         li.addEventListener('click', function(){
-          state.selectedAnno = a.id;
+          selectAnno(a.id);
           jumpTo(a.t);
         });
         ul.appendChild(li);
       });
     }
     $('clearAnnos').addEventListener('click', function(){
+      if (!state.annotations.length) return;
+      pushUndo();
       state.annotations = []; state.selectedAnno = null;
-      renderAnnoList(); renderTimeline(); updateStatus();
+      renderAnnoList(); renderTimeline(); renderProps(); updateStatus();
       showMsg('Se han borrado todas las señalizaciones.');
     });
-    $('showAllAnnos').addEventListener('change', function(){ state.selectedAnno = null; });
+    $('showAllAnnos').addEventListener('change', function(){ state.selectedAnno = null; renderProps(); renderAnnoList(); renderTimeline(); });
 
     /* ================= Estadísticas en vivo ================= */
     function renderEventList(){
@@ -1753,7 +2045,11 @@
       reader.onload = function(){
         try {
           var data = JSON.parse(reader.result);
-          if (Array.isArray(data.annotations)) state.annotations = data.annotations;
+          if (Array.isArray(data.annotations)){
+            pushUndo();
+            state.annotations = data.annotations;
+            if (state.selectedAnno && !state.annotations.some(function(x){ return x.id === state.selectedAnno; })) state.selectedAnno = null;
+          }
           if (Array.isArray(data.cuts)) state.cuts = data.cuts;
           if (data.context){
             state.context = contextFromData(data);
@@ -1762,7 +2058,7 @@
             buildMarkers(); renderEventList(); renderFullSummary();
             state.lastStatsSecond = -1;
           }
-          renderAnnoList(); renderCuts(); renderTimeline(); updateStatus();
+          renderAnnoList(); renderCuts(); renderTimeline(); renderProps(); updateStatus();
           showMsg('Análisis importado: ' + state.annotations.length + ' señalizaciones y ' + state.cuts.length + ' cortes restaurados.');
         } catch(err){
           showMsg('No se pudo importar ese archivo: ' + err.message);
