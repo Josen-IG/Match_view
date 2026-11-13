@@ -538,6 +538,8 @@ elif st.session_state.pagina == "video":
     # El análisis usa el contexto de Alineaciones (equipos, colores de
     # camiseta/porteros/árbitro, formaciones) y genera el tracking JSON
     # específico de ese vídeo, que luego se inyecta en la pantalla manual.
+    # Solo tracking + estadísticas directas del tracking: NO clasifica
+    # eventos ni genera cortes (las jugadas se marcan a mano abajo).
     # Si ya hay un tracking para ese vídeo, se ofrece cargarlo sin re-analizar.
     st.markdown("#### 🎥 Vídeo del partido")
     tracking_del_video = None
@@ -654,13 +656,16 @@ elif st.session_state.pagina == "video":
             elif st.button("▶️ Analizar vídeo", type="primary",
                            use_container_width=True,
                            help="Analiza el vídeo con YOLO y genera el tracking "
-                                "JSON de este partido."):
+                                "JSON de este partido: solo tracking y "
+                                "estadísticas, sin eventos ni cortes (las "
+                                "jugadas se marcan a mano en la pantalla manual)."):
                 _ejecutar_analisis()
         with c_b2:
             if tracking_del_video is not None:
                 if st.button("🔄 Re-analizar vídeo", use_container_width=True,
                              help="Vuelve a analizar el vídeo desde cero y "
-                                  "sustituye el tracking existente."):
+                                  "sustituye el tracking existente. Solo "
+                                  "tracking y estadísticas, sin eventos ni cortes."):
                     _ejecutar_analisis()
 
     # --- Análisis manual del vídeo ---

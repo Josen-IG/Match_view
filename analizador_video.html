@@ -168,7 +168,7 @@
       <span><span class="dot" id="dotVideo"></span>Vídeo: <b id="stVideo">no cargado</b></span>
       <span><span class="dot" id="dotTrack"></span>Tracking: <b id="stTrack">no cargado</b></span>
       <span>Muestras: <b id="stSamples">0</b></span>
-      <span>Eventos: <b id="stEvents">0</b></span>
+      <span id="stEventsWrap">Eventos: <b id="stEvents">0</b></span>
       <span>Anotaciones: <b id="stAnnos">0</b></span>
       <span>Cortes: <b id="stCuts">0</b></span>
     </div>
@@ -304,10 +304,12 @@
           <div class="poss-bar" style="background:#0d1119"><div id="possLocalBar" style="background:#3D8BFF;width:0%"></div><div id="possVisBar" style="background:#E5484D;width:0%"></div></div>
           <div class="poss-times"><span id="possLocalTime">00:00</span><span class="dim">tiempo con balón</span><span id="possVisTime">00:00</span></div>
           <div class="carrier">Balón ahora: <b id="carrier">—</b></div>
-          <div class="sec-title">Eventos hasta este momento</div>
-          <div class="counts" id="liveCounts"><div class="empty">Sin eventos todavía.</div></div>
-          <div class="sec-title">Eventos del partido</div>
-          <ul class="list" id="eventList"><li class="empty" style="cursor:default">Carga el tracking para ver los eventos.</li></ul>
+          <div id="eventsPanel">
+            <div class="sec-title">Eventos hasta este momento</div>
+            <div class="counts" id="liveCounts"><div class="empty">Sin eventos todavía.</div></div>
+            <div class="sec-title">Eventos del partido</div>
+            <ul class="list" id="eventList"><li class="empty" style="cursor:default">Carga el tracking para ver los eventos.</li></ul>
+          </div>
         </section>
 
         <section class="panel">
@@ -353,7 +355,7 @@
             <button type="button" class="filebtn" id="importPick" style="margin-top:4px">Seleccionar análisis…</button>
             <input type="file" id="importFile" class="srfile" accept=".json,application/json" />
           </div>
-          <p class="hint">La exportación guarda tus señalizaciones, cortes, eventos y estadísticas en un archivo JSON que puedes volver a importar aquí.</p>
+          <p class="hint">La exportación guarda tus señalizaciones, tus cortes y las estadísticas en un archivo JSON que puedes volver a importar aquí.</p>
         </section>
       </aside>
     </div>
@@ -585,6 +587,16 @@
       if (isDemo && !state.videoLoaded) showMsg('Demo de tracking cargada (sin vídeo: el escenario muestra las cajas sobre fondo negro). Carga un vídeo para ver la experiencia completa.');
     }
 
+    /* El análisis ya no clasifica eventos (decisión del usuario,
+       2026-11-13): el tracking nuevo trae events vacío y el panel de
+       eventos se oculta. Un tracking antiguo con eventos clasificados
+       lo sigue mostrando, y la demo también. */
+    function syncEventsVisibility(){
+      var show = state.events.length > 0;
+      var panel = $('eventsPanel'); if (panel) panel.style.display = show ? '' : 'none';
+      var wrap = $('stEventsWrap'); if (wrap) wrap.style.display = show ? '' : 'none';
+    }
+
     function updateStatus(){
       $('dotVideo').className = 'dot' + (state.videoLoaded ? ' on' : '');
       $('dotTrack').className = 'dot' + (state.track ? (state.isDemo ? ' demo' : ' on') : '');
@@ -594,6 +606,7 @@
       $('stEvents').textContent = state.events.length;
       $('stAnnos').textContent = state.annotations.length;
       $('stCuts').textContent = state.cuts.length;
+      syncEventsVisibility();
       var names = teamNames();
       $('possLocalName').textContent = names.local;
       $('possVisName').textContent = names.visitante;
@@ -1042,12 +1055,16 @@
       }
       html += '<table class="summary"><tr><th></th><th>' + escapeHtml(names.local) + '</th><th>' + escapeHtml(names.visitante) + '</th></tr>';
       if (st.posesion) html += row('Posesión', (st.posesion.local_pct ?? '–') + '%', (st.posesion.visitante_pct ?? '–') + '%');
-      if (st.pases){
+      /* Pases/tiros solo si hay algún valor: el análisis ya no los
+         clasifica y el tracking nuevo los trae a 0; mostrar "0" haría
+         creer que el equipo no tiró ni pasó. Un tracking antiguo con
+         valores reales los sigue mostrando. */
+      if (st.pases && ((st.pases.local && st.pases.local.total) || (st.pases.visitante && st.pases.visitante.total))){
         html += row('Pases', st.pases.local ? st.pases.local.total : '–', st.pases.visitante ? st.pases.visitante.total : '–');
         html += row('Pases completados', st.pases.local ? st.pases.local.completados : '–', st.pases.visitante ? st.pases.visitante.completados : '–');
         html += row('Precisión de pase', (st.pases.local ? st.pases.local.precision_pct : '–') + '%', (st.pases.visitante ? st.pases.visitante.precision_pct : '–') + '%');
       }
-      if (st.tiros){
+      if (st.tiros && ((st.tiros.local && st.tiros.local.tiros_total) || (st.tiros.visitante && st.tiros.visitante.tiros_total))){
         html += row('Tiros', st.tiros.local ? st.tiros.local.tiros_total : '–', st.tiros.visitante ? st.tiros.visitante.tiros_total : '–');
         html += row('Goles', st.tiros.local ? st.tiros.local.goles : '–', st.tiros.visitante ? st.tiros.visitante.goles : '–');
       }
@@ -1058,7 +1075,7 @@
         per.forEach(function(p){ html += row(escapeHtml(String(p.tramo)), (p.local_pct ?? '–') + '%', (p.visitante_pct ?? '–') + '%'); });
         html += '</table>';
       }
-      if (st.eventos_por_tipo){
+      if (st.eventos_por_tipo && Object.keys(st.eventos_por_tipo).length){
         html += '<div class="sec-title">Eventos por tipo</div><table class="summary">';
         Object.keys(st.eventos_por_tipo).sort().forEach(function(k){
           html += '<tr><td>' + escapeHtml(k) + '</td><td colspan="2">' + st.eventos_por_tipo[k] + '</td></tr>';
@@ -1133,7 +1150,7 @@
         stats: state.track ? state.track.stats : null
       };
       download('analisis_match_view.json', new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' }));
-      showMsg('Análisis exportado: señalizaciones, cortes, eventos y estadísticas en un JSON.');
+      showMsg('Análisis exportado: señalizaciones, cortes y estadísticas en un JSON.');
     });
     $('importFile').addEventListener('change', function(e){
       var f = e.target.files && e.target.files[0];

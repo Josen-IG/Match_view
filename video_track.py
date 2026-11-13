@@ -21,15 +21,19 @@ Diseño (respuestas del usuario, 2026-11-11):
   el portero cuenta como su equipo y su posición marca dónde está su
   portería (en seguimiento, qué portería se ataca); el árbitro no cuenta
   para posesión ni agrupación.
-* Jugadas: todas. Gol, tiro a puerta/fuera, pase, pase clave, centro, córner,
-  falta, tarjeta, duelo, recuperación, pérdida, transición/contraataque,
-  entrada al área, balón parado, distribución del portero y posesión por
-  tramos. Prioridad a gol/tiro/córner.
+* Análisis SOLO de tracking (decisión del usuario, 2026-11-13): el
+  análisis detecta y trackea jugadores + balón, calcula la posesión
+  y las estadísticas directas del tracking, y exporta el tracking
+  JSON. Ya NO genera candidatos de jugadas ni los clasifica en gol,
+  tiro, pase, falta, duelo, etc., y no hay cortes automáticos: las
+  jugadas las marca el usuario a mano en la pantalla de análisis
+  manual. Las funciones de candidatos/clasificación/pases siguen
+  definidas en este módulo (las usa el remix por tramos de
+  chunked_full.py), pero ``analyze_video``/``analyze_video_full`` ya
+  no las llaman.
 * PC: Windows, Ryzen 7 serie 7000, CPU (sin GPU). YOLO11s por defecto,
   imgsz 640, muestreo ~10 fps, ``device="cpu"``. Un partido de 90 min tarda
   más que en tiempo real en CPU: probar primero con 10 minutos.
-* Cortes solo como botones con resumen breve; guardado MANUAL a eventos.
-  Nada se añade solo al CSV.
 
 Tracking:
 * ``YOLO.predict()`` fotograma a fotograma + asociación propia entre
@@ -48,32 +52,10 @@ Tracking:
   equipo conocido con más votos por track ID. Si no se distingue:
   "desconocido".
 * Posesión = jugador más cercano al balón, suavizada.
-* Candidatos desde señales del tracking (pico de velocidad, parada brusca,
-  agrupación, balón fuera de plano, balón parado, saque de portero,
-  transición, cambio de posesión solo, balón parado largo, entrada al
-  área...), no de cambios de conteo. Cada candidato se clasifica SOLO con
-  el tracking: ventana de ±3 s con velocidad, balón perdido, balón parado,
-  cambio de posesión, agrupación, avance y (en fija_amplia) cruce de la
-  línea de gol y entrada al área. Sin Groq, sin API key, sin límites de
-  tokens. La confianza es heurística y nunca pasa de 0,80.
-* Pases por trayectoria: cambio de portador (el balón sale de un jugador,
-  vuela sin portador y llega a un compañero; si llega a un rival es un
-  pase fallido). Base de las estadísticas de pases y secuencias, y el
-  clasificador los usa para etiquetar pases que no son rápidos.
-* Estadísticas e informe: posesión, eventos por equipo y por tramo, pases
-  y secuencias, tiros, duelos, recuperaciones, transiciones, balón parado,
-  territorio (proxy por cercanía a cada portero) y balón (distancia,
-  velocidad, cobertura). Se escriben ``<video>_informe.md`` + 2 CSV junto
-  a los clips, y la pantalla de Vídeo los muestra con descarga.
-* Solo se corta clip si event != "uncertain" y confianza >= 0,65.
-
-Límites honestos de clasificar solo con tracking (sin ver la jugada):
-en modo seguimiento (VEO/móvil, el habitual) no hay posición en el campo,
-así que el gol, el córner, el centro y la entrada al área NO se pueden
-distinguir con seguridad: un gol sale como tiro, un córner como balón
-parado y un centro como pase. En modo fija_amplia (todo el campo en plano)
-sí se distinguen, porque la posición del balón es posición en el campo.
-La posesión por tramos se calcula del tracking, como antes.
+* Estadísticas e informe: posesión, territorio (proxy por cercanía a
+  cada portero) y balón (distancia, velocidad, cobertura). Se escriben
+  ``<video>_informe.md`` + 2 CSV junto a los clips. Las estadísticas
+  de eventos clasificados y de pases salen a 0 (ya no se clasifican).
 """
 
 from __future__ import annotations
@@ -2014,13 +1996,16 @@ def _calcular_estadisticas(
     secuencias: list[dict], team_local: str, team_visitante: str,
     duracion_partido: float,
 ) -> dict:
-    """Estadísticas del partido a partir del tracking y los cortes.
+    """Estadísticas del partido a partir del tracking.
 
-    Todo son recuentos del tracking (por equipo y por tramo), no
-    estimaciones externas: posesión, eventos clasificados, pases por
-    trayectoria y secuencias, tiros, duelos, recuperaciones, transiciones,
-    balón parado, territorio (proxy por cercanía a cada portero) y balón
+    Solo recuentos directos del tracking (por equipo y por tramo):
+    posesión, territorio (proxy por cercanía a cada portero) y balón
     (distancia recorrida, velocidad, % de muestras con balón).
+    Las estadísticas de eventos clasificados (tiros, duelos,
+    recuperaciones, transiciones, centros, córners, balón parado,
+    distribuciones de portero, entradas al área) y de pases por
+    trayectoria salen a 0: desde 2026-11-13 el análisis ya no clasifica
+    eventos ni detecta pases; las jugadas las marca el usuario a mano.
     """
     def _pct(n: int, total: int) -> int:
         return round(100.0 * n / total) if total else 0
@@ -3568,76 +3553,21 @@ def _analizar_impl(
     # keypoints solo del centro comprime todo hacia el centro).
     _corregir_eje_x_campo(muestras)
     posesion_tramos = posesion_por_tramos(muestras, team_local, team_visitante)
-    update("Detectando pases por trayectoria (cambio de portador).", 0.50)
-    pases = _detectar_pases_por_trayectoria(muestras)
-    secuencias = _secuencias_de_pases(pases)
-    update("Buscando candidatos a evento en las señales del tracking.", 0.55)
-    candidatos = _detectar_candidatos(muestras, camera_mode)
-    candidatos = _dedup_y_limitar(candidatos, max_candidates)
-    output_dir = video_path.parent / f"{video_path.stem}_clips"
+    # Sin clasificación de candidatos/eventos (decisión del usuario,
+    # 2026-11-13): el análisis solo trackea (jugadores + balón),
+    # calcula la posesión y las estadísticas directas del tracking.
+    # No se generan candidatos, no se clasifican tiros/goles/pases/
+    # faltas/duelos y no hay cortes automáticos: las jugadas las marca
+    # el usuario a mano en la pantalla de análisis manual. Las funciones
+    # de candidatos/clasificación/pases siguen definidas (las usa el
+    # remix por tramos de chunked_full.py), pero el análisis ya no las
+    # llama: resultados, pases y secuencias quedan vacíos y sus
+    # estadísticas salen a 0.
+    pases: list[dict] = []
+    secuencias: list[dict] = []
     resultados: list[dict] = []
-    tiempos_muestras = [m["t"] for m in muestras]
-    colores_radar = {"local": color_local, "visitante": color_visitante,
-                     "arbitro": color_arbitro}
-    if not candidatos:
-        update("YOLO no encontró señales claras de jugada en el vídeo.", 1.0)
-    for n_cand, cand in enumerate(candidatos, start=1):
-        t = float(cand["seconds"])  # relativo al saque inicial
-        t_video = t + kickoff_offset
-        update(f"YOLO clasifica candidato {n_cand} de {len(candidatos)}.",
-               0.55 + 0.35 * n_cand / max(1, len(candidatos)))
-        clasificacion = _clasificar_por_tracking(
-            cand, muestras, camera_mode, team_local, team_visitante, pases=pases)
-        clip_path: str | None = None
-        radar_path: str | None = None
-        if (clasificacion["event"] != "uncertain"
-                and clasificacion["confidence"] >= min_confidence):
-            clip_start = max(0.0, t_video - pre_roll)
-            clip_end = min(duracion_video, t_video + post_roll)
-            label = f"{int(t // 60):02d}{int(t % 60):02d}_{clasificacion['event']}"
-            # Radar del momento del evento (PNG) + vídeo del radar para
-            # incrustar en el clip (abajo a la derecha, como en la imagen
-            # de referencia: puntos de colores sobre el campo).
-            m_cand = _muestra_en(muestras, tiempos_muestras, t)
-            if m_cand is not None and m_cand.get("pitch_ok"):
-                try:
-                    import cv2
-                    radar_png = output_dir / f"{int(clip_start):06d}_{label}_radar.png"
-                    cv2.imwrite(str(radar_png), draw_radar(m_cand, colores_radar))
-                    radar_path = str(radar_png)
-                except Exception:
-                    radar_path = None
-            radar_video = export_radar_video(
-                muestras, clip_start, clip_end,
-                output_dir / f"{int(clip_start):06d}_{label}_radar.mp4",
-                colores_radar)
-            try:
-                clip_path = str(export_clip(video_path, clip_start, clip_end,
-                                            output_dir, label,
-                                            radar_video=radar_video))
-            finally:
-                if radar_video is not None:
-                    Path(radar_video).unlink(missing_ok=True)
-        minute = int(t // 60)
-        resultados.append({
-            "seconds": round(t, 1),
-            "minute": minute,
-            "event": clasificacion["event"],
-            "confidence": round(float(clasificacion["confidence"]), 2),
-            "summary": clasificacion["summary"],
-            "team": clasificacion["team"],
-            "ball_x": round(float(cand["ball_x"]), 1),
-            "ball_y": round(float(cand["ball_y"]), 1),
-            "zone": zona_para_candidato(cand["ball_x"], cand["ball_y"], camera_mode),
-            "clip_path": clip_path,
-            "radar_path": radar_path,
-            "yolo_people": int(cand["people"]),
-            "yolo_ball": 1 if cand["ball"] else 0,
-            "reason": "; ".join(cand["signals"]),
-            "signals": list(cand["signals"]),
-        })
+    output_dir = video_path.parent / f"{video_path.stem}_clips"
     update("Calculando estadísticas y escribiendo el informe.", 0.95)
-    resultados = _limitar_faltas(resultados)
     estadisticas = _calcular_estadisticas(
         muestras, resultados, pases, secuencias,
         team_local, team_visitante, duracion_partido)
@@ -3680,7 +3610,7 @@ def _analizar_impl(
         )
     except Exception:
         tracking_path = None
-    update("Análisis y generación de cortes completados.", 1.0)
+    update("Análisis completado: tracking generado.", 1.0)
     return {
         **informe_base,
         "estadisticas": estadisticas,
@@ -3716,16 +3646,17 @@ def analyze_video(
     conf: float = 0.10,
     pitch_model: str | None = None,
 ) -> list[dict]:
-    """Analiza un vídeo y devuelve la lista de cortes clasificados.
+    """Analiza un vídeo (solo tracking) y devuelve la lista de eventos.
 
-    Cada resultado: seconds (relativo al saque inicial), minute, event,
-    confidence, summary, team, ball_x, ball_y (coordenadas DE PLANO, no de
-    campo), zone, clip_path (str o None), radar_path (PNG del mapa del
-    campo en el momento del evento, o None sin mapa), yolo_people,
-    yolo_ball, reason, signals. ``clip_path`` solo existe si event !=
-    "uncertain" y confidence >= min_confidence; el resto son candidatos
-    descartados. Para el resumen completo (posesión por tramos, duración,
-    etc.) usar ``analyze_video_full``.
+    Desde 2026-11-13 el análisis YA NO clasifica eventos: siempre
+    devuelve ``[]``. Las jugadas las marca el usuario a mano en la
+    pantalla de análisis manual. El análisis solo trackea (jugadores +
+    balón), calcula la posesión y las estadísticas directas del
+    tracking, y escribe el tracking JSON (ver ``analyze_video_full``).
+
+    ``max_candidates``/``min_confidence``/``pre_roll``/``post_roll`` se
+    conservan por compatibilidad pero ya no se usan (no hay candidatos
+    ni cortes que generar).
 
     Por defecto imgsz=960 y conf=0.10: en vídeo VEO el balón es diminuto y
     a 640/conf 0.25 solo aparece en ~2% de muestras (a 960/0.10, ~20%).
@@ -3775,11 +3706,14 @@ def analyze_video_full(
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
-    {"results": [...], "possession_by_period": [{"tramo", "local_pct",
+    {"results": [] (siempre vacío: el análisis ya no clasifica eventos),
+    "possession_by_period": [{"tramo", "local_pct",
     "visitante_pct", "desconocido_pct"}, ...], "kickoff_offset_s": ...,
     "match_duration_s": ..., "video_duration_s": ...,
     "samples_analyzed": ..., "team_colors": {"local": ..., "visitante": ...},
-    "estadisticas": {...}, "pases": [...], "secuencias": [...],
+    "estadisticas": {...} (solo estadísticas directas del tracking:
+    posesión, territorio y balón; pases/tiros/duelos/etc. salen a 0
+    porque ya no se clasifican), "pases": [], "secuencias": [],
     "informe_md": ..., "eventos_csv": ..., "estadisticas_csv": ...,
     "tracking_json": ... (ruta del tracking JSON para la pantalla de
     análisis manual, o None si no se pudo escribir)}
