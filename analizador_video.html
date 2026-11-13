@@ -72,9 +72,6 @@
       .stage-mismatch strong{ font-size:18px; display:block; margin-bottom:6px; }
       .stage-mismatch span{ display:block; font-size:14px; margin-bottom:4px; }
       .stage-mismatch .fn{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
-      .stage-notrack{ position:absolute; left:0; right:0; top:0; z-index:6; padding:14px 20px; text-align:center; background:rgba(120,80,10,.94); color:#fff; }
-      .stage-notrack strong{ font-size:17px; display:block; margin-bottom:6px; }
-      .stage-notrack span{ display:block; font-size:13.5px; margin-bottom:4px; }
       /* Cámara virtual: el vídeo y los canvas viven en #stageInner y el
          zoom es una transformación CSS sobre ese div. */
       #stageInner{ position:absolute; inset:0; transform-origin:0 0; }
@@ -228,10 +225,6 @@
               <span>Tracking: <b class="fn" id="mismatchTrackName"></b></span>
               <span>Vídeo elegido: <b class="fn" id="mismatchVideoName"></b></span>
               <span>Las cajas no corresponden a este vídeo, por eso no se dibujan. Genera el tracking de este vídeo (al subirlo en la app o con el notebook de Colab) para analizarlo.</span>
-            </div>
-            <div class="stage-notrack" id="stageNoTrack" hidden>
-              <strong>Sin tracking para este momento</strong>
-              <span id="noTrackDetail"></span>
             </div>
           </div>
 
@@ -401,6 +394,7 @@
           </div>
           <div class="poss-bar" style="background:#0d1119"><div id="possLocalBar" style="background:#3D8BFF;width:0%"></div><div id="possVisBar" style="background:#E5484D;width:0%"></div></div>
           <div class="poss-times"><span id="possLocalTime">00:00</span><span class="dim">tiempo con balón</span><span id="possVisTime">00:00</span></div>
+          <div class="dim" id="possUnknownLine" hidden>En disputa (sin dueño claro): <span id="possUnknownTime">00:00</span></div>
           <div class="carrier">Balón ahora: <b id="carrier">—</b></div>
           <div id="eventsPanel">
             <div class="sec-title">Eventos hasta este momento</div>
@@ -638,6 +632,10 @@
     video.addEventListener('loadedmetadata', function(){
       $('videoName').textContent = state.videoName + ' · ' + fmtClock(video.duration);
       buildMarkers();
+      // Al cargar el vídeo, colocarlo en el inicio del rango del
+      // tracking (el saque): el calentamiento anterior no se muestra.
+      var r = trackRange();
+      if (r && state.videoLoaded) video.currentTime = r.a;
       updateStatus();
     });
     video.addEventListener('error', function(){
@@ -691,6 +689,10 @@
       state.lastStatsSecond = -1;
       checkVideoMatch();
       updateStatus();
+      // Al cargar el tracking, si el vídeo ya está cargado, colocarlo
+      // en el inicio del rango (el saque).
+      var r = trackRange();
+      if (r && state.videoLoaded) video.currentTime = r.a;
       if (!state.videoLoaded && !window.VIDEO_URL) showMsg('Tracking cargado. Ahora carga el vídeo del partido para verlo con las cajas encima.');
     }
 
@@ -786,36 +788,48 @@
     $('playBtn').addEventListener('click', togglePlay);
     function togglePlay(){
       if (!state.videoLoaded && !state.track) { showMsg('Carga primero el vídeo del partido.'); return; }
+      // Al final del rango el vídeo queda en pausa: al darle a
+      // reproducir vuelve al inicio del rango (el saque).
+      var r = trackRange();
+      if (r && state.videoLoaded && video.paused && (video.currentTime || 0) >= r.b - 0.05) video.currentTime = r.a;
       if (video.paused) video.play(); else video.pause();
     }
     video.addEventListener('play', function(){ $('playBtn').textContent = '⏸ Pausar'; });
     video.addEventListener('pause', function(){ $('playBtn').textContent = '▶ Reproducir'; });
-    $('backBtn').addEventListener('click', function(){ video.currentTime = Math.max(0, video.currentTime - 5); });
-    $('fwdBtn').addEventListener('click', function(){ video.currentTime = Math.min(video.duration || 1e9, video.currentTime + 5); });
+    $('backBtn').addEventListener('click', function(){ seekTo(video.currentTime - 5); });
+    $('fwdBtn').addEventListener('click', function(){ seekTo(video.currentTime + 5); });
     var FRAME = 1/30;
-    $('frameBack').addEventListener('click', function(){ video.pause(); video.currentTime = Math.max(0, video.currentTime - FRAME); });
-    $('frameFwd').addEventListener('click', function(){ video.pause(); video.currentTime = video.currentTime + FRAME; });
+    $('frameBack').addEventListener('click', function(){ video.pause(); seekTo(video.currentTime - FRAME); });
+    $('frameFwd').addEventListener('click', function(){ video.pause(); seekTo(video.currentTime + FRAME); });
     $('speedSel').addEventListener('change', function(){ video.playbackRate = parseFloat(this.value); });
     $('volRange').addEventListener('input', function(){ video.volume = parseFloat(this.value); });
     seek.addEventListener('input', function(){
-      var dur = video.duration || (state.track ? kickoff() + (state.track.match_duration_s || 0) : 0);
-      if (dur > 0) video.currentTime = (parseFloat(this.value)/1000) * dur;
+      if (!state.videoLoaded) return;
+      var r = trackRange();
+      if (r) video.currentTime = r.a + (parseFloat(this.value)/1000) * (r.b - r.a);
+      else {
+        var dur = video.duration || 0;
+        if (dur > 0) video.currentTime = (parseFloat(this.value)/1000) * dur;
+      }
     });
     document.addEventListener('keydown', function(e){
       var tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.code === 'Space'){ e.preventDefault(); togglePlay(); }
-      else if (e.key === 'ArrowRight'){ video.currentTime = Math.min(video.duration || 1e9, video.currentTime + 5); }
-      else if (e.key === 'ArrowLeft'){ video.currentTime = Math.max(0, video.currentTime - 5); }
+      else if (e.key === 'ArrowRight'){ seekTo(video.currentTime + 5); }
+      else if (e.key === 'ArrowLeft'){ seekTo(video.currentTime - 5); }
     });
 
     function buildMarkers(){
       var box = $('markers'); box.innerHTML = '';
+      var r = trackRange();
       var total = video.duration || (state.track ? kickoff() + (state.track.match_duration_s || 0) : 0);
-      if (!total) return;
+      var a = 0, span = total;
+      if (r){ a = r.a; span = r.b - r.a; }
+      if (!span) return;
       state.events.forEach(function(ev){
         var vt = kickoff() + (ev.seconds || 0);
-        var pct = clamp(vt/total*100, 0, 100);
+        var pct = clamp((vt - a)/span*100, 0, 100);
         var m = document.createElement('div');
         m.className = 'marker'; m.style.left = pct + '%';
         m.title = (ev.event || 'Evento') + ' · ' + fmtClock(ev.seconds || 0);
@@ -823,8 +837,27 @@
       });
     }
 
+    /* Rango reproducible: con tracking cargado (y sin mismatch), el
+       vídeo se recorta a [primer sample, último sample] (el primer
+       sample es el saque, minuto de partido 00:00). El calentamiento
+       anterior y lo que hay después del tracking no se puede
+       reproducir: ni la barra, ni los saltos, ni los marcadores salen
+       de ese rango. Sin tracking, el vídeo se reproduce entero. */
+    function trackRange(){
+      if (!state.samples.length || state.trackMismatch) return null;
+      var a = state.samples[0].t, b = state.samples[state.samples.length-1].t;
+      if (!(b > a)) return null;
+      return { a: a, b: b };
+    }
+    function clampToRange(t){
+      var r = trackRange();
+      if (!r) return clamp(t, 0, video.duration || t);
+      return clamp(t, r.a, r.b);
+    }
+    function seekTo(t){ video.currentTime = clampToRange(t); }
+
     function jumpTo(videoT){
-      video.currentTime = clamp(videoT, 0, video.duration || videoT);
+      video.currentTime = clampToRange(videoT);
     }
 
     /* ================= Búsqueda binaria de muestra ================= */
@@ -855,6 +888,18 @@
       if (idx < 0) return -1;
       return Math.abs(state.samples[idx].t - t) <= TRACK_GAP_S ? idx : -1;
     }
+    /* Último sample con t <= tiempo dado (-1 si no hay ninguno). Sirve
+       para congelar las estadísticas acumuladas en un hueco interno. */
+    function lastSampleIdxLE(t){
+      var arr = state.samples, n = arr.length;
+      if (!n || t < arr[0].t) return -1;
+      var lo = 0, hi = n - 1;
+      while (lo < hi){
+        var mid = (lo + hi + 1) >> 1;
+        if (arr[mid].t <= t) lo = mid; else hi = mid - 1;
+      }
+      return lo;
+    }
     /* Rango temporal cubierto por el tracking, en tiempo de vídeo y en
        minuto de partido (según el saque del contexto). */
     function trackRangeText(){
@@ -862,27 +907,12 @@
       var a = state.samples[0].t, b = state.samples[state.samples.length-1].t;
       return 'Vídeo ' + fmtClock(a) + '–' + fmtClock(b) + ' · Partido ' + fmtMatch(a) + '–' + fmtMatch(b);
     }
-    /* Aviso "sin tracking para este momento": distinto de "sin tracking
-       cargado" (stageEmpty) y de "tracking de otro vídeo"
-       (stageMismatch). Solo se muestra con vídeo y tracking cargados,
-       sin mismatch y con el tracking visible, cuando el momento actual
-       queda fuera del rango cubierto. */
-    var _noTrackShown = null;
-    function updateNoTrackBanner(){
-      var el = $('stageNoTrack');
-      var show = !!state.track && state.videoLoaded && !state.trackMismatch &&
-                 state.samples.length > 0 && $('showTrack').checked &&
-                 currentSampleIdx(video.currentTime || 0) < 0;
-      if (show !== _noTrackShown){
-        _noTrackShown = show;
-        el.hidden = !show;
-      }
-      if (show){
-        $('noTrackDetail').textContent = 'El tracking cubre ' + trackRangeText() +
-          '. Este momento (Vídeo ' + fmtClock(video.currentTime || 0) +
-          ') no está cubierto: genera el tracking de esa parte del vídeo.';
-      }
-    }
+    /* Decisión sobre huecos internos del tracking: si entre el primer y
+       el último sample hay un salto > TRACK_GAP_S sin muestras,
+       currentSampleIdx() devuelve -1 y drawTracking() no dibuja cajas
+       en ese hueco (comportamiento actual, sin aviso). La reproducción
+       no se pausa ni salta: el vídeo sigue y las cajas reaparecen en el
+       siguiente sample válido. */
 
     /* ================= Dibujo del tracking ================= */
     function sizeCanvases(){
@@ -905,7 +935,6 @@
     function drawTracking(){
       var W = trackCanvas.width, H = trackCanvas.height;
       tctx.clearRect(0,0,W,H);
-      updateNoTrackBanner();
       // Si el tracking es de otro vídeo, no se dibuja nada (las cajas
       // serían falsas); el aviso grande lo explica.
       if (!$('showTrack').checked || !state.samples.length || state.trackMismatch) return;
@@ -1030,7 +1059,7 @@
       var stageEl = $('stage');
       stageEl.addEventListener('pointerdown', function(e){
         if (state.tool !== 'none' || zoom.z <= 1) return;
-        if (e.target.closest && e.target.closest('.stage-empty,.stage-mismatch,.stage-notrack')) return;
+        if (e.target.closest && e.target.closest('.stage-empty,.stage-mismatch')) return;
         zoom.pan = { x0: e.clientX, y0: e.clientY, tx0: zoom.tx, ty0: zoom.ty, moved: false };
         stageEl.setPointerCapture(e.pointerId);
       });
@@ -1261,6 +1290,15 @@
       });
     }
 
+    /* Acumulador incremental de posesión: updateLiveStats() corre en
+       cada fotograma y re-escanear desde la muestra 0 hasta la actual
+       (O(n) por fotograma, ~3 ms al final de un partido completo) hace
+       que la pantalla vaya a tirones. Se cachean los totales y solo se
+       suman las muestras nuevas desde el último índice; al ir hacia
+       atrás (seek) o al cargar otro tracking (otro array de muestras)
+       se reinicia. Da exactamente los mismos valores que el bucle
+       completo. */
+    var possAcc = { arr: null, idx: -1, cL: 0, cV: 0, timeL: 0, timeV: 0, timeU: 0 };
     function updateLiveStats(){
       var t = video.currentTime || 0;
       var sec = Math.floor(t);
@@ -1272,28 +1310,35 @@
         $('possLocalBar').style.width = '0%'; $('possVisBar').style.width = '0%';
         $('possLocalTime').textContent = '00:00'; $('possVisTime').textContent = '00:00';
         $('carrier').textContent = '—';
+        var unk0 = $('possUnknownLine'); if (unk0) unk0.hidden = true;
         var box0 = $('liveCounts'); if (box0) box0.innerHTML = '';
         return;
       }
-      // Posesión acumulada desde las muestras
+      // Posesión acumulada desde las muestras, hasta el tiempo actual
+      // (incremental: solo se suman las muestras nuevas). Los o=-1
+      // (sin dueño claro) no entran en el reparto entre equipos; su
+      // tiempo se acumula aparte como "en disputa".
       var idx = currentSampleIdx(t);
-      // Si el momento actual queda fuera del rango (p. ej. pasado el
-      // final del tracking), la posesión acumulada se congela en el
-      // último sample cubierto; el portador actual queda en '—'.
-      var idxAcc = idx;
-      if (idx < 0 && state.samples.length && t > state.samples[state.samples.length-1].t) idxAcc = state.samples.length - 1;
-      var cL = 0, cV = 0, timeL = 0, timeV = 0;
-      if (idxAcc >= 0){
-        var arr = state.samples;
-        for (var i = 0; i <= idxAcc; i++){
-          var cur = arr[i];
-          var nxt = arr[Math.min(i+1, arr.length-1)];
-          var dt = clamp(nxt.t - cur.t, 0, 1);
-          if (cur.o === 0){ cL++; timeL += dt; }
-          else if (cur.o === 1){ cV++; timeV += dt; }
-        }
+      // En un hueco interno sin muestras, la posesión acumulada se
+      // congela en el último sample válido (no se muestra '—').
+      var idxAcc = idx >= 0 ? idx : lastSampleIdxLE(t);
+      var arr = state.samples;
+      if (idxAcc < 0 || arr !== possAcc.arr || idxAcc < possAcc.idx){
+        possAcc = { arr: arr, idx: -1, cL: 0, cV: 0, timeL: 0, timeV: 0, timeU: 0 };
       }
+      for (var i = possAcc.idx + 1; i <= idxAcc; i++){
+        var cur = arr[i];
+        var nxt = arr[Math.min(i+1, arr.length-1)];
+        var dt = clamp(nxt.t - cur.t, 0, 1);
+        if (cur.o === 0){ possAcc.cL++; possAcc.timeL += dt; }
+        else if (cur.o === 1){ possAcc.cV++; possAcc.timeV += dt; }
+        else { possAcc.timeU += dt; }
+      }
+      possAcc.idx = Math.max(possAcc.idx, idxAcc);
+      var cL = possAcc.cL, cV = possAcc.cV;
+      var timeL = possAcc.timeL, timeV = possAcc.timeV, timeU = possAcc.timeU;
       var tot = cL + cV;
+      var unkLine = $('possUnknownLine');
       if (tot > 0){
         var pL = Math.round(cL/tot*100), pV = 100 - pL;
         $('possLocalPct').textContent = pL + '%';
@@ -1302,13 +1347,18 @@
         $('possVisBar').style.width = pV + '%';
         $('possLocalTime').textContent = fmtClock(timeL);
         $('possVisTime').textContent = fmtClock(timeV);
+        if (unkLine){
+          $('possUnknownTime').textContent = fmtClock(timeU);
+          unkLine.hidden = !(timeU >= 1);
+        }
       } else {
         $('possLocalPct').textContent = '–'; $('possVisPct').textContent = '–';
         $('possLocalBar').style.width = '0%'; $('possVisBar').style.width = '0%';
         $('possLocalTime').textContent = '00:00'; $('possVisTime').textContent = '00:00';
+        if (unkLine) unkLine.hidden = true;
       }
       var cur2 = idx >= 0 ? state.samples[idx] : null;
-      $('carrier').textContent = !cur2 ? '—' : cur2.o === 0 ? names.local : cur2.o === 1 ? names.visitante : 'Sin posesión clara';
+      $('carrier').textContent = !cur2 ? '—' : cur2.o === 0 ? names.local : cur2.o === 1 ? names.visitante : '—';
       if (sec === state.lastStatsSecond) return;
       state.lastStatsSecond = sec;
       // Conteos de eventos hasta el minuto actual
@@ -1736,16 +1786,36 @@
     $('tabBoard').addEventListener('click', function(){ setView('board'); });
 
     /* ================= Bucle principal ================= */
+    /* Hace cumplir el rango reproducible: si el vídeo se sale por
+       debajo del primer sample, vuelve a él; si llega al último
+       sample, se pausa ahí (no sigue hacia la parte sin tracking). */
+    function enforceRange(){
+      var r = trackRange();
+      if (!r || !state.videoLoaded) return;
+      var t = video.currentTime || 0;
+      if (t < r.a - 0.05) video.currentTime = r.a;
+      else if (t >= r.b - 0.03){
+        video.currentTime = r.b;
+        if (!video.paused) video.pause();
+      }
+    }
     function loop(){
       sizeCanvases();
       drawTracking();
       drawAnnotations();
       updateFollowBall();
       if (!$('boardWrap').hidden) drawBoard();
+      enforceRange();
       var t = video.currentTime || 0;
       var dur = video.duration || 0;
-      seek.value = dur > 0 ? String(Math.round(t/dur*1000)) : '0';
-      $('timeVideo').textContent = 'Vídeo ' + fmtClock(t) + (dur ? ' / ' + fmtClock(dur) : '');
+      var r = trackRange();
+      if (r){
+        seek.value = String(clamp(Math.round((t - r.a)/(r.b - r.a)*1000), 0, 1000));
+        $('timeVideo').textContent = 'Vídeo ' + fmtClock(t) + ' / ' + fmtClock(r.b);
+      } else {
+        seek.value = dur > 0 ? String(Math.round(t/dur*1000)) : '0';
+        $('timeVideo').textContent = 'Vídeo ' + fmtClock(t) + (dur ? ' / ' + fmtClock(dur) : '');
+      }
       $('timeMatch').textContent = 'Partido ' + fmtMatch(t);
       updateLiveStats();
       requestAnimationFrame(loop);
