@@ -6,29 +6,6 @@ import time
 import os
 from pathlib import Path
 
-# --- Módulo de vídeo (video_track.py). Si falta o faltan dependencias,
-# la app sigue funcionando; solo la pantalla de Vídeo avisa del problema.
-try:
-    from video_track import (
-        analyze_video_full, suggest_kickoff,
-        parse_mmss, format_mmss, VideoProcessingError,
-        DEFAULT_YOLO_MODEL,
-        DEFAULT_MIN_CONFIDENCE, DEFAULT_MAX_CANDIDATES,
-        DEFAULT_SAMPLE_FPS, EVENT_NAMES_ES,
-    )
-    VIDEO_DISPONIBLE = True
-    VIDEO_ERROR = ""
-except Exception as _video_err:  # noqa: BLE001 - el vídeo es opcional
-    analyze_video_full = None
-    suggest_kickoff = None
-    parse_mmss = None
-    format_mmss = None
-    VideoProcessingError = RuntimeError
-    DEFAULT_YOLO_MODEL = "yolo11s.pt"
-    DEFAULT_MIN_CONFIDENCE, DEFAULT_MAX_CANDIDATES, DEFAULT_SAMPLE_FPS = 0.65, 15, 10
-    EVENT_NAMES_ES = {}
-    VIDEO_DISPONIBLE = False
-    VIDEO_ERROR = str(_video_err)
 
 st.set_page_config(page_title="Match View - Regional Preferente Navarra", layout="wide")
 
@@ -83,15 +60,6 @@ if "pagina" not in st.session_state:
     st.session_state.pagina = "alineaciones"  # "alineaciones", "partido", "final", "video"
 if "eventos" not in st.session_state:
     st.session_state.eventos = []
-# Estado de la pantalla de Vídeo (análisis solo YOLO, video_track.py)
-if "video_informe" not in st.session_state:
-    st.session_state.video_informe = None
-if "video_seleccionado" not in st.session_state:
-    st.session_state.video_seleccionado = None
-if "video_kickoff_text" not in st.session_state:
-    st.session_state.video_kickoff_text = "00:00"
-if "video_anadidos" not in st.session_state:
-    st.session_state.video_anadidos = set()
 if "inicio_tiempo" not in st.session_state:
     st.session_state.inicio_tiempo = None
 if "tiempo_acumulado" not in st.session_state:
@@ -177,58 +145,6 @@ FORMACIONES_COORDS = {
     "1-5-3-2": [(8,50), (20,15), (20,32), (20,50), (20,68), (20,85), (34,30), (34,50), (34,70), (46,35), (46,65)]
 }
 
-# --- 3b. VÍDEO: jugadas de video_track.py -> eventos de match.py ---
-# El guardado desde vídeo es MANUAL: nada se añade al CSV sin pulsar
-# "Añadir a eventos". Zona: en cámara de seguimiento es "Sin especificar"
-# (la posición en imagen no es posición en el campo); en cámara fija amplia
-# video_track.py la calcula como aproximación Z1-Z9.
-MAPEO_VIDEO_EVENTO = {
-    "goal": ("Tiro", "Gol", 0.35),
-    "shot": ("Tiro", "A puerta", 0.18),
-    "shot_on_target": ("Tiro", "A puerta", 0.18),
-    "shot_off_target": ("Tiro", "Fuera", 0.10),
-    "pass": ("Ataque", "Pase", 0.04),
-    "key_pass": ("Ataque", "Pase clave", 0.12),
-    "cross": ("Ataque", "Centro", 0.08),
-    "corner": ("ABP", "Córner", 0.04),
-    "foul": ("Falta", "Cometida", 0.04),
-    "card": ("Disciplina", "Tarjeta", 0.04),
-    "duel": ("Defensa", "Duelo", 0.04),
-    "recovery": ("Defensa", "Recuperación", 0.04),
-    "loss": ("Posesión", "Pérdida", 0.04),
-    "transition": ("Ataque", "Transición", 0.06),
-    "counterattack": ("Ataque", "Contraataque", 0.08),
-    "area_entry": ("Ataque", "Entrada al área", 0.10),
-    "set_piece": ("ABP", "Balón parado", 0.04),
-    "gk_distribution": ("Posesión", "Distribución portero", 0.02),
-    # "uncertain": no se puede añadir (no hay jugada clara)
-}
-
-def video_resultado_a_evento(resultado, dp):
-    """Convierte un corte clasificado en un dict de evento de match.py."""
-    mapeo = MAPEO_VIDEO_EVENTO.get(resultado["event"])
-    if mapeo is None:
-        return None
-    evento, detalle, xt = mapeo
-    segundos = float(resultado["seconds"])
-    return {
-        "ID": len(st.session_state.eventos) + 1,
-        "Temporada": dp["temporada"],
-        "Competicion": dp["competicion"],
-        "Fecha": str(dp["fecha"]),
-        "Descripcion": dp["descripcion"],
-        "Periodo": "1ª Parte" if segundos < 2700 else "2ª Parte",
-        "Minuto": f"{int(segundos // 60):02d}:{int(segundos % 60):02d}",
-        "Equipo": resultado["team"],
-        "Zona": resultado["zone"],
-        "Evento": evento,
-        "Detalle": detalle,
-        "Jugador": "Vídeo IA",
-        "Segundo_Video": round(segundos, 1),
-        "X": resultado["ball_x"],
-        "Y": resultado["ball_y"],
-        "xT": xt,
-    }
 
 # --- 4. PANTALLA 1: MENÚ PRINCIPAL (ALINEACIONES Y CONFIGURACIÓN) ---
 if st.session_state.pagina == "alineaciones":
@@ -577,7 +493,7 @@ elif st.session_state.pagina == "final":
                 st.session_state.pagina = "alineaciones"
                 st.rerun()
 
-# --- 7. PANTALLA 4: VÍDEO (análisis solo YOLO) ---
+# --- 7. PANTALLA 4: VÍDEO (análisis manual) ---
 elif st.session_state.pagina == "video":
     dp = st.session_state.datos_partido
 
@@ -595,259 +511,18 @@ elif st.session_state.pagina == "video":
 
     st.divider()
 
-    if not VIDEO_DISPONIBLE:
-        st.error("⚠️ El módulo de vídeo no está disponible en este equipo.")
-        st.caption(f"Detalle: {VIDEO_ERROR}")
-        st.info("Instala las dependencias en PowerShell: "
-                "py -m pip install ultralytics opencv-python-headless")
-        st.stop()
-
-    st.caption("Cámara que sigue al balón (VEO o móvil): el tracking es relativo "
-               "(trayectoria, proximidad, velocidad, agrupación). La zona Z1-Z9 solo "
-               "se calcula como aproximación si eliges cámara fija amplia; en "
-               "seguimiento queda 'Sin especificar'. Los primeros minutos son "
-               "calentamiento: no se analizan.")
-
-    # --- Ruta del vídeo ---
-    ruta_video = st.text_input(
-        "Ruta local del vídeo del partido completo",
-        value=st.session_state.get("video_path", ""),
-        key="video_path_input",
-        placeholder=r"C:\Videos\partido_jornada1.mp4",
-    )
-    # Windows pega la ruta entre comillas cuando tiene espacios
-    # ("C:\Mis vídeos\partido.mp4"): se quitan, si no os.path.isfile
-    # no la encuentra y el análisis no arranca.
-    ruta_video = ruta_video.strip().strip('"').strip("'").strip()
-    st.session_state.video_path = ruta_video
-
-    # --- Saque inicial (manual manda; sugerencia automática opcional) ---
-    st.markdown("##### 🕐 Saque inicial (inicio del partido)")
-    c_k1, c_k2, c_k3 = st.columns([1.2, 1.4, 3])
-    with c_k1:
-        st.session_state.video_kickoff_text = st.text_input(
-            "Saque inicial (MM:SS)", value=st.session_state.video_kickoff_text,
-            key="video_kickoff_input",
-            help="Minuto:segundo del saque inicial en el vídeo. "
-                 "Todo lo anterior es calentamiento y no se analiza.",
-        )
-    with c_k2:
-        st.write("")
-        if st.button("🔍 Sugerir inicio", use_container_width=True,
-                     help="Busca el primer momento con balón en el centro y "
-                          "formación 11+11. Es una sugerencia: el valor manual manda."):
-            if ruta_video and os.path.isfile(ruta_video):
-                with st.spinner("Buscando el saque inicial (primeros 15 min, ~1-3 min en CPU)..."):
-                    try:
-                        sugerido = suggest_kickoff(Path(ruta_video))
-                    except VideoProcessingError as err:
-                        st.error(str(err))
-                        sugerido = None
-                if sugerido is not None:
-                    # Actualizar tanto el texto como la clave del widget, si no el
-                    # rerun restauraría el valor anterior del input.
-                    st.session_state.video_kickoff_text = format_mmss(sugerido)
-                    st.session_state.video_kickoff_input = format_mmss(sugerido)
-                    st.success(f"Saque inicial sugerido: {format_mmss(sugerido)}. "
-                               "Revísalo y corrígelo si hace falta.")
-                    st.rerun()
-                else:
-                    st.warning("No se encontró un saque inicial claro. Ponlo a mano (MM:SS).")
-            else:
-                st.warning("Primero escribe una ruta de vídeo válida.")
-    with c_k3:
-        st.write("")
-        st.caption("Ejemplo: si el saque inicial es a los 4:32 del vídeo, escribe 04:32. "
-                   "Todos los cortes se calculan relativos a ese inicio.")
-
-    # --- Colores de camiseta: heredados de Alineaciones, sin volver a elegir ---
-    # La herramienta ya sabe qué color es cada equipo: usa directamente
-    # dp["color_local"] / dp["color_visitante"], puestos en Alineaciones.
-    # Antes había dos desplegables aquí, y además Streamlit no actualizaba
-    # su valor al cambiar el color en Alineaciones (el widget guardaba el
-    # valor viejo en session_state), así que se quedaban los colores por
-    # defecto #1E88E5 / #E53935 aunque se hubieran cambiado antes.
-    st.markdown("##### 🎨 Colores de camiseta (de Alineaciones)")
-    st.caption(
-        "Ya están puestos en Alineaciones, no hace falta elegirlos otra vez. "
-        "Si quieres cambiarlos, vuelve a Alineaciones y cambia el Color Local / Visitante."
-    )
-    c_c1, c_c2 = st.columns(2)
-    with c_c1:
-        st.markdown(
-            f'<div style="background:{dp["color_local"]}; height:36px; border-radius:6px; '
-            f'border:1px solid #888;"></div>'
-            f'<div style="font-size:13px;">{dp["eq_local"]} (local) · {dp["color_local"]}</div>',
-            unsafe_allow_html=True,
-        )
-    with c_c2:
-        st.markdown(
-            f'<div style="background:{dp["color_visitante"]}; height:36px; border-radius:6px; '
-            f'border:1px solid #888;"></div>'
-            f'<div style="font-size:13px;">{dp["eq_visitante"]} (visitante) · {dp["color_visitante"]}</div>',
-            unsafe_allow_html=True,
-        )
-    color_local_elegido = dp["color_local"]
-    color_visitante_elegido = dp["color_visitante"]
-    st.markdown("##### 🧤 Porteros y árbitro (de Alineaciones)")
-    st.caption(
-        "También se ponen en Alineaciones. El portero cuenta como su equipo "
-        "y marca qué portería se ataca; el árbitro no cuenta para posesión."
-    )
-    c_g1, c_g2, c_g3 = st.columns(3)
-    for col, etiqueta, color in (
-            (c_g1, "Portero local", dp.get("color_portero_local", "#FFEB3B")),
-            (c_g2, "Portero visitante", dp.get("color_portero_visitante", "#FF9800")),
-            (c_g3, "Árbitro", dp.get("color_arbitro", "#000000"))):
-        with col:
-            st.markdown(
-                f'<div style="background:{color}; height:28px; border-radius:6px; '
-                f'border:1px solid #888;"></div>'
-                f'<div style="font-size:13px;">{etiqueta} · {color}</div>',
-                unsafe_allow_html=True,
-            )
-    color_portero_local_elegido = dp.get("color_portero_local", "#FFEB3B")
-    color_portero_visitante_elegido = dp.get("color_portero_visitante", "#FF9800")
-    color_arbitro_elegido = dp.get("color_arbitro", "#000000")
-
-    # --- Parámetros de análisis ---
-    st.markdown("##### ⚙️ Parámetros de análisis")
-    st.caption("CPU Ryzen 7 (sin GPU): un partido de 90 min tarda más que en tiempo real. "
-               "Prueba primero con 10 minutos. YOLO11s es el equilibrio; 11n es más rápido "
-               "y 11m más preciso pero más lento.")
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        sample_fps = st.slider("Muestreo (fps)", 1, 10, DEFAULT_SAMPLE_FPS,
-                               help="Fotogramas por segundo analizados. 10 fps por defecto.")
-        max_candidatos = st.slider("Máx. candidatos", 1, 20, DEFAULT_MAX_CANDIDATES)
-    with p2:
-        min_conf = st.slider("Confianza mínima", 0.50, 0.90, DEFAULT_MIN_CONFIDENCE, 0.05,
-                             help="Solo se corta clip si la clasificación confía al menos esto.")
-        yolo_modelo = st.selectbox("Modelo YOLO", ["yolo11s.pt", "yolo11n.pt", "yolo11m.pt"], index=0)
-    with p3:
-        camera_mode_txt = st.selectbox(
-            "Tipo de cámara",
-            ["Seguimiento (VEO / móvil)", "Fija amplia (todo el campo en plano)"],
-            index=0,
-            help="Seguimiento: la cámara sigue al balón; el tracking es relativo y la "
-                 "zona queda 'Sin especificar'. Fija amplia: se calcula Z1-Z9 por aproximación.",
-        )
-        alcance_txt = st.selectbox(
-            "Alcance", ["Primeros 10 minutos (prueba)", "Partido completo"], index=0,
-        )
-    # Mapa del campo siempre activo (no es una opción): calibra la cámara
-    # con las líneas del campo y pone cada jugador y el balón en metros
-    # reales (105x68 m). El tiro exige que el balón vaya hacia la
-    # portería rival, el gol se detecta al cruzar la línea y cada corte
-    # lleva el radar con los puntos de colores. La primera vez descarga
-    # el modelo pitch_keypoints.pt (~86 MB) de HuggingFace.
-    st.caption("🗺️ Mapa del campo siempre activo (homografía).")
-    st.info("Sin Groq: la clasificación la hace solo YOLO, con las señales del "
-              "tracking (velocidad, balón parado, cambio de posesión, agrupación, "
-              "avance, posición del portero y posición en fija amplia). No hace falta "
-              "API key ni internet. El portero marca qué portería se ataca: un balón "
-              "rápido junto al portero es tiro a puerta, y si lo supera y se pierde, gol.")
-
-    # --- Analizar ---
-    if st.button("▶️ Analizar vídeo", type="primary", use_container_width=True):
-        if not ruta_video or not os.path.isfile(ruta_video):
-            st.error("Escribe una ruta de vídeo válida.")
-        else:
-            try:
-                kickoff_s = parse_mmss(st.session_state.video_kickoff_text)
-            except (ValueError, TypeError):
-                st.error("El saque inicial debe ser MM:SS, por ejemplo 04:32.")
-                kickoff_s = None
-            if kickoff_s is not None:
-                barra = st.progress(0.0)
-                estado = st.empty()
-                def _progreso(mensaje, fraccion):
-                    barra.progress(min(1.0, max(0.0, float(fraccion))))
-                    estado.write(mensaje)
-                try:
-                    informe = analyze_video_full(
-                        Path(ruta_video),
-                        color_local=color_local_elegido,
-                        color_visitante=color_visitante_elegido,
-                        color_gk_local=color_portero_local_elegido,
-                        color_gk_visitante=color_portero_visitante_elegido,
-                        color_arbitro=color_arbitro_elegido,
-                        team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
-                        sample_fps=sample_fps, max_candidates=max_candidatos,
-                        min_confidence=min_conf, yolo_model=yolo_modelo,
-                        max_minutes=10.0 if alcance_txt.startswith("Primeros") else None,
-                        kickoff_offset=kickoff_s,
-                        camera_mode=("seguimiento" if camera_mode_txt.startswith("Seguimiento")
-                                     else "fija_amplia"),
-                        formation_local=dp["form_local"],
-                        formation_visitante=dp["form_visitante"],
-                        pitch_model=None,
-                        progress=_progreso,
-                    )
-                    st.session_state.video_informe = informe
-                    st.session_state.video_seleccionado = None
-                    estado.write("✅ Análisis completado.")
-                    if informe.get("mapa_pedido") and not informe.get("mapa_activo"):
-                        st.warning(
-                            "⚠️ El mapa del campo NO se activó: no se encontró el modelo "
-                            "pitch_keypoints.pt junto a video_track.py y no se pudo "
-                            "descargar de HuggingFace (¿sin internet?). Sin mapa no hay "
-                            "radar en los cortes, el tiro no exige ir hacia la portería "
-                            "rival y el gol no se detecta al cruzar la línea. Descarga el "
-                            "modelo (85 MB) de tu Drive "
-                            "(https://drive.google.com/file/d/1OX_xWS9xPY1s7exrqI8ejrWJ2ZQM8c9o/view) "
-                            "o de https://huggingface.co/Adit-jain/Soccana_Keypoint/"
-                            "resolve/main/Model/weights/best.pt y guárdalo como "
-                            "pitch_keypoints.pt en la misma carpeta que video_track.py."
-                        )
-                except VideoProcessingError as err:
-                    st.error(str(err))
-                except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo del análisis
-                    st.error(f"Error inesperado durante el análisis: {err}")
-
-    # --- Resultados: informe + tracking JSON ---
-    informe = st.session_state.video_informe
-    if informe:
-        st.divider()
-        st.markdown("#### 📋 Informe generado")
-        st.caption(f"Saque inicial: {format_mmss(informe['kickoff_offset_s'])} · "
-                   f"Partido analizado: {format_mmss(informe['match_duration_s'])} · "
-                   f"Muestras YOLO: {informe['samples_analyzed']}")
-        st.markdown("**Descargas:**")
-        c_d1, c_d2, c_d3, c_d4 = st.columns(4)
-        for col, clave, etiqueta in (
-                (c_d1, "informe_md", "⬇️ Informe (.md)"),
-                (c_d2, "eventos_csv", "⬇️ Eventos (.csv)"),
-                (c_d3, "estadisticas_csv", "⬇️ Estadísticas (.csv)"),
-                (c_d4, "tracking_json", "⬇️ Tracking (.json)")):
-            ruta_inf = informe.get(clave)
-            with col:
-                if ruta_inf and os.path.isfile(ruta_inf):
-                    with open(ruta_inf, "rb") as fh:
-                        st.download_button(etiqueta, data=fh.read(),
-                                           file_name=os.path.basename(ruta_inf),
-                                           key=f"video_dl_{clave}",
-                                           use_container_width=True)
-                elif clave == "tracking_json":
-                    st.caption("⚠️ El tracking JSON no se generó.")
-
-    # --- Parte 2: pantalla de análisis manual (nueva) ---
-    # Sustituye la visualización vieja de resultados (cortes como botones,
-    # radar y estadísticas en Streamlit): el análisis manual se hace en
-    # esta pantalla, que se alimenta del tracking JSON generado arriba (o de
-    # uno ya generado antes). La pantalla es un único HTML autocontenido
-    # (analizador_video.html, junto a match.py) y se incrusta tal cual.
-    st.divider()
+    # --- Análisis manual del vídeo ---
+    # El análisis manual se hace en esta pantalla (analizador_video.html,
+    # junto a match.py), que se alimenta de un tracking JSON generado por
+    # video_track.py (export_tracking_json) o de uno ya generado antes.
     st.markdown("#### 🎬 Análisis manual del vídeo")
     st.caption(
         "Aquí se analiza el partido a mano: carga el vídeo y el tracking JSON "
-        "que acaba de generar el análisis (botón ⬇️ Tracking (.json) "
-        "de arriba, o uno ya generado antes) y verás el tracking encima del "
-        "vídeo (cajas, balón, trayectoria), las estadísticas en vivo y "
-        "las herramientas para señalar jugadas (flechas, círculos, texto) y "
-        "marcar cortes. Todo lo que anotes se exporta en JSON al final. "
-        "La pantalla no lee los archivos sola: tienes que elegirlos con "
-        "los selectores de archivo de dentro."
+        "y verás el tracking encima del vídeo (cajas, balón, trayectoria), "
+        "las estadísticas en vivo y las herramientas para señalar jugadas "
+        "(flechas, círculos, texto) y marcar cortes. Todo lo que anotes se "
+        "exporta en JSON al final. La pantalla no lee los archivos sola: "
+        "tienes que elegirlos con los selectores de archivo de dentro."
     )
     ruta_pantalla = Path(__file__).resolve().parent / "analizador_video.html"
     if ruta_pantalla.is_file():
