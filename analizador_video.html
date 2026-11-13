@@ -64,6 +64,10 @@
       .stage-empty{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:24px; color:var(--mut); font-size:14.5px; }
       .stage-empty strong{ color:var(--txt); display:block; font-size:16px; margin-bottom:6px; }
       .stage-empty.hidden{ display:none; }
+      .stage-empty.warn{ background:rgba(11,14,19,.95); }
+      .stage-empty .warn-title{ font-size:21px; font-weight:700; color:var(--txt); display:block; margin-bottom:8px; }
+      .stage-empty .warn-sub{ font-size:15px; color:var(--mut); display:block; margin-bottom:18px; }
+      .stage-empty .big-pick{ font-size:16px; font-weight:600; padding:12px 24px; min-height:50px; }
 
       .controls{ margin-top:12px; }
       .seekwrap{ position:relative; height:26px; display:flex; align-items:center; }
@@ -182,9 +186,14 @@
             <canvas id="trackCanvas"></canvas>
             <canvas id="annoCanvas"></canvas>
             <div class="stage-empty" id="stageEmpty">
-              <div>
+              <div id="stageEmptyDefault">
                 <strong>Carga el vídeo del partido para empezar</strong>
                 Después carga el archivo JSON de tracking para ver las cajas, el balón y la trayectoria sobre el vídeo. Todo se procesa en tu equipo: ningún archivo sale de esta página.
+              </div>
+              <div id="stageEmptyNeedVideo" hidden>
+                <strong class="warn-title">Tracking cargado (<span id="needVideoSamples">0</span> muestras)</strong>
+                <span class="warn-sub">Selecciona el vídeo para verlo con el tracking encima.</span>
+                <button type="button" class="primary big-pick" id="needVideoPick">Seleccionar vídeo…</button>
               </div>
             </div>
           </div>
@@ -461,6 +470,22 @@
       setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 400);
     }
 
+    /* Aviso sobre el área de vídeo: con tracking cargado pero sin vídeo,
+       el navegador no puede abrir el archivo solo con su ruta, así que hay
+       que elegirlo con el selector. El aviso es grande y tapa el escenario
+       (fondo opaco) para que no se vean las cajas flotando sobre negro
+       sin vídeo detrás: imposible no verlo. */
+    function updateStageEmpty(){
+      var empty = $('stageEmpty');
+      if (state.videoLoaded){ empty.classList.add('hidden'); return; }
+      empty.classList.remove('hidden');
+      var needVideo = !!state.track;
+      $('stageEmptyDefault').hidden = needVideo;
+      $('stageEmptyNeedVideo').hidden = !needVideo;
+      empty.classList.toggle('warn', needVideo);
+      if (needVideo) $('needVideoSamples').textContent = state.samples.length.toLocaleString('es-ES');
+    }
+
     /* ================= Datos demo (sintéticos) ================= */
     function buildDemo(){
       var samples = [];
@@ -524,6 +549,7 @@
 
     /* ================= Carga de archivos ================= */
     $('videoPick').addEventListener('click', function(){ $('videoFile').click(); });
+    $('needVideoPick').addEventListener('click', function(){ $('videoFile').click(); });
     $('trackPick').addEventListener('click', function(){ $('trackFile').click(); });
     $('trackFallback').addEventListener('click', function(e){ e.preventDefault(); $('trackFile').click(); });
     $('importPick').addEventListener('click', function(){ $('importFile').click(); });
@@ -534,7 +560,7 @@
       video.src = URL.createObjectURL(f);
       state.videoName = f.name; state.videoLoaded = true;
       $('videoName').textContent = f.name;
-      $('stageEmpty').classList.add('hidden');
+      updateStageEmpty();
       updateStatus();
     });
     video.addEventListener('loadedmetadata', function(){
@@ -574,7 +600,7 @@
       state.samples = data.samples.slice().sort(function(a,b){ return a.t-b.t; });
       state.events = Array.isArray(data.events) ? data.events.slice().sort(function(a,b){ return a.seconds-b.seconds; }) : [];
       state.isDemo = !!isDemo;
-      $('stageEmpty').classList.add('hidden');
+      updateStageEmpty();
       $('trackName').textContent = label + (isDemo ? '' : ' · ' + state.samples.length.toLocaleString('es-ES') + ' muestras');
       var fw = $('trackFallbackWrap');
       if (fw) fw.hidden = true;
@@ -584,7 +610,7 @@
       state.lastStatsSecond = -1;
       updateStatus();
       if (!state.videoLoaded && !isDemo) showMsg('Tracking cargado. Ahora carga el vídeo del partido para verlo con las cajas encima.');
-      if (isDemo && !state.videoLoaded) showMsg('Demo de tracking cargada (sin vídeo: el escenario muestra las cajas sobre fondo negro). Carga un vídeo para ver la experiencia completa.');
+      if (isDemo && !state.videoLoaded) showMsg('Demo cargada. Selecciona el vídeo para verlo con el tracking encima.');
     }
 
     /* El análisis ya no clasifica eventos (decisión del usuario,

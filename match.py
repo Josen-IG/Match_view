@@ -561,6 +561,11 @@ elif st.session_state.pagina == "video":
             # se quitan, si no os.path.isfile no la encuentra.
             ruta_video = ruta_video.strip().strip('"').strip("'").strip()
             st.session_state.video_path = ruta_video
+            # La ruta solo alimenta el análisis (YOLO): el navegador no
+            # puede abrir un archivo local solo con su ruta, así que el
+            # vídeo para verlo se elige dentro de la pantalla manual.
+            st.caption("Esta ruta solo se usa para el análisis (YOLO). "
+                       "El vídeo para verlo se elige dentro de la pantalla manual.")
         with c_v2:
             st.session_state.video_kickoff_text = st.text_input(
                 "Saque inicial (MM:SS)",
@@ -711,6 +716,13 @@ elif st.session_state.pagina == "video":
     if tracking_elegido is None:
         st.warning("⚠️ No hay tracking para este vídeo ni en la carpeta: "
                    "la pantalla cargará solo el vídeo, sin cajas ni estadísticas.")
+    else:
+        # El tracking está cargado, pero el vídeo hay que elegirlo dentro
+        # de la pantalla manual (el navegador no abre un archivo local
+        # solo con su ruta): que quede claro el paso que falta.
+        st.info("✅ Tracking cargado. Ahora selecciona el vídeo dentro de la "
+                "pantalla manual (botón «Seleccionar vídeo…») para verlo con "
+                "el tracking encima.")
     ruta_pantalla = carpeta_app / "analizador_video.html"
     if ruta_pantalla.is_file():
         html_pantalla = ruta_pantalla.read_text(encoding="utf-8")
