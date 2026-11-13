@@ -2373,7 +2373,8 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                          output_path: str | Path,
                          formation_local: str = "",
                          formation_visitante: str = "",
-                         camera_mode: str = "seguimiento") -> str:
+                         camera_mode: str = "seguimiento",
+                         video_filename: str = "") -> str:
     """Escribe el tracking JSON que lee la pantalla de análisis manual.
 
     ``muestras`` son las del análisis (tras _suavizar_balon,
@@ -2381,7 +2382,10 @@ def export_tracking_json(muestras: list[dict], informe: dict,
     de _analizar_impl (results, possession_by_period, kickoff_offset_s,
     match_duration_s, team_local/visitante, team_colors). Los equipos y
     colores salen del contexto del análisis, nunca fijos: la pantalla
-    vale para cualquier partido. Devuelve la ruta escrita (str).
+    vale para cualquier partido. ``video_filename`` es el nombre del
+    archivo de vídeo del que sale el tracking: la pantalla manual lo
+    compara con el vídeo elegido y avisa si no corresponde (un tracking
+    es de un solo vídeo). Devuelve la ruta escrita (str).
     """
     samples = []
     for m in muestras:
@@ -2407,6 +2411,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
     colores = dict(informe.get("team_colors") or {})
     data = {
         "version": 1,
+        "video_filename": video_filename or informe.get("video_filename", ""),
         "kickoff_s": informe.get("kickoff_offset_s", 0.0),
         "match_duration_s": round(float(informe.get("match_duration_s", 0.0)), 1),
         "teams": {"local": informe.get("team_local", "Local"),
@@ -3612,6 +3617,7 @@ def _analizar_impl(
             formation_local=formation_local,
             formation_visitante=formation_visitante,
             camera_mode=camera_mode,
+            video_filename=video_path.name,
         )
     except Exception:
         tracking_path = None

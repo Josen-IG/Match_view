@@ -68,6 +68,10 @@
       .stage-empty .warn-title{ font-size:21px; font-weight:700; color:var(--txt); display:block; margin-bottom:8px; }
       .stage-empty .warn-sub{ font-size:15px; color:var(--mut); display:block; margin-bottom:18px; }
       .stage-empty .big-pick{ font-size:16px; font-weight:600; padding:12px 24px; min-height:50px; }
+      .stage-mismatch{ position:absolute; left:0; right:0; top:0; z-index:6; padding:16px 20px; text-align:center; background:rgba(120,20,20,.94); color:#fff; }
+      .stage-mismatch strong{ font-size:18px; display:block; margin-bottom:6px; }
+      .stage-mismatch span{ display:block; font-size:14px; margin-bottom:4px; }
+      .stage-mismatch .fn{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
 
       .controls{ margin-top:12px; }
       .seekwrap{ position:relative; height:26px; display:flex; align-items:center; }
@@ -190,6 +194,12 @@
                 <span class="warn-sub">Selecciona el vídeo para verlo con el tracking encima.</span>
                 <button type="button" class="primary big-pick" id="needVideoPick">Seleccionar vídeo…</button>
               </div>
+            </div>
+            <div class="stage-mismatch" id="stageMismatch" hidden>
+              <strong>⚠️ El tracking cargado es de otro vídeo</strong>
+              <span>Tracking: <b class="fn" id="mismatchTrackName"></b></span>
+              <span>Vídeo elegido: <b class="fn" id="mismatchVideoName"></b></span>
+              <span>Las cajas no corresponden a este vídeo, por eso no se dibujan. Genera el tracking de este vídeo (al subirlo en la app o con el notebook de Colab) para analizarlo.</span>
             </div>
           </div>
 
@@ -378,7 +388,7 @@
 
     var state = {
       videoName: '', videoLoaded: false,
-      track: null, samples: [], events: [],
+      track: null, samples: [], events: [], trackMismatch: false,
       annotations: [], cuts: [],
       tool: 'none', color: '#FFD21F',
       drawing: null,
@@ -481,6 +491,27 @@
       if (needVideo) $('needVideoSamples').textContent = state.samples.length.toLocaleString('es-ES');
     }
 
+    /* El tracking es de un solo vídeo: si el vídeo elegido no es el
+       del tracking (video_filename), no se dibujan las cajas para no
+       enseñar datos falsos. Un tracking antiguo sin video_filename se
+       dibuja normal (no se puede comprobar). */
+    function checkVideoMatch(){
+      var mismatch = false;
+      if (state.track && state.videoLoaded && state.track.video_filename){
+        mismatch = (state.track.video_filename !== state.videoName);
+      }
+      state.trackMismatch = mismatch;
+      var el = $('stageMismatch');
+      if (el){
+        el.hidden = !mismatch;
+        if (mismatch){
+          $('mismatchTrackName').textContent = state.track.video_filename;
+          $('mismatchVideoName').textContent = state.videoName;
+        }
+      }
+      return mismatch;
+    }
+
     /* ================= Carga de archivos ================= */
     $('videoPick').addEventListener('click', function(){ $('videoFile').click(); });
     $('needVideoPick').addEventListener('click', function(){ $('videoFile').click(); });
@@ -495,6 +526,7 @@
       state.videoName = f.name; state.videoLoaded = true;
       $('videoName').textContent = f.name;
       updateStageEmpty();
+      checkVideoMatch();
       updateStatus();
     });
     video.addEventListener('loadedmetadata', function(){
@@ -536,6 +568,7 @@
       renderEventList();
       renderFullSummary();
       state.lastStatsSecond = -1;
+      checkVideoMatch();
       updateStatus();
       if (!state.videoLoaded) showMsg('Tracking cargado. Ahora carga el vídeo del partido para verlo con las cajas encima.');
     }
@@ -704,7 +737,9 @@
     function drawTracking(){
       var W = trackCanvas.width, H = trackCanvas.height;
       tctx.clearRect(0,0,W,H);
-      if (!$('showTrack').checked || !state.samples.length) return;
+      // Si el tracking es de otro vídeo, no se dibuja nada (las cajas
+      // serían falsas); el aviso grande lo explica.
+      if (!$('showTrack').checked || !state.samples.length || state.trackMismatch) return;
       var t = video.currentTime || 0;
       var idx = nearestSampleIdx(t);
       if (idx < 0) return;
@@ -950,6 +985,16 @@
       var t = video.currentTime || 0;
       var sec = Math.floor(t);
       var names = teamNames();
+      // Si el tracking es de otro vídeo, sus estadísticas también serían
+      // falsas: se muestran en neutro y no se cuentan eventos.
+      if (state.trackMismatch){
+        $('possLocalPct').textContent = '–'; $('possVisPct').textContent = '–';
+        $('possLocalBar').style.width = '0%'; $('possVisBar').style.width = '0%';
+        $('possLocalTime').textContent = '00:00'; $('possVisTime').textContent = '00:00';
+        $('carrier').textContent = '—';
+        var box0 = $('liveCounts'); if (box0) box0.innerHTML = '';
+        return;
+      }
       // Posesión acumulada desde las muestras
       var idx = nearestSampleIdx(t);
       var cL = 0, cV = 0, timeL = 0, timeV = 0;

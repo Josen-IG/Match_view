@@ -3,9 +3,25 @@ import streamlit.components.v1 as components
 import json
 import pandas as pd
 from datetime import datetime, date
+import shutil
 import time
 import os
 from pathlib import Path
+
+# El análisis YOLO (generar tracking) es opcional en local: si el módulo
+# no está disponible en este equipo, la pantalla manual sigue funcionando
+# con un tracking ya generado (Colab / script). La pantalla manual en sí
+# no necesita video_track: el tracking se inyecta como JSON.
+try:
+    from video_track import analyze_video_full, parse_mmss, VideoProcessingError
+    VIDEO_DISPONIBLE = True
+    VIDEO_ERROR = ""
+except Exception as _err_video:  # noqa: BLE001 - sin YOLO no hay análisis local
+    analyze_video_full = None
+    parse_mmss = None
+    VideoProcessingError = Exception
+    VIDEO_DISPONIBLE = False
+    VIDEO_ERROR = str(_err_video)
 
 # El tracking JSON se genera fuera de la app (notebook de Colab
 # analyze_colab.ipynb con GPU, o por script/VM) y la pantalla de Vídeo
@@ -517,6 +533,133 @@ elif st.session_state.pagina == "video":
 
     st.divider()
 
+    # --- Generar tracking al proporcionar el vídeo (automático) ---
+    # Al pegar la ruta del vídeo, la app lanza el análisis YOLO en ese
+    # mismo momento (la subida es el disparador, no hay botón de analizar):
+    # el tracking que se enseña abajo es el recién generado de ESE vídeo.
+    # Si el vídeo ya tiene su tracking (mismo stem), se carga directamente
+    # sin re-analizar. El botón de re-analizar es solo un fallback.
+    st.markdown("##### 🎥 Vídeo del partido")
+    st.caption(
+        "Pega la ruta del vídeo y el tracking se genera solo (YOLO, en "
+        "local). Si el vídeo ya tiene su tracking, se carga directamente. "
+        "También puedes generar el tracking con el notebook de Colab (GPU) "
+        "y poner el JSON en la carpeta."
+    )
+    c_gen1, c_gen2, c_gen3 = st.columns([3, 1, 1.4])
+    with c_gen1:
+        ruta_gen = st.text_input(
+            "Ruta local del vídeo",
+            value=st.session_state.get("video_gen_path", ""),
+            key="video_gen_path_input",
+            placeholder=r"C:\Videos\partido.mp4",
+        )
+        # Windows pega la ruta entre comillas cuando tiene espacios.
+        ruta_gen = ruta_gen.strip().strip('"').strip("'").strip()
+        st.session_state.video_gen_path = ruta_gen
+    with c_gen2:
+        st.session_state.video_gen_kickoff = st.text_input(
+            "Saque inicial (MM:SS)",
+            value=st.session_state.get("video_gen_kickoff", "00:00"),
+            key="video_gen_kickoff_input",
+        )
+    with c_gen3:
+        alcance_gen = st.selectbox(
+            "Alcance",
+            ["Primeros 10 minutos (prueba)", "Partido completo"],
+            key="video_gen_alcance",
+        )
+    # ¿Ya existe tracking para este vídeo? (mismo stem, en la carpeta de
+    # la app, junto al vídeo o en su carpeta de clips).
+    tracking_gen = None
+    if ruta_gen:
+        stem_gen = Path(ruta_gen).stem
+        for cand in (
+            carpeta_app / f"{stem_gen}_tracking.json",
+            Path(ruta_gen).parent / f"{stem_gen}_tracking.json",
+            Path(ruta_gen).parent / f"{stem_gen}_clips" / f"{stem_gen}_tracking.json",
+        ):
+            if cand.is_file():
+                tracking_gen = cand
+                break
+    forzar_gen = st.session_state.pop("video_forzar", False)
+    ya_cargado_gen = bool(ruta_gen) and st.session_state.get("video_analizado_path") == ruta_gen
+    fallo_gen = bool(ruta_gen) and st.session_state.get("video_fallo_path") == ruta_gen
+    if ruta_gen and not os.path.isfile(ruta_gen):
+        st.warning("⚠️ Esa ruta de vídeo no existe en este equipo. Revisa la ruta.")
+    elif ruta_gen and tracking_gen is not None and not forzar_gen and not ya_cargado_gen:
+        # Tracking ya generado: cargarlo sin re-analizar.
+        st.session_state.video_analizado_path = ruta_gen
+        st.session_state.pop("video_fallo_path", None)
+        st.session_state["tracking_del_video"] = str(tracking_gen)
+        st.success(f"✅ Tracking ya generado para este vídeo ({tracking_gen.name}). Cargado en la pantalla manual.")
+    elif ruta_gen and (tracking_gen is None or forzar_gen) and not ya_cargado_gen and not fallo_gen:
+        # No hay tracking: lanzar el análisis automáticamente.
+        if not VIDEO_DISPONIBLE:
+            st.error(f"⚠️ El análisis no está disponible en este equipo: {VIDEO_ERROR}. "
+                     "Genera el tracking con el notebook de Colab.")
+            st.session_state.video_fallo_path = ruta_gen
+        else:
+            try:
+                kickoff_gen = parse_mmss(st.session_state.video_gen_kickoff)
+            except (ValueError, TypeError):
+                st.error("El saque inicial debe ser MM:SS, por ejemplo 17:06.")
+                st.session_state.video_fallo_path = ruta_gen
+                kickoff_gen = None
+            if kickoff_gen is not None:
+                barra_gen = st.progress(0.0)
+                estado_gen = st.empty()
+                def _progreso_gen(mensaje, fraccion):
+                    barra_gen.progress(min(1.0, max(0.0, float(fraccion))))
+                    estado_gen.write(mensaje)
+                try:
+                    informe_gen = analyze_video_full(
+                        Path(ruta_gen),
+                        color_local=dp["color_local"],
+                        color_visitante=dp["color_visitante"],
+                        color_gk_local=dp.get("color_portero_local", "#FFEB3B"),
+                        color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
+                        color_arbitro=dp.get("color_arbitro", "#000000"),
+                        team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
+                        sample_fps=10 if alcance_gen.startswith("Primeros") else 5,
+                        min_confidence=0.65, yolo_model="yolo11s.pt",
+                        max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
+                        kickoff_offset=kickoff_gen,
+                        camera_mode="seguimiento",
+                        formation_local=dp.get("form_local", ""),
+                        formation_visitante=dp.get("form_visitante", ""),
+                        pitch_model=None,
+                        progress=_progreso_gen,
+                        device="cpu",
+                    )
+                    # Copiar el tracking JSON a la carpeta de la app para
+                    # que la pantalla manual lo encuentre en próximas sesiones.
+                    ruta_tracking_gen = informe_gen.get("tracking_json")
+                    if ruta_tracking_gen and os.path.isfile(ruta_tracking_gen):
+                        destino_gen = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
+                        if Path(ruta_tracking_gen).resolve() != destino_gen.resolve():
+                            shutil.copy(ruta_tracking_gen, destino_gen)
+                        tracking_gen = destino_gen
+                    st.session_state.video_analizado_path = ruta_gen
+                    st.session_state.pop("video_fallo_path", None)
+                    if tracking_gen is not None:
+                        st.session_state["tracking_del_video"] = str(tracking_gen)
+                    estado_gen.write("✅ Análisis completado: tracking generado de este vídeo.")
+                    st.rerun()
+                except VideoProcessingError as err:
+                    st.error(str(err))
+                    st.session_state.video_fallo_path = ruta_gen
+                except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
+                    st.error(f"Error inesperado durante el análisis: {err}")
+                    st.session_state.video_fallo_path = ruta_gen
+    # Fallback: re-analizar aunque ya exista tracking o haya fallado antes.
+    if ruta_gen and (ya_cargado_gen or fallo_gen):
+        if st.button("🔄 Re-analizar vídeo", key="video_gen_reanalizar"):
+            st.session_state.pop("video_analizado_path", None)
+            st.session_state.pop("video_fallo_path", None)
+            st.session_state.video_forzar = True
+            st.rerun()
+
     # --- Análisis manual del vídeo ---
     # El análisis manual se hace en esta pantalla (analizador_video.html,
     # junto a match.py). El tracking (tracking_*.json, generado con el
@@ -525,33 +668,40 @@ elif st.session_state.pagina == "video":
     # de la pantalla (4,2 GB, no se puede incrustar).
     st.markdown("#### 🎬 Análisis manual del vídeo")
     st.caption(
-        "El tracking se genera fuera de la app (notebook de Colab con GPU "
-        "o por script) y se carga solo de la carpeta. Elige el vídeo "
-        "dentro de la pantalla y analiza a mano: cajas, balón y "
-        "trayectoria encima del vídeo, estadísticas en vivo, flechas, "
-        "círculos y texto para señalar jugadas, y cortes. Todo se exporta "
-        "en JSON al final."
+        "El tracking es el del vídeo proporcionado arriba (se genera al "
+        "proporcionarlo) o, si no se ha proporcionado ninguno, el de la "
+        "carpeta. Elige el vídeo dentro de la pantalla y analiza a mano: "
+        "cajas, balón y trayectoria encima del vídeo, estadísticas en vivo, "
+        "flechas, círculos y texto para señalar jugadas, y cortes. Todo se "
+        "exporta en JSON al final."
     )
-    # Qué tracking inyectar: uno de la carpeta (tracking_*.json).
+    # Qué tracking inyectar.
+    # Prioridad: el del vídeo proporcionado arriba (recién generado o ya
+    # existente para ese vídeo) > el elegido en la carpeta (tracking_*.json).
     tracking_elegido = None
-    archivos_tracking = sorted(carpeta_app.glob("tracking_*.json"))
-    if len(archivos_tracking) > 1:
-        nombres_tracking = [a.name for a in archivos_tracking]
-        if st.session_state.get("tracking_elegido") not in nombres_tracking:
-            st.session_state.tracking_elegido = nombres_tracking[0]
-        st.selectbox(
-            "Tracking del partido",
-            nombres_tracking,
-            key="tracking_elegido",
-            help="Hay varios tracking en la carpeta; elige el del partido que vas a analizar.",
-        )
-        tracking_elegido = carpeta_app / st.session_state.tracking_elegido
-    elif len(archivos_tracking) == 1:
-        tracking_elegido = archivos_tracking[0]
+    ruta_del_video = st.session_state.get("tracking_del_video", "")
+    if ruta_del_video and os.path.isfile(ruta_del_video):
+        tracking_elegido = Path(ruta_del_video)
+    if tracking_elegido is None:
+        archivos_tracking = sorted(carpeta_app.glob("tracking_*.json"))
+        if len(archivos_tracking) > 1:
+            nombres_tracking = [a.name for a in archivos_tracking]
+            if st.session_state.get("tracking_elegido") not in nombres_tracking:
+                st.session_state.tracking_elegido = nombres_tracking[0]
+            st.selectbox(
+                "Tracking del partido",
+                nombres_tracking,
+                key="tracking_elegido",
+                help="Hay varios tracking en la carpeta; elige el del partido que vas a analizar.",
+            )
+            tracking_elegido = carpeta_app / st.session_state.tracking_elegido
+        elif len(archivos_tracking) == 1:
+            tracking_elegido = archivos_tracking[0]
     if tracking_elegido is None:
         st.warning("⚠️ No hay ningún tracking (tracking_*.json) en la carpeta: "
                    "la pantalla cargará solo el vídeo, sin cajas ni estadísticas. "
-                   "Genera el tracking con el notebook de Colab o por script.")
+                   "Proporciona el vídeo arriba para generar su tracking, o genera "
+                   "el tracking con el notebook de Colab o por script.")
     else:
         # El tracking está cargado, pero el vídeo hay que elegirlo dentro
         # de la pantalla manual (el navegador no abre un archivo local
