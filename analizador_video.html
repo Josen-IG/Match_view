@@ -974,9 +974,14 @@
           tctx.lineWidth = 1.5; tctx.strokeStyle = 'rgba(0,0,0,.55)'; tctx.stroke();
         } else {
           var left = (x - w/2)/100*W, top = (y - h/2)/100*H, bw = w/100*W, bh = h/100*H;
-          tctx.lineWidth = 2;
+          // Ninguna caja se rellena: el relleno sólido tapaba al jugador
+          // cuando se clasificaba como portero (el color parpadea entre
+          // fotogramas y la caja pasaba de borde a relleno). El portero
+          // se distingue solo por el borde: más grueso (códigos 2 y 3)
+          // y con su color, sin tapar nunca al jugador.
+          var isGk = (code === 2 || code === 3);
+          tctx.lineWidth = isGk ? 4 : 2;
           tctx.strokeStyle = col;
-          if (code === 2){ tctx.fillStyle = col; tctx.fillRect(left, top, bw, bh); tctx.strokeStyle = '#ffffff'; }
           tctx.strokeRect(left, top, bw, bh);
           drawTriangle(tctx, cx, top - 11, 5.5, col, true);
         }
