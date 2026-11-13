@@ -204,7 +204,7 @@
         <section class="stage-wrap" id="stageWrap">
           <div class="stage" id="stage">
             <div id="stageInner">
-              <video id="video" playsinline preload="metadata"></video>
+              <video id="video" playsinline preload="metadata" crossorigin="anonymous"></video>
               <canvas id="trackCanvas"></canvas>
               <canvas id="annoCanvas"></canvas>
             </div>
@@ -463,7 +463,7 @@
     var actx = annoCanvas.getContext('2d');
 
     var state = {
-      videoName: '', videoLoaded: false,
+      videoName: '', videoLoaded: false, videoFromServer: false,
       track: null, samples: [], events: [], trackMismatch: false,
       annotations: [], cuts: [],
       tool: 'none', color: '#FFD21F',
@@ -556,7 +556,9 @@
        el navegador no puede abrir el archivo solo con su ruta, así que hay
        que elegirlo con el selector. El aviso es grande y tapa el escenario
        (fondo opaco) para que no se vean las cajas flotando sobre negro
-       sin vídeo detrás: imposible no verlo. */
+       sin vídeo detrás: imposible no verlo. Si la app sirve el vídeo
+       (window.VIDEO_URL, ver loadVideoFromUrl), se carga solo y este
+       aviso no aparece; queda solo para cuando no hay auto-carga. */
     function updateStageEmpty(){
       var empty = $('stageEmpty');
       if (state.videoLoaded){ empty.classList.add('hidden'); return; }
@@ -589,6 +591,25 @@
       return mismatch;
     }
 
+    /* Carga automática del vídeo servido por la app (window.VIDEO_URL):
+       cuando el tracking inyectado es el del vídeo proporcionado en la
+       app, Streamlit sirve ese archivo por HTTP y la pantalla lo carga
+       sola, sin volver a elegirlo con el selector. El selector sigue
+       como alternativa (elegir otro archivo). Con crossorigin="anonymous"
+       en el <video> y las cabeceras CORS del servidor, el canvas no se
+       contamina y el overlay y la captura PNG siguen funcionando. */
+    function loadVideoFromUrl(url, name){
+      if (!url) return;
+      video.src = url;
+      state.videoName = name || (state.track && state.track.video_filename) || 'vídeo';
+      state.videoLoaded = true;
+      state.videoFromServer = true;
+      $('videoName').textContent = state.videoName + ' · cargando…';
+      updateStageEmpty();
+      checkVideoMatch();
+      updateStatus();
+    }
+
     /* ================= Carga de archivos ================= */
     $('videoPick').addEventListener('click', function(){ $('videoFile').click(); });
     $('needVideoPick').addEventListener('click', function(){ $('videoFile').click(); });
@@ -598,9 +619,9 @@
     $('videoFile').addEventListener('change', function(e){
       var f = e.target.files && e.target.files[0];
       if (!f) return;
-      if (video.src) URL.revokeObjectURL(video.src);
+      if (video.src && video.src.indexOf('blob:') === 0) URL.revokeObjectURL(video.src);
       video.src = URL.createObjectURL(f);
-      state.videoName = f.name; state.videoLoaded = true;
+      state.videoName = f.name; state.videoLoaded = true; state.videoFromServer = false;
       $('videoName').textContent = f.name;
       updateStageEmpty();
       checkVideoMatch();
@@ -612,6 +633,20 @@
       updateStatus();
     });
     video.addEventListener('error', function(){
+      if (state.videoFromServer){
+        // La carga automática desde el servidor local falló (p. ej. la
+        // app no sirve el vídeo en este entorno): volver al estado sin
+        // vídeo para que aparezca el aviso grande y el selector.
+        state.videoFromServer = false;
+        state.videoLoaded = false;
+        state.videoName = '';
+        video.removeAttribute('src');
+        video.load();
+        updateStageEmpty();
+        updateStatus();
+        showMsg('No se pudo cargar el vídeo automáticamente; elígelo con «Seleccionar vídeo…».');
+        return;
+      }
       if (state.videoLoaded) showMsg('No se pudo reproducir ese vídeo en el navegador. Prueba con un MP4 (H.264).');
     });
 
@@ -648,7 +683,7 @@
       state.lastStatsSecond = -1;
       checkVideoMatch();
       updateStatus();
-      if (!state.videoLoaded) showMsg('Tracking cargado. Ahora carga el vídeo del partido para verlo con las cajas encima.');
+      if (!state.videoLoaded && !window.VIDEO_URL) showMsg('Tracking cargado. Ahora carga el vídeo del partido para verlo con las cajas encima.');
     }
 
     /* El análisis ya no clasifica eventos (decisión del usuario,
@@ -1664,6 +1699,11 @@
     } else {
       var fw0 = $('trackFallbackWrap');
       if (fw0) fw0.hidden = false;
+    }
+    /* Vídeo servido por la app (window.VIDEO_URL): se carga solo al
+       arrancar, sin volver a elegirlo con el selector. */
+    if (window.VIDEO_URL && !state.videoLoaded) {
+      loadVideoFromUrl(window.VIDEO_URL, window.VIDEO_NAME || '');
     }
     requestAnimationFrame(loop);
     </script>

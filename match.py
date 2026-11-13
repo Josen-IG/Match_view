@@ -9,6 +9,10 @@ import os
 import subprocess
 import tempfile
 import bisect
+import threading
+import re
+import mimetypes
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 # OpenCV solo se necesita para exportar clips con overlay; si no está,
@@ -61,6 +65,124 @@ except Exception as _err_video:  # noqa: BLE001 - sin YOLO no hay análisis loca
 # El tracking JSON se genera fuera de la app (notebook de Colab
 # analyze_colab.ipynb con GPU, o por script/VM) y la pantalla de Vídeo
 # lo carga de la carpeta (tracking_*.json junto a match.py).
+
+# --- Servidor local del vídeo (auto-carga en la pantalla manual) ---
+# El navegador no puede abrir un vídeo local solo con su ruta, así que la
+# app sirve ese archivo por HTTP (hilo en segundo plano, con soporte de
+# rangos para poder buscar por el vídeo, y cabeceras CORS) y la pantalla
+# manual lo carga sola con su URL: al terminar el análisis, el vídeo ya
+# aparece con el tracking encima, sin volver a elegirlo abajo. El selector
+# de archivos de la pantalla sigue como alternativa. El servidor vive en
+# un global de módulo (cada re-ejecución de Streamlit corre en el mismo
+# proceso) para no re-crearlo en cada rerun: mismo puerto, y solo cambia
+# el archivo servido cuando cambia la ruta del vídeo. Si el servidor no
+# se puede arrancar (p. ej. en un despliegue remoto), servir_video
+# devuelve "" y la pantalla cae al selector de archivos.
+_VIDEO_SERVE = {"server": None, "port": None, "path": None, "error": ""}
+
+
+class _VideoFileHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args):  # silenciar el log del servidor
+        pass
+
+    def _send_cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Range")
+        self.send_header("Access-Control-Expose-Headers",
+                         "Content-Range, Accept-Ranges, Content-Length")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors()
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.end_headers()
+
+    def do_HEAD(self):
+        self._serve(head_only=True)
+
+    def do_GET(self):
+        self._serve(head_only=False)
+
+    def _serve(self, head_only):
+        path = _VIDEO_SERVE.get("path")
+        if not path or not os.path.isfile(path):
+            self.send_response(404)
+            self._send_cors()
+            self.end_headers()
+            return
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            self.send_response(404)
+            self._send_cors()
+            self.end_headers()
+            return
+        start, end = 0, size - 1
+        rango = self.headers.get("Range")
+        if rango:
+            m = re.match(r"bytes=(\d*)-(\d*)", rango.strip())
+            if m:
+                if m.group(1):
+                    start = int(m.group(1))
+                if m.group(2):
+                    end = int(m.group(2))
+                end = min(end, size - 1)
+                if start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self._send_cors()
+                    self.end_headers()
+                    return
+        length = end - start + 1
+        ctype = mimetypes.guess_type(path)[0] or "video/mp4"
+        self.send_response(206 if rango else 200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if rango:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self._send_cors()
+        self.end_headers()
+        if head_only:
+            return
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                restante = length
+                while restante > 0:
+                    trozo = f.read(min(1024 * 1024, restante))
+                    if not trozo:
+                        break
+                    self.wfile.write(trozo)
+                    restante -= len(trozo)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+def servir_video(ruta):
+    """Sirve el vídeo local por HTTP y devuelve su URL, o "" si no se puede.
+    El servidor se crea una sola vez (mismo puerto); si cambia la ruta, solo
+    cambia el archivo servido y la URL sigue siendo la misma."""
+    ruta = str(ruta)
+    if not os.path.isfile(ruta):
+        return ""
+    srv = _VIDEO_SERVE.get("server")
+    if srv is not None and _VIDEO_SERVE.get("path") == ruta:
+        return f"http://127.0.0.1:{_VIDEO_SERVE['port']}/video.mp4"
+    _VIDEO_SERVE["path"] = ruta
+    if srv is None:
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), _VideoFileHandler)
+            srv.daemon_threads = True
+            _VIDEO_SERVE["server"] = srv
+            _VIDEO_SERVE["port"] = srv.server_address[1]
+            _VIDEO_SERVE["error"] = ""
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+        except OSError as err:
+            _VIDEO_SERVE["server"] = None
+            _VIDEO_SERVE["error"] = str(err)
+            return ""
+    return f"http://127.0.0.1:{_VIDEO_SERVE['port']}/video.mp4"
 
 
 st.set_page_config(page_title="Match View - Regional Preferente Navarra", layout="wide")
@@ -1036,10 +1158,11 @@ elif st.session_state.pagina == "video":
     st.caption(
         "El tracking es el del vídeo proporcionado arriba (se genera al "
         "proporcionarlo) o, si no se ha proporcionado ninguno, el de la "
-        "carpeta. Elige el vídeo dentro de la pantalla y analiza a mano: "
-        "cajas, balón y trayectoria encima del vídeo, estadísticas en vivo, "
-        "flechas, círculos y texto para señalar jugadas, y cortes. Todo se "
-        "exporta en JSON al final."
+        "carpeta. Si el vídeo se proporcionó arriba, se carga solo en la "
+        "pantalla con el tracking encima; si no, elige el vídeo dentro de "
+        "la pantalla y analiza a mano: cajas, balón y trayectoria encima "
+        "del vídeo, estadísticas en vivo, flechas, círculos y texto para "
+        "señalar jugadas, y cortes. Todo se exporta en JSON al final."
     )
     # Qué tracking inyectar.
     # Prioridad: el del vídeo proporcionado arriba (recién generado o ya
@@ -1063,11 +1186,24 @@ elif st.session_state.pagina == "video":
             tracking_elegido = carpeta_app / st.session_state.tracking_elegido
         elif len(archivos_tracking) == 1:
             tracking_elegido = archivos_tracking[0]
+    # ¿Se puede auto-cargar el vídeo en la pantalla manual? Solo si el
+    # tracking inyectado es el del vídeo proporcionado arriba: ese vídeo
+    # se sirve por HTTP (ver servir_video) y la pantalla lo carga sola,
+    # sin volver a elegirlo. Si el tracking es otro (elegido en la
+    # carpeta), el vídeo se elige a mano dentro de la pantalla.
+    url_video = ""
+    if (tracking_elegido is not None and ruta_del_video
+            and Path(ruta_del_video) == tracking_elegido
+            and ruta_gen and os.path.isfile(ruta_gen)):
+        url_video = servir_video(ruta_gen)
     if tracking_elegido is None:
         st.warning("⚠️ No hay ningún tracking (tracking_*.json) en la carpeta: "
                    "la pantalla cargará solo el vídeo, sin cajas ni estadísticas. "
                    "Proporciona el vídeo arriba para generar su tracking, o genera "
                    "el tracking con el notebook de Colab o por script.")
+    elif url_video:
+        st.success("✅ Tracking cargado y vídeo listo: el vídeo se carga solo "
+                   "en la pantalla manual con el tracking encima.")
     else:
         # El tracking está cargado, pero el vídeo hay que elegirlo dentro
         # de la pantalla manual (el navegador no abre un archivo local
@@ -1083,12 +1219,20 @@ elif st.session_state.pagina == "video":
             try:
                 datos_tracking = json.loads(tracking_elegido.read_text(encoding="utf-8"))
                 # Inyectar antes del script principal. Se escapa "<" para
-                # que ningún texto del JSON pueda cerrar el <script>.
+                # que ningún texto del JSON pueda cerrar el <script>. Si el
+                # vídeo se sirve por HTTP (url_video), se pasa también su
+                # URL y su nombre para que la pantalla lo cargue solo.
                 inj = ("<script>window.TRACKING_DATA = "
                        + json.dumps(datos_tracking, ensure_ascii=False).replace("<", "\\u003c")
                        + "; window.TRACKING_FILE_NAME = "
                        + json.dumps(tracking_elegido.name, ensure_ascii=False)
-                       + ";</script>")
+                       + ";")
+                if url_video:
+                    inj += ("window.VIDEO_URL = " + json.dumps(url_video)
+                            + "; window.VIDEO_NAME = "
+                            + json.dumps(Path(ruta_gen).name, ensure_ascii=False)
+                            + ";")
+                inj += "</script>"
                 html_pantalla = html_pantalla.replace("<!-- TRACKING_DATA -->", inj, 1)
             except (ValueError, OSError) as err:
                 st.warning(f"⚠️ No se pudo cargar {tracking_elegido.name}: {err}. "
