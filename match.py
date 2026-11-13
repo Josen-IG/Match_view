@@ -1,5 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import json
 import pandas as pd
 from datetime import datetime, date
 import time
@@ -513,20 +514,55 @@ elif st.session_state.pagina == "video":
 
     # --- Análisis manual del vídeo ---
     # El análisis manual se hace en esta pantalla (analizador_video.html,
-    # junto a match.py), que se alimenta de un tracking JSON generado por
-    # video_track.py (export_tracking_json) o de uno ya generado antes.
+    # junto a match.py). El tracking ya viene cargado: se busca un
+    # tracking_*.json en la carpeta (viene del repo con git pull) y se
+    # inyecta en el HTML, así que no hay que subirlo a mano. Solo falta
+    # elegir el vídeo (4,2 GB, no se puede incrustar).
     st.markdown("#### 🎬 Análisis manual del vídeo")
     st.caption(
-        "Aquí se analiza el partido a mano: carga el vídeo y el tracking JSON "
-        "y verás el tracking encima del vídeo (cajas, balón, trayectoria), "
-        "las estadísticas en vivo y las herramientas para señalar jugadas "
-        "(flechas, círculos, texto) y marcar cortes. Todo lo que anotes se "
-        "exporta en JSON al final. La pantalla no lee los archivos sola: "
-        "tienes que elegirlos con los selectores de archivo de dentro."
+        "Aquí se analiza el partido a mano: el tracking ya viene cargado "
+        "de la carpeta, solo tienes que elegir el vídeo y verás el "
+        "tracking encima (cajas, balón, trayectoria), las estadísticas "
+        "en vivo y las herramientas para señalar jugadas (flechas, "
+        "círculos, texto) y marcar cortes. Todo lo que anotes se exporta "
+        "en JSON al final."
     )
-    ruta_pantalla = Path(__file__).resolve().parent / "analizador_video.html"
+    carpeta_app = Path(__file__).resolve().parent
+    archivos_tracking = sorted(carpeta_app.glob("tracking_*.json"))
+    tracking_elegido = None
+    if len(archivos_tracking) > 1:
+        nombres_tracking = [a.name for a in archivos_tracking]
+        if st.session_state.get("tracking_elegido") not in nombres_tracking:
+            st.session_state.tracking_elegido = nombres_tracking[0]
+        st.selectbox(
+            "Tracking del partido",
+            nombres_tracking,
+            key="tracking_elegido",
+            help="Hay varios tracking en la carpeta; elige el del partido que vas a analizar.",
+        )
+        tracking_elegido = carpeta_app / st.session_state.tracking_elegido
+    elif len(archivos_tracking) == 1:
+        tracking_elegido = archivos_tracking[0]
+    if tracking_elegido is None:
+        st.warning("⚠️ No hay ningún archivo tracking_*.json junto a match.py: "
+                   "la pantalla cargará solo el vídeo, sin cajas ni estadísticas.")
+    ruta_pantalla = carpeta_app / "analizador_video.html"
     if ruta_pantalla.is_file():
         html_pantalla = ruta_pantalla.read_text(encoding="utf-8")
+        if tracking_elegido is not None:
+            try:
+                datos_tracking = json.loads(tracking_elegido.read_text(encoding="utf-8"))
+                # Inyectar antes del script principal. Se escapa "<" para
+                # que ningún texto del JSON pueda cerrar el <script>.
+                inj = ("<script>window.TRACKING_DATA = "
+                       + json.dumps(datos_tracking, ensure_ascii=False).replace("<", "\\u003c")
+                       + "; window.TRACKING_FILE_NAME = "
+                       + json.dumps(tracking_elegido.name, ensure_ascii=False)
+                       + ";</script>")
+                html_pantalla = html_pantalla.replace("<!-- TRACKING_DATA -->", inj, 1)
+            except (ValueError, OSError) as err:
+                st.warning(f"⚠️ No se pudo cargar {tracking_elegido.name}: {err}. "
+                           "La pantalla cargará sin tracking.")
         components.html(html_pantalla, height=1100, scrolling=True)
     else:
         st.warning("⚠️ No se encontró analizador_video.html junto a match.py; "

@@ -40,6 +40,8 @@
       input[type="file"].srfile{ display:none; }
       .filebtn{ display:inline-flex; align-items:center; min-height:36px; padding:6px 14px; background:var(--panel2); border:1px solid var(--line2); border-radius:8px; cursor:pointer; font-size:13.5px; }
       .filebtn:hover{ border-color:var(--acc); }
+      .fallback-link{ color:var(--dim); font-size:13px; text-decoration:underline; text-underline-offset:2px; }
+      .fallback-link:hover{ color:var(--txt); }
       #statusLine{ padding:8px 18px; font-size:12.5px; color:var(--mut); border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:6px 18px; background:#0d1119; }
       #statusLine b{ color:var(--txt); font-weight:600; }
       .dot{ display:inline-block; width:8px; height:8px; border-radius:50%; background:#3a4358; margin-right:6px; vertical-align:1px; }
@@ -143,11 +145,16 @@
           <input type="file" id="videoFile" class="srfile" accept="video/*" />
           <div class="fname" id="videoName">Ningún archivo seleccionado</div>
         </div>
-        <div class="loader">
+        <div class="loader" id="trackLoader" hidden>
           <label>2 · Tracking (JSON)</label>
           <button type="button" class="filebtn" id="trackPick">Seleccionar JSON…</button>
           <input type="file" id="trackFile" class="srfile" accept=".json,application/json" />
           <div class="fname" id="trackName">Ningún archivo seleccionado</div>
+        </div>
+        <div class="loader" id="trackFallbackWrap" hidden>
+          <label>&nbsp;</label>
+          <a href="#" id="trackFallback" class="fallback-link">Cargar tracking JSON</a>
+          <div class="fname">Solo si el tracking no viene cargado</div>
         </div>
         <div class="loader">
           <label>&nbsp;</label>
@@ -353,6 +360,7 @@
 
     <footer>Analizador de vídeo — Match_view · El vídeo y el tracking se cargan desde tu equipo y no se envían a ningún servidor.</footer>
 
+    <!-- TRACKING_DATA -->
     <script>
     "use strict";
     /* ================= Estado ================= */
@@ -515,6 +523,7 @@
     /* ================= Carga de archivos ================= */
     $('videoPick').addEventListener('click', function(){ $('videoFile').click(); });
     $('trackPick').addEventListener('click', function(){ $('trackFile').click(); });
+    $('trackFallback').addEventListener('click', function(e){ e.preventDefault(); $('trackFile').click(); });
     $('importPick').addEventListener('click', function(){ $('importFile').click(); });
     $('videoFile').addEventListener('change', function(e){
       var f = e.target.files && e.target.files[0];
@@ -565,6 +574,8 @@
       state.isDemo = !!isDemo;
       $('stageEmpty').classList.add('hidden');
       $('trackName').textContent = label + (isDemo ? '' : ' · ' + state.samples.length.toLocaleString('es-ES') + ' muestras');
+      var fw = $('trackFallbackWrap');
+      if (fw) fw.hidden = true;
       buildMarkers();
       renderEventList();
       renderFullSummary();
@@ -1185,6 +1196,15 @@
     }
     syncContextUI();
     updateStatus();
+    /* Tracking inyectado (p. ej. por Streamlit, window.TRACKING_DATA): se
+       carga solo, sin pedir el archivo. Sin él (HTML standalone), se
+       muestra el enlace discreto para cargar el JSON a mano. */
+    if (window.TRACKING_DATA) {
+      loadTracking(window.TRACKING_DATA, window.TRACKING_FILE_NAME || 'tracking.json', false);
+    } else {
+      var fw0 = $('trackFallbackWrap');
+      if (fw0) fw0.hidden = false;
+    }
     requestAnimationFrame(loop);
     </script>
   </body>
