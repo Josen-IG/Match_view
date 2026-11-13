@@ -7,19 +7,9 @@ import time
 import os
 from pathlib import Path
 
-# --- Módulo de vídeo (YOLO): genera el tracking JSON ---
-try:
-    from video_track import (
-        analyze_video_full, parse_mmss, VideoProcessingError,
-    )
-    VIDEO_DISPONIBLE = True
-    VIDEO_ERROR = ""
-except Exception as _err_video:  # noqa: BLE001 - sin el módulo no hay análisis
-    analyze_video_full = None
-    parse_mmss = None
-    VideoProcessingError = Exception
-    VIDEO_DISPONIBLE = False
-    VIDEO_ERROR = str(_err_video)
+# El tracking JSON se genera fuera de la app (notebook de Colab
+# analyze_colab.ipynb con GPU, o por script/VM) y la pantalla de Vídeo
+# lo carga de la carpeta (tracking_*.json junto a match.py).
 
 
 st.set_page_config(page_title="Match View - Regional Preferente Navarra", layout="wide")
@@ -81,12 +71,6 @@ if "tiempo_acumulado" not in st.session_state:
     st.session_state.tiempo_acumulado = 0
 if "zona_actual" not in st.session_state:
     st.session_state.zona_actual = "Z5 - Medio Centro"
-if "video_path" not in st.session_state:
-    st.session_state.video_path = ""
-if "video_kickoff_text" not in st.session_state:
-    st.session_state.video_kickoff_text = "00:00"
-if "tracking_activo" not in st.session_state:
-    st.session_state.tracking_activo = None
 
 def obtener_plantilla_inicial(eq_nombre):
     if eq_nombre in PLANTILLAS_EQUIPOS:
@@ -533,189 +517,41 @@ elif st.session_state.pagina == "video":
 
     st.divider()
 
-    # --- Generar el tracking (YOLO) ---
-    # Compacto: ruta del vídeo + saque inicial + alcance + analizar.
-    # El análisis usa el contexto de Alineaciones (equipos, colores de
-    # camiseta/porteros/árbitro, formaciones) y genera el tracking JSON
-    # específico de ese vídeo, que luego se inyecta en la pantalla manual.
-    # Solo tracking + estadísticas directas del tracking: NO clasifica
-    # eventos ni genera cortes (las jugadas se marcan a mano abajo).
-    # Si ya hay un tracking para ese vídeo, se ofrece cargarlo sin re-analizar.
-    st.markdown("#### 🎥 Vídeo del partido")
-    tracking_del_video = None
-    if not VIDEO_DISPONIBLE:
-        st.error("⚠️ El módulo de vídeo no está disponible en este equipo.")
-        st.caption(f"Detalle: {VIDEO_ERROR}")
-        st.info("Instala las dependencias en PowerShell: "
-                "py -m pip install ultralytics opencv-python-headless")
-    else:
-        c_v1, c_v2, c_v3 = st.columns([3, 1, 1.6])
-        with c_v1:
-            ruta_video = st.text_input(
-                "Ruta local del vídeo",
-                value=st.session_state.get("video_path", ""),
-                key="video_path_input",
-                placeholder=r"C:\Videos\partido_jornada1.mp4",
-            )
-            # Windows pega la ruta entre comillas cuando tiene espacios:
-            # se quitan, si no os.path.isfile no la encuentra.
-            ruta_video = ruta_video.strip().strip('"').strip("'").strip()
-            st.session_state.video_path = ruta_video
-            # La ruta solo alimenta el análisis (YOLO): el navegador no
-            # puede abrir un archivo local solo con su ruta, así que el
-            # vídeo para verlo se elige dentro de la pantalla manual.
-            st.caption("Esta ruta solo se usa para el análisis (YOLO). "
-                       "El vídeo para verlo se elige dentro de la pantalla manual.")
-        with c_v2:
-            st.session_state.video_kickoff_text = st.text_input(
-                "Saque inicial (MM:SS)",
-                value=st.session_state.get("video_kickoff_text", "00:00"),
-                key="video_kickoff_input",
-                help="Minuto:segundo del saque inicial en el vídeo. "
-                     "Todo lo anterior es calentamiento y no se analiza.",
-            )
-        with c_v3:
-            alcance_txt = st.selectbox(
-                "Alcance",
-                ["Primeros 10 minutos (prueba)", "Partido completo"],
-                index=0,
-                help="Prueba: solo los 10 primeros minutos desde el saque. "
-                     "Completo: todo el partido (tarda más que en tiempo real en CPU).",
-            )
-        # Tracking que correspondería a este vídeo (si ya se analizó):
-        # <stem>_clips/<stem>_tracking.json junto al vídeo, o en la carpeta.
-        if ruta_video:
-            _p_video = Path(ruta_video)
-            for _cand in (
-                _p_video.parent / f"{_p_video.stem}_clips" / f"{_p_video.stem}_tracking.json",
-                carpeta_app / f"{_p_video.stem}_tracking.json",
-            ):
-                if _cand.is_file():
-                    tracking_del_video = _cand
-                    break
-
-        def _ejecutar_analisis():
-            """Valida ruta y saque, corre YOLO y deja el tracking activo."""
-            if not ruta_video or not os.path.isfile(ruta_video):
-                st.error("Escribe una ruta de vídeo válida.")
-                return
-            try:
-                kickoff_s = parse_mmss(st.session_state.video_kickoff_text)
-            except (ValueError, TypeError):
-                st.error("El saque inicial debe ser MM:SS, por ejemplo 04:32.")
-                return
-            es_prueba = alcance_txt.startswith("Primeros")
-            barra = st.progress(0.0)
-            estado = st.empty()
-
-            def _progreso(mensaje, fraccion):
-                barra.progress(min(1.0, max(0.0, float(fraccion))))
-                estado.write(mensaje)
-
-            try:
-                informe = analyze_video_full(
-                    Path(ruta_video),
-                    color_local=dp["color_local"],
-                    color_visitante=dp["color_visitante"],
-                    color_gk_local=dp.get("color_portero_local", "#FFEB3B"),
-                    color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
-                    color_arbitro=dp.get("color_arbitro", "#000000"),
-                    team_local=dp["eq_local"],
-                    team_visitante=dp["eq_visitante"],
-                    sample_fps=10 if es_prueba else 5,
-                    max_minutes=10.0 if es_prueba else None,
-                    kickoff_offset=kickoff_s,
-                    camera_mode="seguimiento",
-                    formation_local=dp.get("form_local", ""),
-                    formation_visitante=dp.get("form_visitante", ""),
-                    pitch_model=None,
-                    progress=_progreso,
-                )
-            except VideoProcessingError as err:
-                st.error(str(err))
-                return
-            except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
-                st.error(f"Error inesperado durante el análisis: {err}")
-                return
-            ruta_tracking = informe.get("tracking_json")
-            if ruta_tracking and Path(ruta_tracking).is_file():
-                st.session_state.tracking_activo = str(Path(ruta_tracking))
-                estado.write("✅ Análisis completado. Tracking cargado en la pantalla manual.")
-                st.rerun()
-            else:
-                st.warning("⚠️ Análisis completado pero no se generó el tracking JSON.")
-            if informe.get("mapa_pedido") and not informe.get("mapa_activo"):
-                st.warning("⚠️ El mapa del campo NO se activó: no se encontró "
-                           "pitch_keypoints.pt junto a video_track.py. Sin mapa "
-                           "no hay radar ni detección de gol por línea.")
-
-        c_b1, c_b2 = st.columns([2, 1])
-        with c_b1:
-            if tracking_del_video is not None:
-                if st.button("▶️ Cargar tracking existente", type="primary",
-                             use_container_width=True,
-                             help="Ya hay un tracking generado para este vídeo: "
-                                  "se carga en la pantalla manual sin volver a analizar."):
-                    st.session_state.tracking_activo = str(tracking_del_video)
-                    st.rerun()
-            elif st.button("▶️ Analizar vídeo", type="primary",
-                           use_container_width=True,
-                           help="Analiza el vídeo con YOLO y genera el tracking "
-                                "JSON de este partido: solo tracking y "
-                                "estadísticas, sin eventos ni cortes (las "
-                                "jugadas se marcan a mano en la pantalla manual)."):
-                _ejecutar_analisis()
-        with c_b2:
-            if tracking_del_video is not None:
-                if st.button("🔄 Re-analizar vídeo", use_container_width=True,
-                             help="Vuelve a analizar el vídeo desde cero y "
-                                  "sustituye el tracking existente. Solo "
-                                  "tracking y estadísticas, sin eventos ni cortes."):
-                    _ejecutar_analisis()
-
     # --- Análisis manual del vídeo ---
     # El análisis manual se hace en esta pantalla (analizador_video.html,
-    # junto a match.py). El tracking llega de la sección de arriba
-    # (analizar el vídeo o cargar uno ya generado) o de un tracking
-    # de la carpeta; se inyecta en el HTML y no hay que subirlo a mano.
-    # Solo falta elegir el vídeo dentro de la pantalla (4,2 GB, no se
-    # puede incrustar).
+    # junto a match.py). El tracking (tracking_*.json, generado con el
+    # notebook de Colab o por script/VM) se lee de la carpeta y se inyecta
+    # en el HTML, sin subirlo a mano. Solo falta elegir el vídeo dentro
+    # de la pantalla (4,2 GB, no se puede incrustar).
     st.markdown("#### 🎬 Análisis manual del vídeo")
     st.caption(
-        "El tracking llega de la sección de arriba (analizar el vídeo o "
-        "cargar uno ya generado) o de un tracking de la carpeta. Elige el "
-        "vídeo dentro de la pantalla y analiza a mano: cajas, balón y "
+        "El tracking se genera fuera de la app (notebook de Colab con GPU "
+        "o por script) y se carga solo de la carpeta. Elige el vídeo "
+        "dentro de la pantalla y analiza a mano: cajas, balón y "
         "trayectoria encima del vídeo, estadísticas en vivo, flechas, "
         "círculos y texto para señalar jugadas, y cortes. Todo se exporta "
         "en JSON al final."
     )
-    # Qué tracking inyectar (prioridad: el del vídeo elegido, el activo
-    # de sesión, o uno de la carpeta).
+    # Qué tracking inyectar: uno de la carpeta (tracking_*.json).
     tracking_elegido = None
-    if tracking_del_video is not None:
-        tracking_elegido = tracking_del_video
-    else:
-        _activo = st.session_state.get("tracking_activo")
-        if _activo and Path(_activo).is_file():
-            tracking_elegido = Path(_activo)
+    archivos_tracking = sorted(carpeta_app.glob("tracking_*.json"))
+    if len(archivos_tracking) > 1:
+        nombres_tracking = [a.name for a in archivos_tracking]
+        if st.session_state.get("tracking_elegido") not in nombres_tracking:
+            st.session_state.tracking_elegido = nombres_tracking[0]
+        st.selectbox(
+            "Tracking del partido",
+            nombres_tracking,
+            key="tracking_elegido",
+            help="Hay varios tracking en la carpeta; elige el del partido que vas a analizar.",
+        )
+        tracking_elegido = carpeta_app / st.session_state.tracking_elegido
+    elif len(archivos_tracking) == 1:
+        tracking_elegido = archivos_tracking[0]
     if tracking_elegido is None:
-        archivos_tracking = sorted(carpeta_app.glob("tracking_*.json"))
-        if len(archivos_tracking) > 1:
-            nombres_tracking = [a.name for a in archivos_tracking]
-            if st.session_state.get("tracking_elegido") not in nombres_tracking:
-                st.session_state.tracking_elegido = nombres_tracking[0]
-            st.selectbox(
-                "Tracking del partido",
-                nombres_tracking,
-                key="tracking_elegido",
-                help="Hay varios tracking en la carpeta; elige el del partido que vas a analizar.",
-            )
-            tracking_elegido = carpeta_app / st.session_state.tracking_elegido
-        elif len(archivos_tracking) == 1:
-            tracking_elegido = archivos_tracking[0]
-    if tracking_elegido is None:
-        st.warning("⚠️ No hay tracking para este vídeo ni en la carpeta: "
-                   "la pantalla cargará solo el vídeo, sin cajas ni estadísticas.")
+        st.warning("⚠️ No hay ningún tracking (tracking_*.json) en la carpeta: "
+                   "la pantalla cargará solo el vídeo, sin cajas ni estadísticas. "
+                   "Genera el tracking con el notebook de Colab o por script.")
     else:
         # El tracking está cargado, pero el vídeo hay que elegirlo dentro
         # de la pantalla manual (el navegador no abre un archivo local
