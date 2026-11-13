@@ -587,6 +587,7 @@ def detect_shirt_colors(
     imgsz: int = 640,
     max_frames: int = 20,
     progress: ProgressCallback | None = None,
+    device: str = "cpu",
 ) -> list[dict]:
     """Detecta los colores dominantes de camiseta en el vídeo.
 
@@ -623,7 +624,7 @@ def detect_shirt_colors(
             alto, ancho = frame.shape[:2]
             try:
                 resultados = detector.predict(
-                    frame, classes=[0], imgsz=imgsz, verbose=False, device="cpu")
+                    frame, classes=[0], imgsz=imgsz, verbose=False, device=device)
             except Exception as error:
                 raise VideoProcessingError(f"Falló YOLO al detectar colores: {error}") from error
             if not resultados or len(resultados) == 0:
@@ -691,6 +692,7 @@ def suggest_kickoff(
     imgsz: int = 640,
     max_scan_minutes: float = 15,
     progress: ProgressCallback | None = None,
+    device: str = "cpu",
 ) -> float | None:
     """Propone el saque inicial (segundos de vídeo) o None si no lo encuentra.
 
@@ -730,7 +732,7 @@ def suggest_kickoff(
             alto, ancho = frame.shape[:2]
             try:
                 resultados = detector.predict(
-                    frame, classes=[0, 32], imgsz=imgsz, verbose=False, device="cpu")
+                    frame, classes=[0, 32], imgsz=imgsz, verbose=False, device=device)
             except Exception as error:
                 raise VideoProcessingError(f"Falló YOLO al buscar el inicio: {error}") from error
             personas_x: list[float] = []
@@ -1235,6 +1237,7 @@ def _track_video(
     conf: float = 0.10,
     pitch_model: str | None = None,
     pitch_keyframe_seconds: float = PITCH_KEYFRAME_SECONDS,
+    device: str = "cpu",
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
 
@@ -1334,7 +1337,7 @@ def _track_video(
                 try:
                     resultados = detector.predict(
                         frame, classes=[0, 32], imgsz=imgsz, verbose=False,
-                        device="cpu", half=False, conf=conf,
+                        device=device, half=False, conf=conf,
                     )
                 except Exception as error:
                     raise VideoProcessingError(
@@ -3501,6 +3504,7 @@ def _analizar_impl(
     debug_muestras_path: str | Path | None = None,
     formation_local: str = "",
     formation_visitante: str = "",
+    device: str = "cpu",
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -3543,6 +3547,7 @@ def _analizar_impl(
         kickoff_offset, fin, update, conf=conf,
         pitch_model=pitch_model,
         pitch_keyframe_seconds=pitch_keyframe_seconds,
+        device=device,
     )
     update("Compensando el movimiento de cámara y suavizando el balón.", 0.45)
     muestras = _suavizar_balon(muestras)
@@ -3645,6 +3650,7 @@ def analyze_video(
     progress: ProgressCallback | None = None,
     conf: float = 0.10,
     pitch_model: str | None = None,
+    device: str = "cpu",
 ) -> list[dict]:
     """Analiza un vídeo (solo tracking) y devuelve la lista de eventos.
 
@@ -3672,7 +3678,7 @@ def analyze_video(
         max_minutes, kickoff_offset, camera_mode, progress,
         color_gk_local=color_gk_local,
         color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
-        conf=conf, pitch_model=pitch_model,
+        conf=conf, pitch_model=pitch_model, device=device,
     )["results"]
 
 
@@ -3703,6 +3709,7 @@ def analyze_video_full(
     debug_muestras_path: str | Path | None = None,
     formation_local: str = "",
     formation_visitante: str = "",
+    device: str = "cpu",
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -3736,6 +3743,7 @@ def analyze_video_full(
         debug_muestras_path=debug_muestras_path,
         formation_local=formation_local,
         formation_visitante=formation_visitante,
+        device=device,
     )
 
 
