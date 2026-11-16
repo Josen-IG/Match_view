@@ -1329,7 +1329,7 @@ def _track_video(
     pitch_model: str | None = None,
     pitch_keyframe_seconds: float = PITCH_KEYFRAME_SECONDS,
     device: str = "cpu",
-    ball_sel: bool = True,
+    ball_sel: bool = False,
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
 
@@ -3932,7 +3932,7 @@ def _analizar_impl(
     formation_local: str = "",
     formation_visitante: str = "",
     device: str = "cpu",
-    ball_sel: bool = True,
+    ball_sel: bool = False,
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -4084,7 +4084,7 @@ def analyze_video(
     conf: float = 0.10,
     pitch_model: str | None = None,
     device: str = "cpu",
-    ball_sel: bool = True,
+    ball_sel: bool = False,
 ) -> list[dict]:
     """Analiza un vídeo (solo tracking) y devuelve la lista de eventos.
 
@@ -4144,7 +4144,7 @@ def analyze_video_full(
     formation_local: str = "",
     formation_visitante: str = "",
     device: str = "cpu",
-    ball_sel: bool = True,
+    ball_sel: bool = False,
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -4166,9 +4166,12 @@ def analyze_video_full(
     (pickle) ahí para diagnosticar sin volver a trackear el vídeo.
     formation_local/visitante: tácticas (p. ej. "1-4-4-2") que se guardan
     como contexto en el tracking JSON.
-    ball_sel: True (defecto) = elegir el balón entre candidatas por
-    trayectoria prevista (Kalman) + confianza + tamaño; False = quedarse
-    la de más confianza (comportamiento anterior, para validación A/B).
+    ball_sel: False (defecto) = quedarse la detección de más confianza
+    (comportamiento anterior); True = elegir entre candidatas por
+    trayectoria prevista (Kalman) + confianza + tamaño. La selección
+    Kalman quedó como opción: la validación A/B (minutos 6-10,
+    Cirbonero-Milagres) mostró que detecta menos balón (27,4% vs 37,3%)
+    y deja huecos más largos, así que no es el defecto.
     """
     return _analizar_impl(
         video_path, color_local, color_visitante, team_local,
