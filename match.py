@@ -1115,7 +1115,7 @@ elif st.session_state.pagina == "video":
                         color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
                         color_arbitro=dp.get("color_arbitro", "#000000"),
                         team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
-                        sample_fps=10 if alcance_gen.startswith("Primeros") else 5,
+                        sample_fps=10,  # 10 fps también en partido completo: a 5 fps el balón rápido se pierde entre muestras
                         min_confidence=0.65, yolo_model="modelo_propio.pt",
                         max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
                         kickoff_offset=kickoff_gen,

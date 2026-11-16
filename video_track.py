@@ -122,6 +122,15 @@ BALL_SPEED_METRES_PER_ALTURA = 2.5        # m por altura de jugador: tope físic
 KALMAN_MAX_GAP_S = 3.0                # huecos más largos no se predicen
 KALMAN_R = 1.5                        # ruido de medida (unidades de plano 0-100)
 KALMAN_SIGMA_A = 30.0                 # ruido de aceleración (unidades/s^2)
+# Selección del balón entre candidatas (no gana solo la de más confianza):
+# se guarda la mejor candidata según compatibilidad con la posición y
+# velocidad previstas (predicción de velocidad constante, como el Kalman),
+# confianza YOLO y tamaño plausible. Una línea blanca o una media no gana
+# solo por tener más confianza si está lejos de donde debería estar el balón.
+BALL_SEL_SIGMA_0 = 4.0     # incertidumbre base de posición (unidades 0-100)
+BALL_SEL_SIGMA_V = 6.0     # cuánto crece la incertidumbre por segundo sin medida
+BALL_SEL_MIN_SCORE = 0.15  # por debajo se rechaza; el Kalman del post-proceso puentea el hueco
+BALL_SEL_VEL_EMA = 0.5     # suavizado de la velocidad estimada del balón
 # 5. Máscara de césped (VEO clasifica el color en HSV excluyendo el verde
 # del césped). Medido en el vídeo real: césped H 23-74, S 20-184, V 52-131.
 # El portero visitante verde es (69, 201, 142) y el árbitro amarillo neón
@@ -1399,6 +1408,9 @@ def _track_video(
     # aparece en ~20% de muestras y las personas en ~18 por fotograma.
     tracks_activos: dict[int, dict] = {}
     siguiente_id = 0
+    # Predictor del balón para elegir entre candidatas (posición + velocidad
+    # de velocidad constante, como el Kalman del post-proceso).
+    balon_pred: dict | None = None
     procesados = 0
     total_a_procesar = max(1, int(duracion_partido * fps_real) // paso)
     try:
@@ -1427,6 +1439,7 @@ def _track_video(
                     ) from error
                 personas: list[dict] = []
                 balon: dict | None = None
+                candidatos_balon: list[dict] = []
                 if resultados and len(resultados) > 0:
                     res = resultados[0]
                     if res.boxes is not None and res.boxes.cls is not None:
@@ -1454,18 +1467,29 @@ def _track_video(
                                     "caja": (int(x0), int(y0), int(x1), int(y1)),
                                 })
                             elif clase == 0:
-                                if balon is None or conf_det > balon["conf"]:
-                                    balon = {"x": cx, "y": cy, "conf": float(conf_det),
-                                             # Pies del balón (idea VEO,
-                                             # p_pies): el punto de contacto
-                                             # con el césped es el borde
-                                             # inferior del bbox, no su
-                                             # centro (igual que las personas).
-                                             "px": (x0 + x1) / 2.0,
-                                             "py": float(y1),
-                                             "w": (x1 - x0) / ancho * 100.0,
-                                             "h": (y1 - y0) / alto * 100.0,
-                                             "pitch_x": None, "pitch_y": None}
+                                # Candidata a balón: se guardan TODAS y se elige
+                                # después por compatibilidad con la trayectoria
+                                # prevista + confianza + tamaño (_elegir_balon),
+                                # no solo la de más confianza.
+                                candidatos_balon.append({
+                                    "x": cx, "y": cy, "conf": float(conf_det),
+                                    # Pies del balón (idea VEO, p_pies): el punto
+                                    # de contacto con el césped es el borde
+                                    # inferior del bbox, no su centro (igual
+                                    # que las personas).
+                                    "px": (x0 + x1) / 2.0,
+                                    "py": float(y1),
+                                    "w": (x1 - x0) / ancho * 100.0,
+                                    "h": (y1 - y0) / alto * 100.0,
+                                    "pitch_x": None, "pitch_y": None})
+                        # Elegir el balón entre las candidatas (no gana solo
+                        # la de más confianza): compatibilidad con la
+                        # trayectoria prevista (Kalman) + confianza + tamaño.
+                        if candidatos_balon:
+                            hs = sorted(d["h"] for d in detecciones)
+                            h_med = hs[len(hs) // 2] if hs else None
+                            balon, balon_pred = _elegir_balon(
+                                candidatos_balon, balon_pred, t, h_med)
                         # Asociar por confianza descendente: la más segura elige primero.
                         detecciones.sort(key=lambda d: -d["conf"])
                         usados: set[int] = set()
@@ -1719,6 +1743,73 @@ def _suavizar_balon(muestras: list[dict]) -> list[dict]:
             m["ball_pitch_s"] = ({"x": ema_pitch[0], "y": ema_pitch[1]}
                                  if ema_pitch is not None else None)
     return muestras
+
+
+def _elegir_balon(candidatos, pred, t, h_med_jugador):
+    """Elige el balón entre las candidatas YOLO de un fotograma.
+
+    Sin predicción previa (inicio o hueco > KALMAN_MAX_GAP_S) se queda la
+    de más confianza (comportamiento anterior). Con predicción, puntúa cada
+    candidata por: (1) compatibilidad con la posición prevista (predicción
+    de velocidad constante, como el Kalman) — una línea blanca o una media
+    lejos de la trayectoria no gana solo por tener más confianza; (2)
+    confianza YOLO; (3) tamaño plausible (el balón mide ~12% de la altura
+    de un jugador). Devuelve (balon_elegido, nuevo_pred): nuevo_pred es el
+    estado del predictor actualizado (o el anterior si no se elige ninguna).
+    """
+    import math
+    if not candidatos:
+        return None, pred
+    if pred is None:
+        # Sin predicción: la de más confianza (como antes).
+        mejor = max(candidatos, key=lambda c: c["conf"])
+        return mejor, {"x": mejor["x"], "y": mejor["y"],
+                       "vx": 0.0, "vy": 0.0, "t": t}
+    dt = max(0.0, t - pred["t"])
+    if dt > KALMAN_MAX_GAP_S:
+        # Hueco largo: predicción inútil, reiniciar (como el Kalman).
+        mejor = max(candidatos, key=lambda c: c["conf"])
+        return mejor, {"x": mejor["x"], "y": mejor["y"],
+                       "vx": 0.0, "vy": 0.0, "t": t}
+    px = pred["x"] + pred["vx"] * dt
+    py = pred["y"] + pred["vy"] * dt
+    sigma = BALL_SEL_SIGMA_0 + BALL_SEL_SIGMA_V * dt
+    # Tamaño esperado del balón (~12% de la altura mediana de un jugador).
+    h_esp = 0.12 * h_med_jugador if h_med_jugador else None
+    mejor = None
+    mejor_score = -1.0
+    for c in candidatos:
+        d = math.hypot(c["x"] - px, c["y"] - py)
+        prox = math.exp(-0.5 * (d / sigma) ** 2)
+        # Tamaño: 1 si está en rango plausible, decae fuera de él.
+        if h_esp:
+            r = c["h"] / h_esp if h_esp > 0 else 1.0
+            if 0.4 <= r <= 2.5:
+                size_ok = 1.0
+            elif r < 0.4:
+                size_ok = max(0.3, r / 0.4)
+            else:
+                size_ok = max(0.2, 2.5 / r)
+        else:
+            size_ok = 1.0
+        score = prox * (0.4 + 0.6 * c["conf"]) * (0.5 + 0.5 * size_ok)
+        if score > mejor_score:
+            mejor_score = score
+            mejor = c
+    if mejor is None or mejor_score < BALL_SEL_MIN_SCORE:
+        # Ninguna candidata convence: no inventar; el Kalman del
+        # post-proceso puentea el hueco.
+        return None, pred
+    # Actualizar velocidad (EMA hacia la velocidad implícita).
+    if dt > 1e-6:
+        ivx = (mejor["x"] - pred["x"]) / dt
+        ivy = (mejor["y"] - pred["y"]) / dt
+        vx = (1.0 - BALL_SEL_VEL_EMA) * pred["vx"] + BALL_SEL_VEL_EMA * ivx
+        vy = (1.0 - BALL_SEL_VEL_EMA) * pred["vy"] + BALL_SEL_VEL_EMA * ivy
+    else:
+        vx, vy = pred["vx"], pred["vy"]
+    nuevo = {"x": mejor["x"], "y": mejor["y"], "vx": vx, "vy": vy, "t": t}
+    return mejor, nuevo
 
 
 def _filtro_kalman_balon(muestras: list[dict]) -> list[dict]:
