@@ -671,6 +671,127 @@ def generar_figura_mapa_zonas(df_eventos, eq_local, eq_visitante,
     return fig, nota
 
 
+def _posicion_jugador_formacion(dp, equipo, etiqueta):
+    """(x, y) en metros (campo 105x68) para un jugador de la alineación:
+    la posición de su puesto en la formación del equipo (espejada para el
+    visitante, como la vista previa táctica). Los suplentes no tienen
+    puesto en la formación: van al centro de su línea (media de los
+    titulares de su misma posición). La etiqueta es "#dorsal Nombre"."""
+    local = equipo == dp["eq_local"]
+    xi = dp["xi_local"] if local else dp["xi_visitante"]
+    sup = dp["sup_local"] if local else dp["sup_visitante"]
+    form = dp.get("form_local" if local else "form_visitante", "1-4-4-2")
+    coords = FORMACIONES_COORDS.get(form) or FORMACIONES_COORDS["1-4-4-2"]
+    idx = None
+    pos = "MED"
+    for i, j in enumerate(xi):
+        if f"#{j['dorsal']} {j['nombre']}" == etiqueta:
+            idx = i
+            pos = j.get("pos", "MED")
+            break
+    if idx is None:
+        for j in sup:
+            if f"#{j['dorsal']} {j['nombre']}" == etiqueta:
+                pos = j.get("pos", "MED")
+                break
+    if idx is not None and idx < len(coords):
+        x_pct, y_pct = coords[idx]
+    else:
+        xs = [coords[i][0] for i, j in enumerate(xi)
+              if j.get("pos") == pos and i < len(coords)]
+        ys = [coords[i][1] for i, j in enumerate(xi)
+              if j.get("pos") == pos and i < len(coords)]
+        if xs:
+            x_pct, y_pct = sum(xs) / len(xs), sum(ys) / len(ys)
+        else:
+            x_pct = {"POR": 8, "DEF": 22, "MED": 35, "DEL": 46}.get(pos, 35)
+            y_pct = 50
+    if not local:
+        x_pct = 100 - x_pct
+    return x_pct / 100 * 105, (100 - y_pct) / 100 * 68
+
+
+def generar_figura_red_pases(df_eventos, dp):
+    """Red de pases por equipo (dos campos lado a lado): nodos = jugadores
+    en su posición de formación, líneas con grosor por nº de pases
+    completados entre cada pareja. Solo usa pases registrados en vivo con
+    pasador y receptor (acción "Pase", Detalle "Completado"); los fallidos
+    no entran en la red. Devuelve (fig, nota) o (None, motivo) si no hay
+    pases que dibujar."""
+    if not MPL_DISPONIBLE:
+        return None, "matplotlib no está disponible en este equipo."
+    if df_eventos is None or len(df_eventos) == 0 or "Evento" not in df_eventos.columns:
+        return None, "Sin eventos registrados en este partido."
+    if "Jugador" not in df_eventos.columns or "Receptor" not in df_eventos.columns:
+        return None, ("Los eventos de este partido no tienen pasador ni "
+                      "receptor: se registraron antes de añadir la acción "
+                      "\"Pase\".")
+    pases = df_eventos[(df_eventos["Evento"] == "Pase")
+                       & (df_eventos["Detalle"] == "Completado")]
+    if len(pases) == 0:
+        return None, "Sin pases completados con pasador y receptor en este partido."
+    eq_local, eq_visitante = dp["eq_local"], dp["eq_visitante"]
+    color_equipo = {eq_local: dp.get("color_local", "#1E88E5"),
+                    eq_visitante: dp.get("color_visitante", "#E53935")}
+    fig, axes = plt.subplots(1, 2, figsize=(11, 6.2))
+    alguna = False
+    for ax, equipo in ((axes[0], eq_local), (axes[1], eq_visitante)):
+        _campo_en_ax(ax)
+        sub = pases[pases["Equipo"] == equipo] if "Equipo" in pases.columns else pases.iloc[0:0]
+        pares = {}
+        implicados = {}
+        for _, ev in sub.iterrows():
+            a = str(ev.get("Jugador", "") or "").strip()
+            b = str(ev.get("Receptor", "") or "").strip()
+            if not a or not b or a == b:
+                continue
+            pares[(a, b)] = pares.get((a, b), 0) + 1
+            implicados[a] = implicados.get(a, 0) + 1
+            implicados[b] = implicados.get(b, 0) + 1
+        n_pases = sum(pares.values())
+        if not pares:
+            ax.text(52.5, 34, "Sin pases\ncompletados", ha="center", va="center",
+                    fontsize=11, color="#888888")
+            ax.set_title(f"{equipo} (0 pases)", fontsize=12)
+            continue
+        alguna = True
+        max_n = max(pares.values())
+        for (a, b), n in sorted(pares.items(), key=lambda kv: kv[1]):
+            xa, ya = _posicion_jugador_formacion(dp, equipo, a)
+            xb, yb = _posicion_jugador_formacion(dp, equipo, b)
+            ax.plot([xa, xb], [ya, yb], color=color_equipo[equipo],
+                    lw=0.8 + 3.0 * (n / max_n), alpha=0.75, zorder=3,
+                    solid_capstyle="round")
+            ax.text((xa + xb) / 2, (ya + yb) / 2 + 2.2, str(n), fontsize=9,
+                    fontweight="bold", color="#333333", ha="center",
+                    va="bottom", zorder=4)
+        for etiqueta, total in implicados.items():
+            x, y = _posicion_jugador_formacion(dp, equipo, etiqueta)
+            ax.scatter([x], [y], s=180 + 90 * min(total, 12),
+                       c=color_equipo[equipo], edgecolors="white",
+                       linewidths=1.5, zorder=5)
+            # Etiqueta corta (dorsal + primer nombre) para que no se
+            # solapen las de jugadores cercanos en la misma línea.
+            _partes = etiqueta.split(" ", 1)
+            _corto = _partes[0] + (" " + _partes[1].split()[0]
+                                   if len(_partes) > 1 else "")
+            ax.text(x, y - 4.5, _corto, fontsize=8, ha="center",
+                    va="top", zorder=6)
+        ax.set_title(f"{equipo} ({n_pases} pases)", fontsize=12)
+    if not alguna:
+        plt.close(fig)
+        return None, "Sin pases completados con pasador y receptor en este partido."
+    fig.suptitle("Red de pases — solo pases completados, registrados en vivo",
+                 fontsize=13)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    nota = ("Nodos en la posición de su formación (suplentes: centro de su "
+            "línea); el tamaño es el nº de pases en los que participa el "
+            "jugador y el grosor, los pases entre cada pareja. La zona del "
+            "receptor no se registra: la red no indica dónde se recibió "
+            "cada pase.")
+    return fig, nota
+
+
 def leer_metadatos_tracking(ruta):
     """Metadatos de un tracking sin quedarse con las muestras en memoria.
     Devuelve dict o None si el archivo no se puede leer."""
@@ -989,7 +1110,10 @@ elif st.session_state.pagina == "partido":
         st.metric("Tiempo", obtener_minuto())
         st.progress(min(transcurrido / (90 * 60), 1.0), text="Progreso (90 min)")
 
-    def registrar_evento(accion, sub_accion=""):
+    def registrar_evento(accion, sub_accion="", jugador="", receptor=""):
+        # Jugador/Receptor solo se rellenan en la acción "Pase" (pasador y
+        # receptor); en el resto de acciones quedan vacíos. Los eventos
+        # viejos sin estos campos cargan igual (pandas los deja en NaN).
         nuevo_evento = {
             "ID": len(st.session_state.eventos) + 1,
             "Temporada": dp["temporada"],
@@ -1001,7 +1125,9 @@ elif st.session_state.pagina == "partido":
             "Equipo": st.session_state.equipo,
             "Zona": st.session_state.zona_actual,
             "Evento": accion,
-            "Detalle": sub_accion
+            "Detalle": sub_accion,
+            "Jugador": jugador,
+            "Receptor": receptor
         }
         st.session_state.eventos.append(nuevo_evento)
 
@@ -1090,6 +1216,32 @@ elif st.session_state.pagina == "partido":
         if st.button("🛑 Falta", use_container_width=True): registrar_evento("Falta", "Cometida")
         if st.button("🟨 Tarjeta", use_container_width=True): registrar_evento("Disciplina", "Tarjeta")
 
+        st.divider()
+        st.markdown("##### 🔄 Pase")
+        st.caption("Pasador y receptor del equipo seleccionado (XI + suplentes).")
+        _eq_pase = st.session_state.equipo
+        if _eq_pase == dp["eq_local"]:
+            _xi_pase, _sup_pase = dp["xi_local"], dp["sup_local"]
+        else:
+            _xi_pase, _sup_pase = dp["xi_visitante"], dp["sup_visitante"]
+        _jug_pase = ([f"#{j['dorsal']} {j['nombre']}" for j in _xi_pase]
+                     + [f"#{j['dorsal']} {j['nombre']}" for j in _sup_pase])
+        _sup_pase_set = {f"#{j['dorsal']} {j['nombre']}" for j in _sup_pase}
+        _pasador = st.selectbox(
+            "Pasador", _jug_pase, key=f"pase_pasador_{_eq_pase}",
+            format_func=lambda v: v + " (supl.)" if v in _sup_pase_set else v)
+        _receptor = st.selectbox(
+            "Receptor", _jug_pase, key=f"pase_receptor_{_eq_pase}",
+            index=1 if len(_jug_pase) > 1 else 0,
+            format_func=lambda v: v + " (supl.)" if v in _sup_pase_set else v)
+        _res_pase = st.selectbox("Resultado", ["Completado", "Fallido"],
+                                 key="pase_resultado")
+        if st.button("🔄 Registrar pase", use_container_width=True):
+            if _pasador == _receptor:
+                st.warning("El pasador y el receptor no pueden ser el mismo jugador.")
+            else:
+                registrar_evento("Pase", _res_pase, jugador=_pasador, receptor=_receptor)
+
     st.divider()
 
     if st.session_state.eventos:
@@ -1163,7 +1315,8 @@ elif st.session_state.pagina == "final":
         st.divider()
         st.markdown("#### 🎯 Visualizaciones (desde lo etiquetado a mano)")
         st.caption("Solo con lo registrado en vivo en esta pantalla. La red de "
-                   "pases no se puede dibujar: no se registran pases ni jugadores.")
+                   "pases usa los pases con pasador y receptor de la acción "
+                   "\"Pase\"; sin pases registrados no se dibuja.")
 
         fig_tiros, nota_tiros = generar_figura_mapa_tiros(
             df_editado, dp["eq_local"], dp["eq_visitante"],
@@ -1184,6 +1337,14 @@ elif st.session_state.pagina == "final":
             st.pyplot(fig_zonas, use_container_width=True)
             st.caption(nota_zonas)
             plt.close(fig_zonas)
+
+        fig_red, nota_red = generar_figura_red_pases(df_editado, dp)
+        if fig_red is None:
+            st.info(f"🔗 Red de pases: {nota_red}")
+        else:
+            st.pyplot(fig_red, use_container_width=True)
+            st.caption(nota_red)
+            plt.close(fig_red)
 
         st.info("📈 Tendencias por jornada: no disponibles. El CSV solo se "
                 "descarga, no se guarda en la app, así que no hay histórico de "
