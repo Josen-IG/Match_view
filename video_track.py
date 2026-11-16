@@ -47,7 +47,7 @@ Tracking:
   temporal del balón: SE PROBÓ Y NO SE ENVÍA (el heurístico de
   movimiento no distingue el balón de un pie en vídeo real; la vía es
   el modelo YOLO propio); (2) filtro de Kalman de velocidad constante
-  sobre el balón: suaviza y predice huecos de hasta 3 s, marcado
+  sobre el balón: suaviza y predice huecos de hasta 1 s, marcado
   "kalman"; (3) punto de los pies (p_pies) en la homografía: jugadores
   y balón se proyectan desde el borde inferior del bbox, no desde el
   centro; (4) compacidad táctica por periodo de 5' (Convex Hull,
@@ -92,7 +92,7 @@ DEFAULT_PRE_ROLL = 8                        # segundos antes del evento en el cl
 DEFAULT_POST_ROLL = 7                       # segundos después del evento en el clip
 MIN_GAP_SECONDS = 20                        # separación mínima entre candidatos
 MERGE_WINDOW_SECONDS = 8                    # señales a menos de 8 s se fusionan en 1 candidato
-BALL_GAP_MAX_SECONDS = 2.0                  # huecos de balón <= 2 s se interpolan
+BALL_GAP_MAX_SECONDS = 1.0                  # huecos de balón <= 1 s se interpolan (antes 2 s; idea del repo more-than-a-hack, que solo interpola 0.4 s: no inventar balón en huecos largos)
 BALL_EMA_ALPHA = 0.4                        # suavizado del balón (0-1, mayor = más reactivo)
 BALL_MAX_SPEED_BH = 25.0                    # salto máximo creíble del balón
 # en alturas/s (coordenadas de plano: balón + movimiento de cámara). Un tiro
@@ -118,8 +118,8 @@ BALL_SPEED_METRES_PER_ALTURA = 2.5        # m por altura de jugador: tope físic
 # El filtro de Kalman (idea 2) ya rellena los huecos de forma honesta.
 # 2. Filtro de Kalman del balón (VEO usa filtro de partículas con dinámica
 # newtoniana; aquí Kalman de velocidad constante: más barato y suficiente
-# para interpolar huecos cortos). Solo predice huecos de hasta 3 s.
-KALMAN_MAX_GAP_S = 3.0                # huecos más largos no se predicen
+# para interpolar huecos cortos). Solo predice huecos de hasta 1 s.
+KALMAN_MAX_GAP_S = 1.0                # huecos más largos no se predicen (antes 3.0 s: inventaba demasiado balón; idea del repo more-than-a-hack, que solo interpola huecos de 0.4 s)
 KALMAN_R = 1.5                        # ruido de medida (unidades de plano 0-100)
 KALMAN_SIGMA_A = 30.0                 # ruido de aceleración (unidades/s^2)
 # Selección del balón entre candidatas (no gana solo la de más confianza):
@@ -1632,17 +1632,57 @@ def _equipo_por_track(votos_color: dict[int, Counter],
     return equipo_por_track
 
 
-def _suavizar_balon(muestras: list[dict]) -> list[dict]:
-    """EMA + interpolación lineal de huecos de balón <= 2 s. Añade 'ball_s'.
+def _limpiar_picos_balon(detecciones, altura_en):
+    """Quita los picos del balón (idea del repo more-than-a-hack, clean_ball).
 
-    Un solo pase sobre las muestras (índices): un hueco <= 2 s son como
-    mucho 20 muestras a 10 fps, así que el coste es lineal. El hueco
-    era de 1 s; con el balón visto solo en ~60% de las muestras, los
-    huecos de 1-2 s son frecuentes (oclusiones, balón lejos) y cortaban
-    la trayectoria: la posesión se congelaba y los pases se partían.
-    Interpolar hasta 2 s es seguro porque el filtro de saltos ya exige
+    Un punto es un pico si la velocidad de entrada Y la de salida son ambas
+    mayores que BALL_MAX_SPEED_BH pero la velocidad saltándolo es menor
+    (el balón "teletransporta" y vuelve: típico de confundir el balón con
+    una línea blanca o una media). Se borra solo el pico y se conservan
+    los puntos reales de alrededor. Dos pasadas, como el repo.
+    `altura_en(idx)` da la altura mediana de los jugadores en esa muestra
+    (para pasar la distancia a alturas/s, robusto al zoom).
+    """
+    import math
+    dets = list(detecciones)
+    for _ in range(2):
+        if len(dets) < 3:
+            break
+        quitar = set()
+        for k in range(1, len(dets) - 1):
+            t0, x0, y0 = dets[k - 1][1], dets[k - 1][2], dets[k - 1][3]
+            t1, x1, y1 = dets[k][1], dets[k][2], dets[k][3]
+            t2, x2, y2 = dets[k + 1][1], dets[k + 1][2], dets[k + 1][3]
+            dt_in = t1 - t0
+            dt_out = t2 - t1
+            dt_skip = t2 - t0
+            if dt_in <= 0 or dt_out <= 0 or dt_skip <= 0:
+                continue
+            alt = max(1.0, altura_en(dets[k][0]))
+            v_in = math.hypot(x1 - x0, y1 - y0) / alt / dt_in
+            v_out = math.hypot(x2 - x1, y2 - y1) / alt / dt_out
+            v_skip = math.hypot(x2 - x0, y2 - y0) / alt / dt_skip
+            if (v_in > BALL_MAX_SPEED_BH and v_out > BALL_MAX_SPEED_BH
+                    and v_skip < BALL_MAX_SPEED_BH):
+                quitar.add(k)
+        if not quitar:
+            break
+        dets = [d for k, d in enumerate(dets) if k not in quitar]
+    return dets
+
+
+def _suavizar_balon(muestras: list[dict]) -> list[dict]:
+    """EMA + interpolación lineal de huecos de balón <= 1 s. Añade 'ball_s'.
+
+    Un solo pase sobre las muestras (índices): un hueco <= 1 s son como
+    mucho 10 muestras a 10 fps, así que el coste es lineal. Antes era
+    2 s; se acortó a 1 s (idea del repo more-than-a-hack, que solo
+    interpola 0.4 s) para no inventar balón en huecos largos: un hueco
+    largo queda en None y la posesión se congela, en vez de rellenarlo
+    con una interpolación que puede ser falsa.
+    Interpolar hasta 1 s es seguro porque el filtro de saltos ya exige
     que la velocidad implícita entre las dos detecciones sea creíble
-    (<= BALL_MAX_SPEED_BH); un balón que se pierde 2 s y reaparece
+    (<= BALL_MAX_SPEED_BH); un balón que se pierde 1 s y reaparece
     lejos no se interpola, se descarta.
 
     Antes de interpolar se descartan los saltos imposibles: a conf 0,10
@@ -1670,6 +1710,11 @@ def _suavizar_balon(muestras: list[dict]) -> list[dict]:
         hs = [p["h"] for p in muestras[idx].get("people", [])
               if p.get("h", 0) > 0]
         return float(np.median(hs)) if hs else altura_global
+
+    # Quitar picos (salto y vuelta) antes del filtro de saltos: una
+    # detección que teletransporta y vuelve no debe entrar ni como
+    # pendiente (idea del repo more-than-a-hack, clean_ball).
+    detecciones = _limpiar_picos_balon(detecciones, _altura_en)
 
     filtradas: list[tuple] = []
     pendiente = None
@@ -1822,18 +1867,18 @@ def _elegir_balon(candidatos, pred, t, h_med_jugador):
 def _filtro_kalman_balon(muestras: list[dict]) -> list[dict]:
     """Filtro de Kalman (velocidad constante) sobre el balón suavizado.
 
-    Después de _suavizar_balon (EMA + interpolación lineal ≤2 s): el Kalman
+    Después de _suavizar_balon (EMA + interpolación lineal ≤1 s): el Kalman
     corrige las detecciones (suaviza el ruido de posición de YOLO) y
-    PREDICE la posición en huecos de hasta KALMAN_MAX_GAP_S (3 s) cuando
+    PREDICE la posición en huecos de hasta KALMAN_MAX_GAP_S (1 s) cuando
     el balón se pierde (oclusiones). Huecos más largos quedan en None: no
     se inventan detecciones. Las posiciones predichas llevan
     ball_s["fuente"] == "kalman" (las medidas, "medido"), y el JSON las
     marca en "bf": la posesión y el territorio usan ball_scene, que sale
-    de ball_s, así que el puente de 3 s evita que la posesión se congele
+    de ball_s, así que el puente de 1 s evita que la posesión se congele
     en cada oclusión sin inventar juego que no existe.
 
     Estado [x, y, vx, vy] en unidades de plano (0-100). Sin medición
-    durante más de 3 s el filtro se reinicia en la siguiente detección.
+    durante más de 1 s el filtro se reinicia en la siguiente detección.
     """
     import numpy as np
     estado: np.ndarray | None = None
@@ -1892,6 +1937,51 @@ def _filtro_kalman_balon(muestras: list[dict]) -> list[dict]:
     return muestras
 
 
+def _velocidad_ventana(muestras, i, pos_de, ventana_s=0.5):
+    """Velocidad por ventana centrada (idea del repo more-than-a-hack,
+    window_speed): media de posición en los 0.5 s siguientes menos media
+    en los 0.5 s anteriores, dividida por el tiempo entre los centros de
+    las ventanas. Promediar ~5 muestras a cada lado reduce el jitter
+    frente a la diferencia entre dos puntos sueltos (un balón quieto leía
+    2-4 m/s por el ruido). `pos_de(m)` devuelve (x, y) o None.
+    Devuelve 0.0 si no hay datos en algún lado."""
+    import math
+    t0 = muestras[i]["t"]
+    n = len(muestras)
+    # Ventanas de ±0.5 s: a 10 fps son ~5 muestras por lado; se busca en
+    # un margen de ±2 s (25 muestras) para no recorrer toda la lista.
+    lo = max(0, i - 25)
+    hi = min(n, i + 26)
+    xp, yp, tp = [], [], []
+    xn, yn, tn = [], [], []
+    for j in range(lo, hi):
+        m = muestras[j]
+        t = m["t"]
+        pos = pos_de(m)
+        if pos is None:
+            continue
+        if t0 - ventana_s <= t <= t0:
+            xp.append(pos[0])
+            yp.append(pos[1])
+            tp.append(t)
+        elif t0 < t <= t0 + ventana_s:
+            xn.append(pos[0])
+            yn.append(pos[1])
+            tn.append(t)
+    if not xp or not xn:
+        return 0.0
+    mxp = sum(xp) / len(xp)
+    myp = sum(yp) / len(yp)
+    mxn = sum(xn) / len(xn)
+    myn = sum(yn) / len(yn)
+    tcp = sum(tp) / len(tp)
+    tcn = sum(tn) / len(tn)
+    dt = tcn - tcp
+    if dt <= 0:
+        return 0.0
+    return math.hypot(mxn - mxp, myn - myp) / dt
+
+
 def _compensar_camara(muestras: list[dict]) -> list[dict]:
     """Compensa pan/zoom: estima el movimiento común de los jugadores.
 
@@ -1930,26 +2020,18 @@ def _compensar_camara(muestras: list[dict]) -> list[dict]:
                                (m["ball_s"]["y"] - off_y) / max(1.0, altura))
         else:
             m["ball_scene"] = None
-    # Velocidad relativa (en escena, alturas/s y unidades/s)
+    # Velocidad por ventana centrada (idea del repo more-than-a-hack):
+    # media de posición en 0.5 s antes y 0.5 s después, no dos puntos
+    # sueltos. Reduce el jitter frente a la diferencia fotograma a
+    # fotograma.
     for i, m in enumerate(muestras):
-        velocidad_bh = 0.0
-        velocidad_u = 0.0
-        if m["ball_scene"] is not None:
-            j = i
-            while j > 0 and muestras[j]["t"] > m["t"] - 0.5:
-                j -= 1
-            anterior = muestras[j]
-            if anterior.get("ball_scene") is not None and anterior["t"] < m["t"]:
-                dt = m["t"] - anterior["t"]
-                if dt > 0:
-                    velocidad_bh = math.hypot(
-                        m["ball_scene"][0] - anterior["ball_scene"][0],
-                        m["ball_scene"][1] - anterior["ball_scene"][1]) / dt
-                    velocidad_u = math.hypot(
-                        (m["ball_s"]["x"] - m["cam_off"][0])
-                        - (anterior["ball_s"]["x"] - anterior["cam_off"][0]),
-                        (m["ball_s"]["y"] - m["cam_off"][1])
-                        - (anterior["ball_s"]["y"] - anterior["cam_off"][1])) / dt
+        velocidad_bh = _velocidad_ventana(
+            muestras, i, lambda mm: mm.get("ball_scene"))
+        velocidad_u = _velocidad_ventana(
+            muestras, i,
+            lambda mm: ((mm["ball_s"]["x"] - mm["cam_off"][0],
+                         mm["ball_s"]["y"] - mm["cam_off"][1])
+                        if mm.get("ball_s") is not None else None))
         # Velocidad en el campo (m/s): la homografía ya absorbe el
         # movimiento de cámara, no necesita compensación. Se capa: más
         # de 126 km/h en 0,5 s es un salto de la H o un balón falso.
@@ -1958,23 +2040,14 @@ def _compensar_camara(muestras: list[dict]) -> list[dict]:
         # 3). Sin esto, un salto de la homografía (el balón casi parado
         # en la escena pero la H dice 126 km/h) contamina la media y la
         # máxima: en la v10 había 65 muestras en el tope de 126 km/h.
-        velocidad_ms = 0.0
-        if m.get("ball_pitch_s") is not None:
-            j = i
-            while j > 0 and muestras[j]["t"] > m["t"] - 0.5:
-                j -= 1
-            anterior = muestras[j]
-            if (anterior.get("ball_pitch_s") is not None
-                    and anterior["t"] < m["t"]):
-                dt = m["t"] - anterior["t"]
-                if dt > 0:
-                    velocidad_ms = math.hypot(
-                        m["ball_pitch_s"]["x"] - anterior["ball_pitch_s"]["x"],
-                        m["ball_pitch_s"]["y"] - anterior["ball_pitch_s"]["y"]) / dt
-                    velocidad_ms = min(velocidad_ms, PITCH_MAX_SPEED_MS)
-                    velocidad_ms = min(
-                        velocidad_ms,
-                        velocidad_bh * BALL_SPEED_METRES_PER_ALTURA)
+        velocidad_ms = _velocidad_ventana(
+            muestras, i,
+            lambda mm: ((mm["ball_pitch_s"]["x"], mm["ball_pitch_s"]["y"])
+                        if mm.get("ball_pitch_s") is not None else None))
+        velocidad_ms = min(velocidad_ms, PITCH_MAX_SPEED_MS)
+        velocidad_ms = min(
+            velocidad_ms,
+            velocidad_bh * BALL_SPEED_METRES_PER_ALTURA)
         m["ball_speed"] = velocidad_u
         m["ball_speed_bh"] = velocidad_bh
         m["ball_speed_ms"] = velocidad_ms
@@ -2778,7 +2851,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                 if b is not None else None)
         # Fuente del balón ("bf", campo nuevo; los antiguos no cambian):
         # "yolo" (detección YOLO) o "kalman" (predicción del filtro en un
-        # hueco de hasta 3 s, sin detección: la posición es estimada, no
+        # hueco de hasta 1 s, sin detección: la posición es estimada, no
         # medida). Si no hay balón ni predicción, no hay "bf".
         bf = b.get("fuente", "yolo") if b is not None else None
         if ball is None:
@@ -3981,7 +4054,7 @@ def _analizar_impl(
     update("Compensando el movimiento de cámara y suavizando el balón.", 0.45)
     muestras = _suavizar_balon(muestras)
     # Filtro de Kalman (idea VEO): suaviza la trayectoria y predice el
-    # balón en huecos de hasta 3 s; va antes de la posesión/territorio.
+    # balón en huecos de hasta 1 s; va antes de la posesión/territorio.
     muestras = _filtro_kalman_balon(muestras)
     muestras = _compensar_camara(muestras)
     muestras = _anotar_posesion(muestras, team_local, team_visitante)
