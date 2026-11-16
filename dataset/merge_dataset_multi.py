@@ -81,6 +81,18 @@ SOURCES = [
      [os.path.join(ANAL, "dataset_frames_hellin_tomelloso_labels")]),
     ("casetas_ontinena", os.path.join(ANAL, "dataset_frames_casetas_ontinena"),
      [os.path.join(ANAL, "dataset_frames_casetas_ontinena_labels")]),
+    # 17º partido (2026-11-14): CF Pozuelo vs AD Torrejón (3ª Fed, Grupo 7, J8).
+    # Añadido a petición del usuario tras descartar Palencia y Selaya.
+    # Vídeo en Drive "Git Hub" (pozuelo_torrejon.mp4). DÍA, césped artificial.
+    ("pozuelo_torrejon", os.path.join(ANAL, "dataset_frames_pozuelo_torrejon"),
+     [os.path.join(ANAL, "dataset_frames_pozuelo_torrejon_labels")]),
+    # Ronda 2 del balón (2026-11-16): fotogramas del Cirbonero-Milagres en los
+    # momentos donde el modelo pierde el balón (huecos >10 s del tracking
+    # completo) + rejilla 1/15 s con offset +7 s. Etiquetado con 3 votantes
+    # (GemsLabs + YOLO11s + modelo_propio) y limpieza de falsas (ver
+    # ronda2/limpiar_balon.py).
+    ("cirbonero_r2", os.path.join(ANAL, "dataset_frames_cirbonero_r2"),
+     [os.path.join(ANAL, "dataset_frames_cirbonero_r2_labels")]),
     # ("sanmiguel", os.path.join(ANAL, "dataset_frames_sanmiguel"),
     #  [os.path.join(ANAL, "dataset_frames_sanmiguel_labels")]),
     # ("alc_elc", os.path.join(ANAL, "dataset_frames_alc_elc"),
@@ -106,6 +118,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", default=REPO, help="carpeta dataset de destino")
+    ap.add_argument("--dup-ball", type=int, default=0,
+                    help="nº de copias extra de cada fotograma de TRAIN con "
+                    "balón (oversampling del balón; solo train, nunca val; "
+                    "las copias se llaman <stem>_r2dup<N>)")
     args = ap.parse_args()
     random.seed(SEED)
 
@@ -188,7 +204,24 @@ def main():
 
     if args.dry_run:
         print("\ndry-run: no se ha escrito nada.")
+        if args.dup_ball:
+            n_dup = sum(1 for it in train if count_classes(it[2])[0] > 0)
+            print(f"dup-ball={args.dup_ball}: se duplicarían {n_dup} "
+                  f"fotogramas de train con balón (+{n_dup * args.dup_ball} "
+                  f"copias, train pasaría a {len(train) + n_dup * args.dup_ball})")
         return
+    if args.dup_ball:
+        # Oversampling del balón: copias extra SOLO en train (val intacto
+        # para métricas honestas). Se aplica después de la tabla, antes de
+        # escribir; los stems duplicados llevan sufijo _r2dup<N>.
+        dups = []
+        for (stem, img, lbl, src) in train:
+            if count_classes(lbl)[0] > 0:
+                for i in range(1, args.dup_ball + 1):
+                    dups.append((f"{stem}_r2dup{i}", img, lbl, src))
+        train.extend(dups)
+        print(f"dup-ball={args.dup_ball}: +{len(dups)} copias de train con "
+              f"balón (train {len(train) - len(dups)} -> {len(train)})")
     for split in ("train", "val"):
         for sub in ("images", "labels"):
             d = os.path.join(args.out, sub, split)
@@ -196,8 +229,8 @@ def main():
             os.makedirs(d, exist_ok=True)
     for name, split in (("train", train), ("val", val)):
         for (stem, img, lbl, src) in split:
-            shutil.copy(img, os.path.join(args.out, "images", name, os.path.basename(img)))
-            shutil.copy(lbl, os.path.join(args.out, "labels", name, os.path.basename(lbl)))
+            shutil.copy(img, os.path.join(args.out, "images", name, stem + ".jpg"))
+            shutil.copy(lbl, os.path.join(args.out, "labels", name, stem + ".txt"))
     print(f"\ndataset reescrito en {args.out}")
     print("Después: rehacer el zip de imágenes para Drive y subir labels + data.yaml al repo.")
 

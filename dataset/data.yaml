@@ -1,11 +1,11 @@
 # Dataset propio YOLO — genérico (cualquier partido, no solo Cirbonero-Milagres)
-# 4378 fotogramas, 3502 train / 876 val (split 80/20 estratificado por partido, sin fuga).
+# 4874 fotogramas, 3899 train / 975 val (split 80/20 estratificado por partido, sin fuga).
 # Fuentes: Cirbonero B vs Milagres (268) + 17 partidos de YouTube (1ª/2ª/3ª Federación
-# y Preferente, 1 fotograma cada 30 s): Sevilla Atl.-Betis Dep., Talavera-Zamora,
-# Antequera-Castilla, Castilla-Avilés, Alcalá-Fuenlabrada, Alcalá-Madrid C,
-# Badajoz-Tenerife B, Recreativo-Antoniano, Betis C-Conil, Betis C-Sevilla C,
-# Español (Jove)-Villarreal C, Galapagar-Atlético C, Cornellà-Mollerussa,
-# San José-Tomelloso, Hellín-Tomelloso, Casetas-Ontiñena, Pozuelo-Torrejón.
+# y Preferente, 1 fotograma cada 30 s) + Cirbonero ronda 2 (496: huecos de balón
+# del tracking completo + rejilla 1/15 s, 2026-11-16).
+# Ronda 2: etiquetas de balón limpias (fuera logos/gráficos estáticos y duplicados;
+# 1 balón por fotograma) y oversampling x2 de train con balón en el entreno
+# (merge_dataset_multi.py --dup-ball 1; las copias *_r2dup1 no están en el repo).
 # Clases: 0=football (balón), 1=player (jugador). La 2=referee se añade en la corrección manual.
 # El modelo NO clasifica equipos por color: solo detecta balón y jugador;
 # los equipos se distinguen después por color de camiseta en video_track.py.
