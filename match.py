@@ -1030,7 +1030,9 @@ elif st.session_state.pagina == "video":
     st.markdown("##### 🎥 Vídeo del partido")
     st.caption(
         "Pega la ruta del vídeo y el tracking se genera solo (YOLO, en "
-        "local). Si el vídeo ya tiene su tracking, se carga directamente. "
+        "local), empezando en el saque inicial: lo anterior "
+        "(calentamiento) no se analiza y no ensucia las estadísticas. "
+        "Si el vídeo ya tiene su tracking, se carga directamente. "
         "También puedes generar el tracking con el notebook de Colab (GPU) "
         "y poner el JSON en la carpeta."
     )
@@ -1050,6 +1052,10 @@ elif st.session_state.pagina == "video":
             "Saque inicial (MM:SS)",
             value=st.session_state.get("video_gen_kickoff", "00:00"),
             key="video_gen_kickoff_input",
+            help="El análisis empieza en este minuto: corta el vídeo "
+                 "ahí (el calentamiento anterior no se analiza). El "
+                 "minuto de partido 00:00 es este saque. Con 00:00 se "
+                 "analiza desde el principio del vídeo.",
         )
     with c_gen3:
         alcance_gen = st.selectbox(
@@ -1110,7 +1116,7 @@ elif st.session_state.pagina == "video":
                         color_arbitro=dp.get("color_arbitro", "#000000"),
                         team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
                         sample_fps=10 if alcance_gen.startswith("Primeros") else 5,
-                        min_confidence=0.65, yolo_model="yolo11s.pt",
+                        min_confidence=0.65, yolo_model="modelo_propio.pt",
                         max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
                         kickoff_offset=kickoff_gen,
                         camera_mode="seguimiento",

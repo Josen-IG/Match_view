@@ -84,7 +84,7 @@ from typing import Callable, Optional
 # ---------------------------------------------------------------------------
 # Constantes / defaults (todos configurables por parámetro)
 # ---------------------------------------------------------------------------
-DEFAULT_YOLO_MODEL = "yolo11s.pt"          # equilibrio CPU Ryzen 7; 11n más rápido, 11m más preciso
+DEFAULT_YOLO_MODEL = "modelo_propio.pt"       # modelo propio (YOLO11n, 20 épocas, 4378 imgs); 0=balón, 1=jugador
 DEFAULT_MIN_CONFIDENCE = 0.65
 DEFAULT_SAMPLE_FPS = 10                     # ~10 fps (respuesta del usuario); bajar a 5 si va lento
 DEFAULT_MAX_CANDIDATES = 15
@@ -696,7 +696,7 @@ def detect_shirt_colors(
             alto, ancho = frame.shape[:2]
             try:
                 resultados = detector.predict(
-                    frame, classes=[0], imgsz=imgsz, verbose=False, device=device)
+                    frame, classes=[1], imgsz=imgsz, verbose=False, device=device)
             except Exception as error:
                 raise VideoProcessingError(f"Falló YOLO al detectar colores: {error}") from error
             if not resultados or len(resultados) == 0:
@@ -804,7 +804,7 @@ def suggest_kickoff(
             alto, ancho = frame.shape[:2]
             try:
                 resultados = detector.predict(
-                    frame, classes=[0, 32], imgsz=imgsz, verbose=False, device=device)
+                    frame, classes=[0, 1], imgsz=imgsz, verbose=False, device=device)
             except Exception as error:
                 raise VideoProcessingError(f"Falló YOLO al buscar el inicio: {error}") from error
             personas_x: list[float] = []
@@ -818,9 +818,9 @@ def suggest_kickoff(
                         x0, y0, x1, y1 = [float(v) for v in caja]
                         cx = ((x0 + x1) / 2.0) / ancho * 100.0
                         cy = ((y0 + y1) / 2.0) / alto * 100.0
-                        if int(clase) == 0:
+                        if int(clase) == 1:
                             personas_x.append(cx)
-                        elif int(clase) == 32:
+                        elif int(clase) == 0:
                             if 40.0 <= cx <= 60.0 and 40.0 <= cy <= 60.0:
                                 balon_centro = True
             import numpy as np
@@ -1418,7 +1418,7 @@ def _track_video(
                 alto, ancho = frame.shape[:2]
                 try:
                     resultados = detector.predict(
-                        frame, classes=[0, 32], imgsz=imgsz, verbose=False,
+                        frame, classes=[0, 1], imgsz=imgsz, verbose=False,
                         device=device, half=False, conf=conf,
                     )
                 except Exception as error:
@@ -1445,7 +1445,7 @@ def _track_video(
                                 cx = 100.0 - cx
                             if flip_y:
                                 cy = 100.0 - cy
-                            if clase == 0:
+                            if clase == 1:
                                 detecciones.append({
                                     "cx": cx, "cy": cy,
                                     "w": (x1 - x0) / ancho * 100.0,
@@ -1453,7 +1453,7 @@ def _track_video(
                                     "conf": float(conf_det),
                                     "caja": (int(x0), int(y0), int(x1), int(y1)),
                                 })
-                            elif clase == 32:
+                            elif clase == 0:
                                 if balon is None or conf_det > balon["conf"]:
                                     balon = {"x": cx, "y": cy, "conf": float(conf_det),
                                              # Pies del balón (idea VEO,
