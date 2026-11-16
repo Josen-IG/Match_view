@@ -1329,6 +1329,7 @@ def _track_video(
     pitch_model: str | None = None,
     pitch_keyframe_seconds: float = PITCH_KEYFRAME_SECONDS,
     device: str = "cpu",
+    ball_sel: bool = True,
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
 
@@ -3973,6 +3974,7 @@ def _analizar_impl(
         flip_x, flip_y,
         kickoff_offset, fin, update, conf=conf,
         pitch_model=pitch_model,
+        ball_sel=ball_sel,
         pitch_keyframe_seconds=pitch_keyframe_seconds,
         device=device,
     )
