@@ -1482,14 +1482,20 @@ def _track_video(
                                     "w": (x1 - x0) / ancho * 100.0,
                                     "h": (y1 - y0) / alto * 100.0,
                                     "pitch_x": None, "pitch_y": None})
-                        # Elegir el balón entre las candidatas (no gana solo
-                        # la de más confianza): compatibilidad con la
-                        # trayectoria prevista (Kalman) + confianza + tamaño.
+                        # Elegir el balón entre las candidatas. Por defecto
+                        # (ball_sel=True) por compatibilidad con la trayectoria
+                        # prevista (Kalman) + confianza + tamaño; con
+                        # ball_sel=False, la de más confianza (comportamiento
+                        # anterior, para validación A/B).
                         if candidatos_balon:
-                            hs = sorted(d["h"] for d in detecciones)
-                            h_med = hs[len(hs) // 2] if hs else None
-                            balon, balon_pred = _elegir_balon(
-                                candidatos_balon, balon_pred, t, h_med)
+                            if ball_sel:
+                                hs = sorted(d["h"] for d in detecciones)
+                                h_med = hs[len(hs) // 2] if hs else None
+                                balon, balon_pred = _elegir_balon(
+                                    candidatos_balon, balon_pred, t, h_med)
+                            else:
+                                balon = max(candidatos_balon,
+                                            key=lambda c: c["conf"])
                         # Asociar por confianza descendente: la más segura elige primero.
                         detecciones.sort(key=lambda d: -d["conf"])
                         usados: set[int] = set()
@@ -3925,6 +3931,7 @@ def _analizar_impl(
     formation_local: str = "",
     formation_visitante: str = "",
     device: str = "cpu",
+    ball_sel: bool = True,
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -4075,6 +4082,7 @@ def analyze_video(
     conf: float = 0.10,
     pitch_model: str | None = None,
     device: str = "cpu",
+    ball_sel: bool = True,
 ) -> list[dict]:
     """Analiza un vídeo (solo tracking) y devuelve la lista de eventos.
 
@@ -4102,7 +4110,7 @@ def analyze_video(
         max_minutes, kickoff_offset, camera_mode, progress,
         color_gk_local=color_gk_local,
         color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
-        conf=conf, pitch_model=pitch_model, device=device,
+        conf=conf, pitch_model=pitch_model, device=device, ball_sel=ball_sel,
     )["results"]
 
 
@@ -4134,6 +4142,7 @@ def analyze_video_full(
     formation_local: str = "",
     formation_visitante: str = "",
     device: str = "cpu",
+    ball_sel: bool = True,
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -4155,6 +4164,9 @@ def analyze_video_full(
     (pickle) ahí para diagnosticar sin volver a trackear el vídeo.
     formation_local/visitante: tácticas (p. ej. "1-4-4-2") que se guardan
     como contexto en el tracking JSON.
+    ball_sel: True (defecto) = elegir el balón entre candidatas por
+    trayectoria prevista (Kalman) + confianza + tamaño; False = quedarse
+    la de más confianza (comportamiento anterior, para validación A/B).
     """
     return _analizar_impl(
         video_path, color_local, color_visitante, team_local,
@@ -4168,6 +4180,7 @@ def analyze_video_full(
         formation_local=formation_local,
         formation_visitante=formation_visitante,
         device=device,
+        ball_sel=ball_sel,
     )
 
 
