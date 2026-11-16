@@ -494,6 +494,183 @@ def generar_figura_mapa_calor(tracking, sujeto, tramo):
     return fig, nota
 
 
+# --- Visualizaciones del Menú Final (desde lo etiquetado a mano) ---
+# Z1-Z9 es una rejilla 3x3 ABSOLUTA sobre el campo (105x68 m), tal como se
+# muestra en la pantalla de partido: Z1-Z3 tercio izquierdo, Z4-Z6 central,
+# Z7-Z9 derecho; dentro de cada tercio, Izq/Centro/Der es la banda (arriba /
+# centro / abajo en el dibujo). No se registra la portería que ataca cada
+# equipo en cada parte, así que las zonas se dibujan en términos absolutos,
+# sin espejar por equipo. El punto marca el centro de la zona, nunca la
+# posición exacta del evento: el etiquetado solo guarda la zona.
+
+_ZONAS_ORDEN = ["Z1", "Z2", "Z3", "Z4", "Z5", "Z6", "Z7", "Z8", "Z9"]
+# Centro de cada zona en metros (105x68): x por tercio, y por banda.
+_ZONAS_CENTRO = {
+    "Z1": (17.5, 56.67), "Z2": (17.5, 34.0), "Z3": (17.5, 11.33),
+    "Z4": (52.5, 56.67), "Z5": (52.5, 34.0), "Z6": (52.5, 11.33),
+    "Z7": (87.5, 56.67), "Z8": (87.5, 34.0), "Z9": (87.5, 11.33),
+}
+_ZONA_ANCHO = 35.0    # 105 / 3
+_ZONA_ALTO = 68.0 / 3  # ~22.67
+# Color de relleno del punto de tiro según el resultado (Detalle).
+_TIRO_COLORES = {"Gol": "#2E9E44", "A puerta": "#F2A007", "Fuera": "#9E9E9E"}
+
+
+def _codigo_zona(valor):
+    """Código Z1-Z9 de un valor de la columna Zona ('Z1 - Def. Izq' -> 'Z1';
+    'Z1' -> 'Z1'). Devuelve None si no es una zona válida."""
+    if valor is None:
+        return None
+    txt = str(valor).strip().upper()
+    if len(txt) >= 2 and txt[0] == "Z" and txt[1] in "123456789":
+        return txt[:2]
+    return None
+
+
+def _conteo_eventos_por_zona(df_eventos, equipo=None):
+    """Conteo de eventos por zona Z1-Z9 (dict con las 9 zonas, aunque sea 0).
+    Si se pasa equipo, solo cuenta sus eventos. Sin datos o sin columna Zona,
+    devuelve todo a cero."""
+    conteo = {z: 0 for z in _ZONAS_ORDEN}
+    if df_eventos is None or len(df_eventos) == 0:
+        return conteo
+    if "Zona" not in df_eventos.columns:
+        return conteo
+    df = df_eventos
+    if equipo is not None and "Equipo" in df.columns:
+        df = df[df["Equipo"] == equipo]
+    for valor in df["Zona"]:
+        cod = _codigo_zona(valor)
+        if cod is not None:
+            conteo[cod] += 1
+    return conteo
+
+
+def _campo_en_ax(ax):
+    """Dibuja el campo 105x68 en un ax ya creado (mplsoccer si está, si no
+    el dibujo a mano de _dibujar_campo_mano)."""
+    if MPLSOCER_DISPONIBLE:
+        pitch = Pitch(pitch_type="custom", pitch_length=105, pitch_width=68,
+                      pitch_color="white", line_color="#333333", linewidth=1.5)
+        pitch.draw(ax=ax)
+    else:
+        ax.set_xlim(0, 105)
+        ax.set_ylim(0, 68)
+        ax.set_aspect("equal")
+        _dibujar_campo_mano(ax)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+def generar_figura_mapa_tiros(df_eventos, eq_local, eq_visitante,
+                              color_local="#1E88E5", color_visitante="#E53935"):
+    """Figura matplotlib del mapa de tiros, desde los eventos Tiro etiquetados
+    a mano. Cada tiro es un punto en el centro de su zona (Z1-Z9) con un
+    pequeño desplazamiento determinista para que no se solapen los de la
+    misma zona. Relleno por resultado (Detalle: Gol / A puerta / Fuera) y
+    borde con el color del equipo que tira. Devuelve (fig, nota) o
+    (None, motivo) si no hay tiros que dibujar."""
+    if not MPL_DISPONIBLE:
+        return None, "matplotlib no está disponible en este equipo."
+    if df_eventos is None or len(df_eventos) == 0 or "Evento" not in df_eventos.columns:
+        return None, "Sin eventos registrados en este partido."
+    tiros = df_eventos[df_eventos["Evento"] == "Tiro"]
+    if len(tiros) == 0:
+        return None, "Sin tiros registrados en este partido."
+    color_equipo = {eq_local: color_local, eq_visitante: color_visitante}
+    rng = np.random.default_rng(7)  # mismo dibujo en cada ejecución
+    xs, ys, caras, bordes = [], [], [], []
+    n_dibujados = 0
+    for _, ev in tiros.iterrows():
+        cod = _codigo_zona(ev.get("Zona"))
+        if cod is None:
+            continue
+        cx, cy = _ZONAS_CENTRO[cod]
+        x = float(np.clip(cx + rng.uniform(-7, 7),
+                          cx - _ZONA_ANCHO / 2 + 2, cx + _ZONA_ANCHO / 2 - 2))
+        y = float(np.clip(cy + rng.uniform(-5, 5),
+                          cy - _ZONA_ALTO / 2 + 2, cy + _ZONA_ALTO / 2 - 2))
+        xs.append(x)
+        ys.append(y)
+        caras.append(_TIRO_COLORES.get(str(ev.get("Detalle", "")).strip(), "#9E9E9E"))
+        bordes.append(color_equipo.get(ev.get("Equipo"), "#666666"))
+        n_dibujados += 1
+    if n_dibujados == 0:
+        return None, "Los tiros registrados no tienen una zona Z1-Z9 válida."
+    fig, ax = plt.subplots(figsize=(10, 6.8))
+    _campo_en_ax(ax)
+    ax.scatter(xs, ys, s=170, c=caras, edgecolors=bordes, linewidths=2.0, zorder=5)
+    from matplotlib.lines import Line2D
+    leyenda = [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markeredgecolor="#333333",
+               markersize=11, label=f"{det} ({sum(1 for f in caras if f == c)})")
+        for det, c in _TIRO_COLORES.items() if c in caras
+    ]
+    leyenda += [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
+               markeredgecolor=color_local, markeredgewidth=2.0, markersize=11,
+               label=f"Borde: {eq_local}"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
+               markeredgecolor=color_visitante, markeredgewidth=2.0, markersize=11,
+               label=f"Borde: {eq_visitante}"),
+    ]
+    ax.legend(handles=leyenda, loc="upper center", bbox_to_anchor=(0.5, -0.02),
+              ncol=3, frameon=False, fontsize=10)
+    ax.set_title(f"Mapa de tiros — {eq_local} vs {eq_visitante} "
+                 f"({n_dibujados} tiros)", fontsize=13)
+    fig.tight_layout()
+    nota = ("Cada punto es un tiro etiquetado a mano, situado en el centro de "
+            "su zona (Z1–Z3 tercio izquierdo, Z7–Z9 derecho): no es la posición "
+            "exacta del tiro. Relleno por resultado, borde por equipo.")
+    return fig, nota
+
+
+def generar_figura_mapa_zonas(df_eventos, eq_local, eq_visitante,
+                              color_local="#1E88E5", color_visitante="#E53935"):
+    """Figura matplotlib de actividad por zonas: dos campos lado a lado
+    (local / visitante) con la densidad de eventos por zona Z1-Z9. Cada celda
+    se colorea con el color del equipo (más intenso = más eventos) y lleva el
+    conteo. La escala de intensidad es común a ambos equipos (el máximo de
+    los dos), para que se puedan comparar. Devuelve (fig, nota) o
+    (None, motivo) si no hay eventos con zona válida."""
+    if not MPL_DISPONIBLE:
+        return None, "matplotlib no está disponible en este equipo."
+    if df_eventos is None or len(df_eventos) == 0 or "Zona" not in df_eventos.columns:
+        return None, "Sin eventos registrados en este partido."
+    c_local = _conteo_eventos_por_zona(df_eventos, eq_local)
+    c_vis = _conteo_eventos_por_zona(df_eventos, eq_visitante)
+    total = sum(c_local.values()) + sum(c_vis.values())
+    if total == 0:
+        return None, "Los eventos registrados no tienen una zona Z1-Z9 válida."
+    vmax = max(max(c_local.values()), max(c_vis.values()))
+    import matplotlib.patches as mpatches
+    fig, axes = plt.subplots(1, 2, figsize=(11, 6.2))
+    for ax, equipo, conteo, color in (
+            (axes[0], eq_local, c_local, color_local),
+            (axes[1], eq_visitante, c_vis, color_visitante)):
+        _campo_en_ax(ax)
+        for z in _ZONAS_ORDEN:
+            cx, cy = _ZONAS_CENTRO[z]
+            n = conteo[z]
+            ax.add_patch(mpatches.Rectangle(
+                (cx - _ZONA_ANCHO / 2, cy - _ZONA_ALTO / 2),
+                _ZONA_ANCHO, _ZONA_ALTO,
+                facecolor=color, alpha=(0.85 * n / vmax) if n > 0 else 0.0,
+                edgecolor="#333333", lw=0.8, zorder=2))
+            ax.text(cx - _ZONA_ANCHO / 2 + 1.5, cy + _ZONA_ALTO / 2 - 3.5, z,
+                    fontsize=8, color="#555555", ha="left", va="top", zorder=4)
+            ax.text(cx, cy, str(n), fontsize=14, fontweight="bold",
+                    color="#111111" if n > 0 else "#BBBBBB",
+                    ha="center", va="center", zorder=4)
+        ax.set_title(f"{equipo} ({sum(conteo.values())} eventos)", fontsize=12)
+    fig.suptitle("Actividad por zonas — eventos etiquetados a mano", fontsize=13)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    nota = (f"Eventos por zona Z1–Z9 (Z1–Z3 tercio izquierdo, Z7–Z9 derecho). "
+            f"Intensidad común a ambos equipos: el máximo es {vmax} eventos "
+            f"en una zona. Reutiliza los conteos por zona de arriba.")
+    return fig, nota
+
+
 def leer_metadatos_tracking(ruta):
     """Metadatos de un tracking sin quedarse con las muestras en memoria.
     Devuelve dict o None si el archivo no se puede leer."""
@@ -982,6 +1159,35 @@ elif st.session_state.pagina == "final":
                 res_zn = df_editado["Zona"].value_counts().reset_index()
                 res_zn.columns = ["Zona", "Total"]
                 st.dataframe(res_zn, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown("#### 🎯 Visualizaciones (desde lo etiquetado a mano)")
+        st.caption("Solo con lo registrado en vivo en esta pantalla. La red de "
+                   "pases no se puede dibujar: no se registran pases ni jugadores.")
+
+        fig_tiros, nota_tiros = generar_figura_mapa_tiros(
+            df_editado, dp["eq_local"], dp["eq_visitante"],
+            dp.get("color_local", "#1E88E5"), dp.get("color_visitante", "#E53935"))
+        if fig_tiros is None:
+            st.info(f"🎯 Mapa de tiros: {nota_tiros}")
+        else:
+            st.pyplot(fig_tiros, use_container_width=True)
+            st.caption(nota_tiros)
+            plt.close(fig_tiros)
+
+        fig_zonas, nota_zonas = generar_figura_mapa_zonas(
+            df_editado, dp["eq_local"], dp["eq_visitante"],
+            dp.get("color_local", "#1E88E5"), dp.get("color_visitante", "#E53935"))
+        if fig_zonas is None:
+            st.info(f"📍 Actividad por zonas: {nota_zonas}")
+        else:
+            st.pyplot(fig_zonas, use_container_width=True)
+            st.caption(nota_zonas)
+            plt.close(fig_zonas)
+
+        st.info("📈 Tendencias por jornada: no disponibles. El CSV solo se "
+                "descarga, no se guarda en la app, así que no hay histórico de "
+                "jornadas anteriores con el que comparar.")
 
         st.divider()
 

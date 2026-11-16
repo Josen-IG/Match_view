@@ -235,6 +235,26 @@
       .tl-tick{ position:absolute; top:0; bottom:0; border-left:1px solid var(--line2); font-size:10px; color:var(--dim); padding-left:3px; line-height:18px; white-space:nowrap; }
       .tl-lane[data-lane="fx"]{ height:30px; }
       .tl-clip.sel{ background:rgba(255,210,31,.45); box-shadow:0 0 0 1px var(--acc2); }
+      /* ---------- Analytics (pestaña) ---------- */
+      .analytics-wrap{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:12px; }
+      .an-head{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+      .an-head h2{ font-size:13px; letter-spacing:.5px; text-transform:uppercase; color:var(--mut); }
+      .an-head label{ font-size:12px; color:var(--mut); font-weight:600; }
+      .an-head select{ min-width:170px; }
+      .an-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      @media (max-width:760px){ .an-grid{ grid-template-columns:1fr; } }
+      .an-card{ background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px; }
+      .an-card h3{ font-size:13px; margin-bottom:4px; }
+      .an-card .an-sub{ font-size:12px; color:var(--mut); margin-bottom:10px; }
+      .an-card canvas{ width:100%; height:auto; display:block; border-radius:6px; }
+      .an-card table.summary{ margin-top:10px; }
+      .an-card .an-scroll{ max-height:220px; overflow:auto; }
+      .an-note{ font-size:12px; color:var(--dim); margin-top:8px; }
+      .an-note b{ color:var(--mut); }
+      .an-mono{ font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .an-layers{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+      .an-layers button.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
+      .an-empty{ color:var(--dim); font-size:13px; padding:18px 4px; text-align:center; }
     </style>
   </head>
   <body>
@@ -314,6 +334,7 @@
         <div class="view-tabs" role="tablist" aria-label="Vista principal">
           <button type="button" class="view-tab active" id="tabVideo" role="tab" aria-selected="true">📹 Vídeo</button>
           <button type="button" class="view-tab" id="tabBoard" role="tab" aria-selected="false">⚽ Pizarra táctica</button>
+          <button type="button" class="view-tab" id="tabAnalytics" role="tab" aria-selected="false">📊 Analytics</button>
         </div>
         <section class="stage-wrap" id="stageWrap">
           <div class="stage" id="stage">
@@ -409,6 +430,57 @@
                 <div class="tl-lane" data-lane="cuts" id="laneCuts"></div>
                 <div class="tl-lane" data-lane="events" id="laneEvents"></div>
                 <div class="tl-playhead" id="tlPlayhead" style="display:none"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="analytics-wrap" id="analyticsWrap" hidden aria-label="Analytics">
+          <div class="an-head">
+            <h2>Analytics — del tracking cargado</h2>
+            <label>Tramo
+              <select id="analyticsSegment" title="Tramo de partido para todas las visualizaciones">
+                <option value="all">Partido completo</option>
+              </select>
+            </label>
+          </div>
+          <div class="an-empty" id="analyticsEmpty">Sin tracking cargado: carga el JSON de tracking para ver el Analytics. Sin tracking no hay cifras: esta pestaña nunca inventa datos.</div>
+          <div id="analyticsContent" hidden>
+            <div class="an-grid">
+              <div class="an-card">
+                <h3>Territorio — mapa de calor sobre el campo</h3>
+                <div class="an-sub">Puntos de campo (<span class="an-mono">pp</span>) recortados a 105×68 m. El balón usa su posición de campo cuando el tracking la trae; si no, una aproximación desde la imagen (ver nota).</div>
+                <div class="an-layers" role="group" aria-label="Capa del mapa de calor">
+                  <button type="button" class="active" data-layer="local" id="heatLocalBtn">Local</button>
+                  <button type="button" data-layer="visitante" id="heatVisBtn">Visitante</button>
+                  <button type="button" data-layer="balon" id="heatBallBtn">Balón</button>
+                </div>
+                <canvas id="heatCanvas" width="1050" height="680"></canvas>
+                <div id="heatTable"></div>
+                <div class="an-note" id="heatCoverage"></div>
+                <div class="an-note" id="heatBallNote"></div>
+              </div>
+              <div class="an-card">
+                <h3>Posiciones medias — radar 2D por track</h3>
+                <div class="an-sub">Posición media de cada track (<span class="an-mono">trackId</span>) sobre el campo, por equipo.</div>
+                <canvas id="meanPosCanvas" width="1050" height="680"></canvas>
+                <div class="an-scroll" id="meanPosTable"></div>
+                <div class="an-note"><b>Un track NO es un jugador con nombre:</b> el seguimiento se rompe y el mismo jugador puede aparecer con varios tracks distintos; un mismo track tampoco es siempre la misma persona. Sirve para ver dónde se coloca el bloque, no para identificar jugadores.</div>
+              </div>
+              <div class="an-card">
+                <h3>Conexiones entre líneas</h3>
+                <div class="an-sub">Líneas por tercios del campo (defensa–medio–ataque, en el sentido del ataque de cada equipo), distancias entre centroides y amplitud del bloque.</div>
+                <canvas id="linesCanvas" width="1050" height="680"></canvas>
+                <div id="linesTable"></div>
+                <div id="compactTable"></div>
+                <div class="an-note">La compacidad (área, anchura, profundidad) se reutiliza de <span class="an-mono">stats.compacidad</span> del tracking cuando existe para el tramo; si un tramo no trae datos, se muestra «sin datos», nunca 0.</div>
+              </div>
+              <div class="an-card">
+                <h3>Circulación del balón por zonas</h3>
+                <div class="an-sub">Flujo zona → zona del balón en una rejilla 3×3. <b>No es una red de pases:</b> el vídeo no sabe quién es cada jugador, solo dónde está el balón.</div>
+                <canvas id="flowCanvas" width="1050" height="680"></canvas>
+                <div id="flowTable"></div>
+                <div class="an-note" id="flowBallNote"></div>
               </div>
             </div>
           </div>
@@ -689,6 +761,280 @@
       }
       return { action: 'keep', idx: idx };
     }
+
+    /* ================= Analytics (lógica pura, sin DOM) ============= */
+    /* Campo esquemático en metros (105×68). Todas las posiciones de
+       campo (pp, bp) se recortan a este rectángulo antes de graficar:
+       el tracking trae puntos fuera (homografía imperfecta). */
+    var FIELD_W_M = 105, FIELD_H_M = 68;
+    /* Rejilla 3×3 del campo: columnas en el sentido del ataque local
+       (Defensa 0-35, Medio 35-70, Ataque 70-105) y filas por banda
+       (Arriba 0-22,7, Centro, Abajo). */
+    var ZONE_LABELS = [
+      'Defensa · Arriba', 'Medio · Arriba', 'Ataque · Arriba',
+      'Defensa · Centro', 'Medio · Centro', 'Ataque · Centro',
+      'Defensa · Abajo', 'Medio · Abajo', 'Ataque · Abajo'
+    ];
+    function zoneLabel(i){ return ZONE_LABELS[i] || 'Zona ' + (i + 1); }
+    function zoneIndex(x, y){
+      if (typeof x !== 'number' || typeof y !== 'number' || !isFinite(x) || !isFinite(y)) return -1;
+      var col = Math.min(2, Math.max(0, Math.floor(x / (FIELD_W_M / 3))));
+      var row = Math.min(2, Math.max(0, Math.floor(y / (FIELD_H_M / 3))));
+      return row * 3 + col;
+    }
+    function clipFieldPoint(x, y){
+      if (typeof x !== 'number' || typeof y !== 'number' || !isFinite(x) || !isFinite(y)) return null;
+      return { x: Math.max(0, Math.min(FIELD_W_M, x)), y: Math.max(0, Math.min(FIELD_H_M, y)) };
+    }
+    /* Posición del balón en el campo para una muestra. Primero bp (la
+       posición de campo que trae el tracking, de la homografía;
+       bf='kalman' cuando es un puente entre detecciones). Si no hay
+       bp pero sí b (coords de imagen 0-100), mapeo lineal al campo
+       esquemático: APROXIMADO, sin corrección de perspectiva, y se
+       marca como tal (source 'aprox'). null si no hay ni una ni otra. */
+    function ballFieldPoint(s){
+      if (!s) return null;
+      if (s.bp && isFinite(s.bp[0]) && isFinite(s.bp[1])){
+        var p = clipFieldPoint(s.bp[0], s.bp[1]);
+        if (p){ p.source = 'campo'; return p; }
+      }
+      if (s.b && isFinite(s.b[0]) && isFinite(s.b[1])){
+        var q = clipFieldPoint(s.b[0] / 100 * FIELD_W_M, s.b[1] / 100 * FIELD_H_M);
+        if (q){ q.source = 'aprox'; return q; }
+      }
+      return null;
+    }
+    /* Tramos del selector: "Partido completo" + tramos de 15' según
+       match_duration_s (el último se recorta a la duración real y su
+       etiqueta usa los minutos reales, p. ej. un clip de 240 s da
+       solo "0–4'"). Tiempos en segundos de partido. */
+    function analyticsSegments(matchDurationS){
+      var segs = [{ id: 'all', label: 'Partido completo', a: 0, b: Infinity }];
+      var dur = (typeof matchDurationS === 'number' && isFinite(matchDurationS) && matchDurationS > 0) ? matchDurationS : 0;
+      if (!dur) return segs;
+      var SEG = 900;
+      var n = Math.ceil(dur / SEG);
+      for (var i = 0; i < n; i++){
+        var a = i * SEG, b = Math.min(dur, (i + 1) * SEG);
+        segs.push({ id: 'seg' + i, label: Math.floor(a / 60) + '–' + Math.ceil(b / 60) + "'", a: a, b: b });
+      }
+      return segs;
+    }
+    /* Muestras de un tramo: t es tiempo de vídeo; el tiempo de
+       partido es t - kickoff_s. 'all' no filtra. */
+    function samplesInSegment(samples, seg, kickoffS){
+      var ko = kickoffS || 0;
+      var out = [];
+      (samples || []).forEach(function(s){
+        if (!s || typeof s.t !== 'number' || !isFinite(s.t)) return;
+        if (seg && seg.id !== 'all'){
+          var mt = s.t - ko;
+          if (mt < seg.a || mt >= seg.b) return;
+        }
+        out.push(s);
+      });
+      return out;
+    }
+    /* Puntos de campo de un equipo desde pp (códigos 0/2 local,
+       1/3 visitante; el portero cuenta como su equipo; árbitro y
+       desconocido fuera). Recortados al campo. */
+    function teamFieldPoints(samples, team){
+      var codes = team === 'local' ? [0, 2] : [1, 3];
+      var out = [];
+      (samples || []).forEach(function(s){
+        (s.pp || []).forEach(function(p){
+          if (!p || codes.indexOf(p[2]) < 0) return;
+          var q = clipFieldPoint(p[0], p[1]);
+          if (q) out.push(q);
+        });
+      });
+      return out;
+    }
+    function ballFieldPoints(samples){
+      var out = [];
+      (samples || []).forEach(function(s){
+        var p = ballFieldPoint(s);
+        if (p) out.push(p);
+      });
+      return out;
+    }
+    /* Mapa de calor: conteos por celda (cols×rows, por defecto 7×5)
+       sobre el campo. cells va por filas (r*cols+c). */
+    function heatmapGrid(points, cols, rows){
+      cols = cols || 7; rows = rows || 5;
+      var cells = [], max = 0, total = 0;
+      for (var i = 0; i < cols * rows; i++) cells.push(0);
+      (points || []).forEach(function(pt){
+        if (!pt) return;
+        var c = Math.min(cols - 1, Math.max(0, Math.floor(pt.x / FIELD_W_M * cols)));
+        var r = Math.min(rows - 1, Math.max(0, Math.floor(pt.y / FIELD_H_M * rows)));
+        cells[r * cols + c]++; total++;
+        if (cells[r * cols + c] > max) max = cells[r * cols + c];
+      });
+      return { cols: cols, rows: rows, cells: cells, max: max, total: total };
+    }
+    /* Conteos por zona 3×3 y % de zonas ocupadas (con al menos un punto). */
+    function zoneCounts(points){
+      var cells = [0, 0, 0, 0, 0, 0, 0, 0, 0], total = 0;
+      (points || []).forEach(function(pt){
+        if (!pt) return;
+        var z = zoneIndex(pt.x, pt.y);
+        if (z < 0) return;
+        cells[z]++; total++;
+      });
+      var occupied = 0;
+      cells.forEach(function(n){ if (n > 0) occupied++; });
+      return { cells: cells, total: total, occupied: occupied, zones: 9 };
+    }
+    /* Posición media de cada track: se empareja p[i] (imagen, con
+       trackId en [5]) con pp[i] (campo) por índice, solo en muestras
+       donde ambos arrays tienen la misma longitud. Devuelve por
+       track: equipo, nº de muestras y media (x, y) en metros. */
+    function trackMeanPositions(samples){
+      var acc = {};
+      (samples || []).forEach(function(s){
+        if (!s || !s.p || !s.pp || s.p.length !== s.pp.length) return;
+        for (var i = 0; i < s.p.length; i++){
+          var per = s.p[i], fp = s.pp[i];
+          if (!per || !fp) continue;
+          var code = per[4];
+          var team = (code === 0 || code === 2) ? 'local' : (code === 1 || code === 3) ? 'visitante' : null;
+          if (!team) continue;
+          var q = clipFieldPoint(fp[0], fp[1]);
+          if (!q) continue;
+          var id = per[5];
+          if (id == null) continue;
+          var a = acc[id];
+          if (!a) a = acc[id] = { trackId: id, team: team, n: 0, sx: 0, sy: 0 };
+          a.n++; a.sx += q.x; a.sy += q.y;
+        }
+      });
+      var out = [];
+      for (var k in acc){
+        var a2 = acc[k];
+        out.push({ trackId: a2.trackId, team: a2.team, n: a2.n, x: Math.round(a2.sx / a2.n * 10) / 10, y: Math.round(a2.sy / a2.n * 10) / 10 });
+      }
+      out.sort(function(x, y){ return y.n - x.n; });
+      return out;
+    }
+    function percentileOf(sorted, q){
+      if (!sorted || !sorted.length) return null;
+      var pos = (sorted.length - 1) * q;
+      var lo = Math.floor(pos), hi = Math.ceil(pos);
+      if (lo === hi) return sorted[lo];
+      return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+    }
+    /* Conexiones entre líneas de un equipo: tercios por x (defensa /
+       medio / ataque) en el sentido de SU ataque (el visitante ataca
+       al revés: su defensa está en x alta). Centroides por línea,
+       distancia entre centroides, y amplitud del bloque (rango
+       p5–p95, menos sensible a puntos sueltos que máx.–mín.). null
+       en lo que no se pueda calcular (línea vacía). */
+    function lineStatsForTeam(samples, team){
+      var pts = teamFieldPoints(samples, team);
+      if (!pts.length) return null;
+      var lines = { def: [], med: [], ata: [] };
+      pts.forEach(function(p){
+        var third = p.x < FIELD_W_M / 3 ? 'def' : (p.x < 2 * FIELD_W_M / 3 ? 'med' : 'ata');
+        if (team === 'visitante') third = p.x < FIELD_W_M / 3 ? 'ata' : (p.x < 2 * FIELD_W_M / 3 ? 'med' : 'def');
+        lines[third].push(p);
+      });
+      function centroid(arr){
+        if (!arr.length) return null;
+        var sx = 0, sy = 0;
+        arr.forEach(function(p){ sx += p.x; sy += p.y; });
+        return { n: arr.length, x: Math.round(sx / arr.length * 10) / 10, y: Math.round(sy / arr.length * 10) / 10 };
+      }
+      function dist(a, b){
+        if (!a || !b) return null;
+        return Math.round(Math.hypot(a.x - b.x, a.y - b.y) * 10) / 10;
+      }
+      var def = centroid(lines.def), med = centroid(lines.med), ata = centroid(lines.ata);
+      var xs = pts.map(function(p){ return p.x; }).sort(function(a, b){ return a - b; });
+      var ys = pts.map(function(p){ return p.y; }).sort(function(a, b){ return a - b; });
+      function span(arr){
+        var lo = percentileOf(arr, 0.05), hi = percentileOf(arr, 0.95);
+        return (lo == null || hi == null) ? null : Math.round((hi - lo) * 10) / 10;
+      }
+      return {
+        team: team, total: pts.length,
+        def: def, med: med, ata: ata,
+        distDefMed: dist(def, med), distMedAta: dist(med, ata),
+        anchura: span(ys), profundidad: span(xs)
+      };
+    }
+    /* "0-3'" -> {a:0, b:180} (segundos de partido). null si no casa. */
+    function parseTramoLabel(label){
+      if (typeof label !== 'string') return null;
+      var m = label.match(/(\d+)\s*-\s*(\d+)\s*'/);
+      if (!m) return null;
+      return { a: parseInt(m[1], 10) * 60, b: parseInt(m[2], 10) * 60 };
+    }
+    /* Compacidad reutilizada de stats.compacidad: media de los tramos
+       que solapan con el segmento (o todos, si es 'all'). Por equipo:
+       null si ningún tramo del segmento trae datos de ese equipo
+       (la UI muestra "sin datos", nunca 0). */
+    function compactnessForSegment(track, seg){
+      var none = { local: null, visitante: null };
+      if (!track || !track.stats || !track.stats.compacidad || !Array.isArray(track.stats.compacidad.tramos)) return none;
+      var acc = { local: [], visitante: [] };
+      track.stats.compacidad.tramos.forEach(function(tr){
+        if (!tr) return;
+        var span = parseTramoLabel(tr.tramo);
+        if (!span) return;
+        if (seg && seg.id !== 'all' && (span.b <= seg.a || span.a >= seg.b)) return;
+        ['local', 'visitante'].forEach(function(team){
+          var d = tr[team];
+          if (d && typeof d.area_m2 === 'number') acc[team].push(d);
+        });
+      });
+      function avg(arr){
+        if (!arr.length) return null;
+        var out = { n: arr.length };
+        ['area_m2', 'anchura_m', 'profundidad_m'].forEach(function(k){
+          var vals = arr.map(function(d){ return d[k]; }).filter(function(v){ return typeof v === 'number' && isFinite(v); });
+          out[k] = vals.length ? Math.round(vals.reduce(function(a, b){ return a + b; }, 0) / vals.length * 10) / 10 : null;
+        });
+        var cx = arr.map(function(d){ return d.centroide_m && d.centroide_m[0]; }).filter(function(v){ return typeof v === 'number'; });
+        var cy = arr.map(function(d){ return d.centroide_m && d.centroide_m[1]; }).filter(function(v){ return typeof v === 'number'; });
+        out.centroide_m = (cx.length && cy.length) ? [Math.round(cx.reduce(function(a, b){ return a + b; }, 0) / cx.length * 10) / 10, Math.round(cy.reduce(function(a, b){ return a + b; }, 0) / cy.length * 10) / 10] : null;
+        return out;
+      }
+      return { local: avg(acc.local), visitante: avg(acc.visitante) };
+    }
+    /* Circulación del balón por zonas: secuencia de posiciones de
+       campo del balón en orden temporal; una transición zona→zona
+       cuenta cuando la zona cambia entre dos muestras consecutivas
+       con balón separadas ≤1 s (un hueco mayor no cuenta: el balón
+       pudo cruzar varias zonas sin verse). Devuelve conteos por
+       zona, matriz 9×9 y la lista de transiciones ordenada. */
+    function ballZoneFlow(samples){
+      var zones = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      var matrix = [];
+      for (var i = 0; i < 81; i++) matrix.push(0);
+      var total = 0, fromCampo = 0, fromAprox = 0, transitions = 0;
+      var lastZone = -1, lastT = null;
+      (samples || []).forEach(function(s){
+        var p = ballFieldPoint(s);
+        if (!p) return;
+        var z = zoneIndex(p.x, p.y);
+        if (z < 0) return;
+        zones[z]++; total++;
+        if (p.source === 'campo') fromCampo++; else fromAprox++;
+        if (lastZone >= 0 && z !== lastZone && lastT != null && (s.t - lastT) <= 1){
+          matrix[lastZone * 9 + z]++;
+          transitions++;
+        }
+        lastZone = z; lastT = s.t;
+      });
+      var list = [];
+      for (var a = 0; a < 9; a++) for (var b = 0; b < 9; b++){
+        var n = matrix[a * 9 + b];
+        if (n > 0) list.push({ from: a, to: b, n: n });
+      }
+      list.sort(function(x, y){ return y.n - x.n; });
+      return { zones: zones, matrix: matrix, transitions: list, totalTransitions: transitions, total: total, fromCampo: fromCampo, fromAprox: fromAprox };
+    }
     /* MV-PURE-LOGIC-END */
     </script>
 
@@ -713,6 +1059,7 @@
       playAll: null,
       selectedAnno: null,
       lastStatsSecond: -1,
+      analytics: { segment: 'all', heatLayer: 'local', segments: [{ id: 'all', label: 'Partido completo', a: 0, b: Infinity }] },
       context: null
     };
 
@@ -940,6 +1287,8 @@
       renderTimeline();
       renderEventList();
       renderFullSummary();
+      buildAnalyticsSegments();
+      renderAnalytics();
       state.lastStatsSecond = -1;
       checkVideoMatch();
       updateStatus();
@@ -1027,6 +1376,7 @@
       renderTimeline();
       renderEventList();
       renderFullSummary();
+      renderAnalytics();
       state.lastStatsSecond = -1;
       updateStatus();
     }
@@ -2535,29 +2885,284 @@
       }, 'image/png');
     });
 
-    /* Pestañas Vídeo / Pizarra: la pizarra sustituye al escenario y a
-       la barra de herramientas de vídeo; al abrirla se pausa el vídeo. */
+    /* Pestañas Vídeo / Pizarra / Analytics: la pizarra y el Analytics
+       sustituyen al escenario, a los controles y a la línea de tiempo;
+       al abrirlos se pausa el vídeo. */
     function setView(view){
       var isBoard = view === 'board';
-      $('stageWrap').hidden = isBoard;
-      $('videoControls').hidden = isBoard;
-      $('timeline').hidden = isBoard;
-      $('toolRail').hidden = isBoard;
-      document.querySelector('.layout').classList.toggle('board-view', isBoard);
+      var isAnalytics = view === 'analytics';
+      $('stageWrap').hidden = isBoard || isAnalytics;
+      $('videoControls').hidden = isBoard || isAnalytics;
+      $('timeline').hidden = isBoard || isAnalytics;
+      $('toolRail').hidden = isBoard || isAnalytics;
+      document.querySelector('.layout').classList.toggle('board-view', isBoard || isAnalytics);
       $('boardWrap').hidden = !isBoard;
-      $('tabVideo').classList.toggle('active', !isBoard);
+      $('analyticsWrap').hidden = !isAnalytics;
+      $('tabVideo').classList.toggle('active', !isBoard && !isAnalytics);
       $('tabBoard').classList.toggle('active', isBoard);
-      $('tabVideo').setAttribute('aria-selected', String(!isBoard));
+      $('tabAnalytics').classList.toggle('active', isAnalytics);
+      $('tabVideo').setAttribute('aria-selected', String(!isBoard && !isAnalytics));
       $('tabBoard').setAttribute('aria-selected', String(isBoard));
+      $('tabAnalytics').setAttribute('aria-selected', String(isAnalytics));
       if (isBoard){
         video.pause();
         drawBoard();
+      } else if (isAnalytics){
+        video.pause();
+        renderAnalytics();
       } else {
         sizeCanvases();
       }
     }
     $('tabVideo').addEventListener('click', function(){ setView('video'); });
     $('tabBoard').addEventListener('click', function(){ setView('board'); });
+    $('tabAnalytics').addEventListener('click', function(){ setView('analytics'); });
+
+    /* ================= Analytics ================= */
+    /* Todo se calcula en JS desde el tracking cargado (muestras y
+       stats del JSON), con el tramo elegido en el selector. Sin
+       tracking, la pestaña muestra el estado vacío, nunca cifras. */
+    var AN_W = 1050, AN_H = 680;
+    function anX(m){ return m / FIELD_W_M * AN_W; }
+    function anY(m){ return m / FIELD_H_M * AN_H; }
+    function anFmt(v, unit){
+      if (v == null || !isFinite(v)) return 'sin datos';
+      return (Math.round(v * 10) / 10).toLocaleString('es-ES') + (unit ? ' ' + unit : '');
+    }
+    /* Campo esquemático 105×68 m sobre un canvas (mismo dibujo que la
+       pizarra, pero a sangre completa: sin márgenes). */
+    function drawAnalyticsPitch(ctx){
+      ctx.fillStyle = '#2e7d32'; ctx.fillRect(0, 0, AN_W, AN_H);
+      ctx.fillStyle = '#35853a';
+      for (var i = 0; i < 10; i += 2) ctx.fillRect(anX(i * 10.5), 0, 10.5 / FIELD_W_M * AN_W, AN_H);
+      ctx.strokeStyle = 'rgba(255,255,255,.92)'; ctx.lineWidth = 2; ctx.fillStyle = 'rgba(255,255,255,.92)';
+      function rect(x, y, w, h){ ctx.strokeRect(anX(x), anY(y), w / FIELD_W_M * AN_W, h / FIELD_H_M * AN_H); }
+      function line(x1, y1, x2, y2){ ctx.beginPath(); ctx.moveTo(anX(x1), anY(y1)); ctx.lineTo(anX(x2), anY(y2)); ctx.stroke(); }
+      rect(0, 0, 105, 68);
+      line(52.5, 0, 52.5, 68);
+      ctx.beginPath(); ctx.arc(anX(52.5), anY(34), 9.15 / FIELD_W_M * AN_W, 0, 6.2832); ctx.stroke();
+      ctx.beginPath(); ctx.arc(anX(52.5), anY(34), 3, 0, 6.2832); ctx.fill();
+      [0, 1].forEach(function(side){
+        var gx = side === 0 ? 0 : 105, dir = side === 0 ? 1 : -1;
+        rect(Math.min(gx, gx + dir * 16.5), 13.84, 16.5, 40.32);
+        rect(Math.min(gx, gx + dir * 5.5), 24.84, 5.5, 18.32);
+        ctx.beginPath(); ctx.arc(anX(gx + dir * 11), anY(34), 3, 0, 6.2832); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(anX(gx + dir * 11), anY(34), 9.15 / FIELD_W_M * AN_W, side === 0 ? -0.93 : Math.PI - 0.93, side === 0 ? 0.93 : Math.PI + 0.93);
+        ctx.stroke();
+        ctx.strokeRect(anX(gx) + (side === 0 ? -2 / FIELD_W_M * AN_W : 0), anY(30.34), 2 / FIELD_W_M * AN_W, 7.32 / FIELD_H_M * AN_H);
+      });
+    }
+    function drawAnArrow(ctx, x1, y1, x2, y2, color, width){
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      var ang = Math.atan2(y2 - y1, x2 - x1), hl = 14, hw = 6;
+      var bx = x2 - hl * Math.cos(ang), by = y2 - hl * Math.sin(ang);
+      var px = Math.cos(ang + Math.PI / 2), py = Math.sin(ang + Math.PI / 2);
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(bx + hw * px, by + hw * py);
+      ctx.lineTo(bx - hw * px, by - hw * py);
+      ctx.closePath(); ctx.fill();
+    }
+    function currentAnalyticsSegment(){
+      var segs = state.analytics.segments || [];
+      for (var i = 0; i < segs.length; i++) if (segs[i].id === state.analytics.segment) return segs[i];
+      return segs[0] || { id: 'all', label: 'Partido completo', a: 0, b: Infinity };
+    }
+    function buildAnalyticsSegments(){
+      var dur = null;
+      if (state.track && typeof state.track.match_duration_s === 'number' && isFinite(state.track.match_duration_s)) dur = state.track.match_duration_s;
+      else if (state.samples.length){
+        dur = state.samples[state.samples.length - 1].t - kickoff();
+      }
+      state.analytics.segments = analyticsSegments(dur);
+      var sel = $('analyticsSegment');
+      if (!sel) return;
+      var keep = state.analytics.segment;
+      sel.innerHTML = '';
+      state.analytics.segments.forEach(function(sg){
+        var o = document.createElement('option');
+        o.value = sg.id; o.textContent = sg.label;
+        sel.appendChild(o);
+      });
+      if (state.analytics.segments.some(function(sg){ return sg.id === keep; })) sel.value = keep;
+      else { sel.value = 'all'; state.analytics.segment = 'all'; }
+    }
+    $('analyticsSegment').addEventListener('change', function(){
+      state.analytics.segment = this.value;
+      renderAnalytics();
+    });
+    document.querySelectorAll('.an-layers button').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        state.analytics.heatLayer = btn.getAttribute('data-layer');
+        document.querySelectorAll('.an-layers button').forEach(function(b){ b.classList.toggle('active', b === btn); });
+        renderAnalytics();
+      });
+    });
+    function renderAnalytics(){
+      var empty = $('analyticsEmpty'), content = $('analyticsContent');
+      if (!empty || !content) return;
+      var has = !!(state.track && state.samples.length);
+      empty.hidden = has;
+      content.hidden = !has;
+      if (!has) return;
+      var seg = currentAnalyticsSegment();
+      var segSamples = samplesInSegment(state.samples, seg, kickoff());
+      renderHeat(segSamples);
+      renderMeanPos(segSamples);
+      renderLines(segSamples, seg);
+      renderFlow(segSamples);
+    }
+    function renderHeat(segSamples){
+      var layer = state.analytics.heatLayer;
+      var names = teamNames(), colors = teamColors();
+      var ptsLocal = teamFieldPoints(segSamples, 'local');
+      var ptsVis = teamFieldPoints(segSamples, 'visitante');
+      var ptsBall = ballFieldPoints(segSamples);
+      var pts = layer === 'local' ? ptsLocal : layer === 'visitante' ? ptsVis : ptsBall;
+      var color = layer === 'local' ? colors.local : layer === 'visitante' ? colors.visitante : '#FFD21F';
+      var cv = $('heatCanvas');
+      if (cv){
+        var ctx = cv.getContext('2d');
+        drawAnalyticsPitch(ctx);
+        var grid = heatmapGrid(pts, 7, 5);
+        for (var r = 0; r < grid.rows; r++){
+          for (var c = 0; c < grid.cols; c++){
+            var n = grid.cells[r * grid.cols + c];
+            if (!n || !grid.max) continue;
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.12 + 0.62 * (n / grid.max);
+            ctx.fillRect(c * AN_W / grid.cols, r * AN_H / grid.rows, AN_W / grid.cols, AN_H / grid.rows);
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+      var zL = zoneCounts(ptsLocal), zV = zoneCounts(ptsVis), zB = zoneCounts(ptsBall);
+      var html = '<table class="summary"><tr><th>Zona 3×3</th><th>' + escapeHtml(names.local) + '</th><th>' + escapeHtml(names.visitante) + '</th><th>Balón</th></tr>';
+      for (var z = 0; z < 9; z++){
+        html += '<tr><td>' + escapeHtml(zoneLabel(z)) + '</td><td>' + (zL.total ? Math.round(zL.cells[z] / zL.total * 100) + '%' : '–') + '</td><td>' + (zV.total ? Math.round(zV.cells[z] / zV.total * 100) + '%' : '–') + '</td><td>' + (zB.total ? Math.round(zB.cells[z] / zB.total * 100) + '%' : '–') + '</td></tr>';
+      }
+      html += '</table>';
+      $('heatTable').innerHTML = html;
+      $('heatCoverage').innerHTML = 'Zonas ocupadas (de 9): <b>' + escapeHtml(names.local) + ' ' + zL.occupied + '/9</b> · <b>' + escapeHtml(names.visitante) + ' ' + zV.occupied + '/9</b> · <b>Balón ' + zB.occupied + '/9</b> · Puntos en el tramo: ' + ptsLocal.length.toLocaleString('es-ES') + ' / ' + ptsVis.length.toLocaleString('es-ES') + ' / ' + ptsBall.length.toLocaleString('es-ES');
+      var flow = ballZoneFlow(segSamples);
+      $('heatBallNote').innerHTML = 'Balón: ' + flow.total.toLocaleString('es-ES') + ' muestras con posición de campo — <b>' + flow.fromCampo.toLocaleString('es-ES') + ' reales (homografía del tracking)</b> y <b>' + flow.fromAprox.toLocaleString('es-ES') + ' aproximadas</b> (mapeo lineal desde la imagen, sin corregir la perspectiva: solo orientativas).';
+    }
+    function renderMeanPos(segSamples){
+      var names = teamNames(), colors = teamColors();
+      var tracks = trackMeanPositions(segSamples);
+      var cv = $('meanPosCanvas');
+      if (cv){
+        var ctx = cv.getContext('2d');
+        drawAnalyticsPitch(ctx);
+        tracks.forEach(function(tr){
+          var col = tr.team === 'local' ? colors.local : colors.visitante;
+          ctx.beginPath(); ctx.arc(anX(tr.x), anY(tr.y), 8, 0, 6.2832);
+          ctx.fillStyle = col; ctx.fill();
+          ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
+        });
+      }
+      var top = tracks.slice(0, 25);
+      var html = '<table class="summary"><tr><th>Track</th><th>Equipo</th><th>Muestras</th><th>X media (m)</th><th>Y media (m)</th></tr>';
+      top.forEach(function(tr){
+        html += '<tr><td>#' + tr.trackId + '</td><td>' + escapeHtml(tr.team === 'local' ? names.local : names.visitante) + '</td><td>' + tr.n.toLocaleString('es-ES') + '</td><td>' + tr.x.toLocaleString('es-ES') + '</td><td>' + tr.y.toLocaleString('es-ES') + '</td></tr>';
+      });
+      html += '</table>';
+      if (tracks.length > top.length) html += '<div class="an-note">Se muestran los ' + top.length + ' tracks con más muestras, de ' + tracks.length.toLocaleString('es-ES') + ' en total en este tramo.</div>';
+      if (!tracks.length) html = '<div class="empty">Sin tracks en este tramo.</div>';
+      $('meanPosTable').innerHTML = html;
+    }
+    function renderLines(segSamples, seg){
+      var names = teamNames(), colors = teamColors();
+      var stL = lineStatsForTeam(segSamples, 'local');
+      var stV = lineStatsForTeam(segSamples, 'visitante');
+      var cv = $('linesCanvas');
+      if (cv){
+        var ctx = cv.getContext('2d');
+        drawAnalyticsPitch(ctx);
+        [[stL, colors.local, 'local'], [stV, colors.visitante, 'visitante']].forEach(function(cfg){
+          var st = cfg[0], col = cfg[1];
+          if (!st) return;
+          var pts = [st.def, st.med, st.ata].filter(function(p){ return !!p; });
+          ctx.strokeStyle = col; ctx.lineWidth = 3;
+          ctx.beginPath();
+          pts.forEach(function(p, i){ if (i === 0) ctx.moveTo(anX(p.x), anY(p.y)); else ctx.lineTo(anX(p.x), anY(p.y)); });
+          ctx.stroke();
+          ['def', 'med', 'ata'].forEach(function(k){
+            var p = st[k];
+            if (!p) return;
+            ctx.beginPath(); ctx.arc(anX(p.x), anY(p.y), 10, 0, 6.2832);
+            ctx.fillStyle = col; ctx.fill();
+            ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke();
+            ctx.fillStyle = '#fff'; ctx.font = '700 12px "Segoe UI", system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(k === 'def' ? 'DEF' : k === 'med' ? 'MED' : 'ATA', anX(p.x), anY(p.y) - 15);
+          });
+          ctx.textAlign = 'left';
+        });
+      }
+      function lineRow(st, name){
+        if (!st) return '<tr><td>' + escapeHtml(name) + '</td><td colspan="4">sin datos en este tramo</td></tr>';
+        function c(p){ return p ? (p.x.toLocaleString('es-ES') + ', ' + p.y.toLocaleString('es-ES') + ' m · n=' + p.n + ')') : 'sin datos'; }
+        return '<tr><td>' + escapeHtml(name) + '</td><td>DEF ' + c(st.def) + '<br />MED ' + c(st.med) + '<br />ATA ' + c(st.ata) + '</td><td>' + anFmt(st.distDefMed, 'm') + '</td><td>' + anFmt(st.distMedAta, 'm') + '</td><td>' + anFmt(st.anchura, 'm') + ' × ' + anFmt(st.profundidad, 'm') + '</td></tr>';
+      }
+      var html = '<table class="summary"><tr><th>Equipo</th><th>Centroide por línea (x, y)</th><th>DEF–MED</th><th>MED–ATA</th><th>Anchura × profundidad (p5–p95)</th></tr>';
+      html += lineRow(stL, names.local) + lineRow(stV, names.visitante) + '</table>';
+      $('linesTable').innerHTML = html;
+      var comp = compactnessForSegment(state.track, seg);
+      function compRow(d, name){
+        if (!d) return '<tr><td>' + escapeHtml(name) + '</td><td colspan="4">sin datos</td></tr>';
+        return '<tr><td>' + escapeHtml(name) + '</td><td>' + anFmt(d.area_m2, 'm²') + '</td><td>' + anFmt(d.anchura_m, 'm') + '</td><td>' + anFmt(d.profundidad_m, 'm') + '</td><td>' + (d.centroide_m ? d.centroide_m[0].toLocaleString('es-ES') + ', ' + d.centroide_m[1].toLocaleString('es-ES') + ' m' : 'sin datos') + ' · ' + d.n + (d.n === 1 ? ' tramo' : ' tramos') + '</td></tr>';
+      }
+      var html2 = '<div class="sec-title">Compacidad del tracking (stats.compacidad)</div><table class="summary"><tr><th>Equipo</th><th>Área</th><th>Anchura</th><th>Profundidad</th><th>Centroide</th></tr>';
+      html2 += compRow(comp.local, names.local) + compRow(comp.visitante, names.visitante) + '</table>';
+      $('compactTable').innerHTML = html2;
+    }
+    function renderFlow(segSamples){
+      var flow = ballZoneFlow(segSamples);
+      var cv = $('flowCanvas');
+      if (cv){
+        var ctx = cv.getContext('2d');
+        drawAnalyticsPitch(ctx);
+        // Rejilla 3×3 y nº de muestras con balón por zona
+        ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1.5;
+        for (var i = 1; i < 3; i++){
+          ctx.beginPath(); ctx.moveTo(anX(i * 35), 0); ctx.lineTo(anX(i * 35), AN_H); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(0, anY(i * 68 / 3)); ctx.lineTo(AN_W, anY(i * 68 / 3)); ctx.stroke();
+        }
+        ctx.font = '700 15px "Segoe UI", system-ui, sans-serif'; ctx.textAlign = 'center';
+        for (var z = 0; z < 9; z++){
+          var cx = anX((z % 3) * 35 + 17.5), cy = anY(Math.floor(z / 3) * 68 / 3 + 34);
+          ctx.fillStyle = 'rgba(0,0,0,.45)';
+          ctx.beginPath(); ctx.arc(cx, cy - 8, 17, 0, 6.2832); ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.fillText(String(flow.zones[z]), cx, cy - 3);
+        }
+        // Flechas de las transiciones más frecuentes (máx. 8)
+        var top = flow.transitions.slice(0, 8);
+        var maxN = top.length ? top[0].n : 0;
+        top.forEach(function(tr){
+          var f = { x: (tr.from % 3) * 35 + 17.5, y: Math.floor(tr.from / 3) * 68 / 3 + 34 };
+          var t = { x: (tr.to % 3) * 35 + 17.5, y: Math.floor(tr.to / 3) * 68 / 3 + 34 };
+          // Acortar la flecha para que no tape el número de la zona
+          var dx = t.x - f.x, dy = t.y - f.y, len = Math.hypot(dx, dy) || 1;
+          var ux = dx / len, uy = dy / len;
+          drawAnArrow(ctx, anX(f.x + ux * 8), anY(f.y + uy * 8), anX(t.x - ux * 8), anY(t.y - uy * 8), '#FFD21F', 2 + 4 * (maxN ? tr.n / maxN : 0));
+        });
+        ctx.textAlign = 'left';
+      }
+      var html = '<table class="summary"><tr><th>De</th><th>A</th><th>Veces</th></tr>';
+      flow.transitions.slice(0, 10).forEach(function(tr){
+        html += '<tr><td>' + escapeHtml(zoneLabel(tr.from)) + '</td><td>' + escapeHtml(zoneLabel(tr.to)) + '</td><td>' + tr.n.toLocaleString('es-ES') + '</td></tr>';
+      });
+      html += '</table>';
+      if (!flow.transitions.length) html = '<div class="empty">Sin transiciones de zona con balón en este tramo.</div>';
+      else html += '<div class="an-note">' + flow.totalTransitions.toLocaleString('es-ES') + ' transiciones zona → zona en ' + flow.total.toLocaleString('es-ES') + ' muestras con balón.</div>';
+      $('flowTable').innerHTML = html;
+      $('flowBallNote').innerHTML = 'Balón: <b>' + flow.fromCampo.toLocaleString('es-ES') + ' posiciones reales (homografía)</b> y <b>' + flow.fromAprox.toLocaleString('es-ES') + ' aproximadas</b> (desde la imagen). Las aproximadas solo orientan: si el tracking trae bp, úsalo como referencia.';
+    }
 
     /* ================= Bucle principal ================= */
     /* Hace cumplir el rango reproducible: si el vídeo se sale por
