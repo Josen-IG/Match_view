@@ -1,5 +1,9 @@
 import unittest
-from retrain_experiment import box_iou, clipped_label, match_id
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from retrain_experiment import box_iou, clipped_label, match_id, fixed_threshold_counts
 
 
 class ExperimentTests(unittest.TestCase):
@@ -29,3 +33,23 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(box_iou([0,0,1,1], [0,0,1,1]), 1)
         self.assertEqual(box_iou([0,0,1,1], [2,2,3,3]), 0)
         self.assertAlmostEqual(box_iou([0,0,2,2], [1,1,3,3]), 1/7)
+
+    def test_prediction_memory_bounded_by_one_image(self):
+        empty = MagicMock()
+        empty.cpu.return_value.tolist.return_value = []
+        model = MagicMock()
+        model.predict.return_value = [SimpleNamespace(
+            orig_shape=(100, 100), boxes=SimpleNamespace(conf=empty, cls=empty, xyxy=empty))]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'images'/'val').mkdir(parents=True)
+            (root/'labels'/'val').mkdir(parents=True)
+            for name in ('a', 'b'):
+                (root/'images'/'val'/(name+'.jpg')).touch()
+                (root/'labels'/'val'/(name+'.txt')).write_text('')
+            with patch.dict('sys.modules', {'ultralytics': SimpleNamespace(YOLO=lambda _: model)}):
+                report = fixed_threshold_counts('weights.pt', root, root, 'mock')
+            self.assertEqual(report['frames'], 2)
+            self.assertEqual(model.predict.call_count, 2)
+            for call in model.predict.call_args_list:
+                self.assertIsInstance(call.args[0], str)

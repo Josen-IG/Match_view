@@ -170,9 +170,11 @@ def fixed_threshold_counts(weights, data, output, name):
     model = YOLO(str(weights))
     paths = sorted((Path(data)/"images"/"val").glob("*"))
     counts = {k: Counter(tp=0, fp=0, fn=0, tiny_tp=0, tiny_total=0) for k in (0, 1)}
-    results = model.predict([str(p) for p in paths], stream=True, device=0,
-                            imgsz=960, conf=.25, iou=.7, verbose=False, batch=8)
-    for path, result in zip(paths, results):
+    # A Python list of arrays/paths can become one source batch in Ultralytics;
+    # batch=8 does not bound its VRAM. Feed one path at a time explicitly.
+    for path in paths:
+        result = model.predict(str(path), device=0, imgsz=960, conf=.25,
+                               iou=.7, verbose=False)[0]
         height, width = result.orig_shape
         truth = defaultdict(list)
         for line in (Path(data)/"labels"/"val"/(path.stem+".txt")).read_text().splitlines():

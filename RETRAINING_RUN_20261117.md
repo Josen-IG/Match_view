@@ -47,6 +47,13 @@ inéditos; comparar recall y precisión del balón a un umbral fijo, FP, AP del 
 y jugadores y coste de CPU. Conservar el baseline y verificar regresiones y CI.
 Las hipótesis de tiros/goles/córneres siguen desactivadas. La interfaz está intacta.
 
-Pruebas locales: 111 tests unittest superados (incluyen 5 nuevos de cajas, IoU y
+Pruebas locales: 112 tests unittest superados (incluyen 6 nuevos de cajas, IoU y
 agrupación por partido). Los resultados de GitHub Actions deben comprobarse tras
 el commit. No se presentan métricas históricas como evaluación de este experimento.
+
+Incidencia resuelta: la primera evaluación a umbral fijo agotó VRAM al pasar
+una lista de 876 rutas a predict. Se procesa cada imagen individualmente y se
+añadió una regresión que verifica ese límite de memoria. La evaluación AP del
+baseline sí terminó: balón mAP50 0,685 y mAP50-95 0,426; jugadores mAP50 0,959
+y mAP50-95 0,746 (cifras redondeadas del log, no comparación con candidato).
+El primer commit 9161103 pasó GitHub Actions.
