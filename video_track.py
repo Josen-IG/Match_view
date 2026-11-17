@@ -1498,40 +1498,57 @@ def _track_video(
                             else:
                                 balon = max(candidatos_balon,
                                             key=lambda c: c["conf"])
-                        # Asociar por confianza descendente: la más segura elige primero.
-                        detecciones.sort(key=lambda d: -d["conf"])
-                        usados: set[int] = set()
-                        for det in detecciones:
-                            mejor_id: int | None = None
-                            mejor_dist = TRACK_MATCH_RADIUS
+                        # Asociación global: cada pareja detección-track compite por
+                        # distancia predicha, evitando que una detección de alta
+                        # confianza se apropie del ID de otra persona más cercana.
+                        # La predicción usa velocidad suavizada en coordenadas
+                        # de imagen; se limita para no extrapolar saltos enormes.
+                        parejas = []
+                        for indice, det in enumerate(detecciones):
                             for tid, tr in tracks_activos.items():
-                                if tid in usados:
+                                gap = procesados - tr["ultimo"]
+                                if gap < 1 or gap > TRACK_MAX_GAP_SAMPLES:
                                     continue
-                                if procesados - tr["ultimo"] > TRACK_MAX_GAP_SAMPLES:
-                                    continue
-                                dist = math.hypot(det["cx"] - tr["x"],
-                                                  det["cy"] - tr["y"])
-                                if dist > mejor_dist:
-                                    continue
-                                # Misma persona ≈ misma altura en plano.
                                 if abs(det["h"] - tr["h"]) > 0.5 * max(det["h"], tr["h"], 1.0):
                                     continue
-                                mejor_id, mejor_dist = tid, dist
+                                dt = min(gap, 3)
+                                px = tr["x"] + max(-4.0, min(4.0, tr.get("vx", 0.0) * dt))
+                                py = tr["y"] + max(-4.0, min(4.0, tr.get("vy", 0.0) * dt))
+                                distancia = math.hypot(det["cx"] - px, det["cy"] - py)
+                                # La tolerancia crece ligeramente durante oclusiones.
+                                radio = TRACK_MATCH_RADIUS * (1.0 + 0.08 * min(gap - 1, 5))
+                                if distancia <= radio:
+                                    parejas.append((distancia / radio, distancia, indice, tid))
+                        parejas.sort()
+                        asignados: dict[int, int] = {}
+                        usados: set[int] = set()
+                        for _, _, indice, tid in parejas:
+                            if indice not in asignados and tid not in usados:
+                                asignados[indice] = tid
+                                usados.add(tid)
+                        for indice, det in enumerate(detecciones):
+                            mejor_id = asignados.get(indice)
                             if mejor_id is None:
                                 mejor_id = siguiente_id
                                 siguiente_id += 1
-                            usados.add(mejor_id)
+                                vx = vy = 0.0
+                            else:
+                                anterior = tracks_activos[mejor_id]
+                                gap = max(1, procesados - anterior["ultimo"])
+                                vx_nueva = (det["cx"] - anterior["x"]) / gap
+                                vy_nueva = (det["cy"] - anterior["y"]) / gap
+                                # Reducir ruido de detección y cambios bruscos.
+                                vx = 0.5 * anterior.get("vx", 0.0) + 0.5 * vx_nueva
+                                vy = 0.5 * anterior.get("vy", 0.0) + 0.5 * vy_nueva
                             tracks_activos[mejor_id] = {
                                 "x": det["cx"], "y": det["cy"],
                                 "h": det["h"], "ultimo": procesados,
+                                "vx": vx, "vy": vy,
                             }
                             personas.append({
                                 "track_id": mejor_id,
                                 "x": det["cx"], "y": det["cy"],
                                 "w": det["w"], "h": det["h"],
-                                # Pies en píxeles del fotograma (para la
-                                # homografía: el centro del bbox no está
-                                # en el suelo y falsea la posición).
                                 "px": (det["caja"][0] + det["caja"][2]) / 2.0,
                                 "py": float(det["caja"][3]),
                                 "pitch_x": None, "pitch_y": None,
@@ -1539,9 +1556,6 @@ def _track_video(
                             })
                             x0, y0, x1, y1 = det["caja"]
                             hsv = _color_torso(frame, x0, y0, x1, y1)
-                            # Color real de la camiseta en el vídeo: se
-                            # guarda en la persona para que el radar lo
-                            # dibuje con su color aunque sea "desconocido".
                             personas[-1]["color_rgb"] = _hsv_a_hex(hsv)
                             equipo_det = _clasificar_color(
                                 hsv, ref_local, ref_visitante,
