@@ -76,6 +76,29 @@ def _hue_distance(color_a, color_b):
     return min(delta, 180.0 - delta)
 
 
+def appearance_distance(a, b):
+    """Cosine distance of non-negative normalized appearance descriptors.
+
+    Descriptors are optional. Do not treat a shared jersey colour as a
+    unique biometric identity; this is one cue in association.
+    """
+    if a is None or b is None or len(a) != len(b) or not a:
+        return None
+    try:
+        av = [float(x) for x in a]
+        bv = [float(x) for x in b]
+        if not all(math.isfinite(x) and x >= 0 for x in av + bv):
+            return None
+        dot = sum(x * y for x, y in zip(av, bv))
+        mag_a = math.sqrt(sum(x*x for x in av))
+        mag_b = math.sqrt(sum(x*x for x in bv))
+        if mag_a < 1e-9 or mag_b < 1e-9:
+            return None
+        return max(0.0, min(1.0, 1.0 - dot / (mag_a * mag_b)))
+    except (TypeError, ValueError):
+        return None
+
+
 class PlayerIDTracker:
     """Asocia detecciones cx/cy/h/team_hint/hsv a identificadores estables."""
 
@@ -143,13 +166,22 @@ class PlayerIDTracker:
                 if dist > radius:
                     continue
                 hue_delta = _hue_distance(det.get("hsv"), tr["hsv"])
-                if reid and (hue_delta is None or hue_delta > 17 or stable_team is None):
+                feature_delta = appearance_distance(det.get("appearance"), tr.get("appearance"))
+                if reid and stable_team is None:
+                    continue
+                if reid and feature_delta is None and (hue_delta is None or hue_delta > 17):
+                    continue
+                if reid and feature_delta is not None and feature_delta > 0.24:
                     continue
                 if hue_delta is not None and hue_delta > 35:
                     continue
                 score = dist / radius + 0.13 * abs(math.log(height_ratio))
                 if hue_delta is not None:
                     score += hue_delta * 0.008
+                if feature_delta is not None:
+                    # Appearance helps especially in crossings, but cannot
+                    # defeat geometry/known team on its own.
+                    score += feature_delta * (1.4 if reid else 0.85)
                 if reid:
                     score += 0.17
                 costs[row, col] = score
@@ -169,6 +201,7 @@ class PlayerIDTracker:
                     "x": float(det["cx"]), "y": float(det["cy"]),
                     "h": float(det["h"]), "vx": 0.0, "vy": 0.0,
                     "last": sample_index, "hsv": det.get("hsv"),
+                    "appearance": det.get("appearance"),
                     "teams": Counter(),
                 }
                 self.stats["new_tracks"] += 1
@@ -187,6 +220,19 @@ class PlayerIDTracker:
                     elif (_hue_distance(det["hsv"], tr["hsv"]) is None
                           or _hue_distance(det["hsv"], tr["hsv"]) <= 20):
                         tr["hsv"] = det["hsv"]
+                feature = det.get("appearance")
+                if feature is not None:
+                    previous_feature = tr.get("appearance")
+                    if (previous_feature is None
+                            or appearance_distance(previous_feature, feature) is None):
+                        tr["appearance"] = feature
+                    elif appearance_distance(previous_feature, feature) <= 0.20:
+                        # A slow EMA reduces contamination when two same-team
+                        # players overlap for a single frame.
+                        tr["appearance"] = [
+                            0.85 * float(old) + 0.15 * float(new)
+                            for old, new in zip(previous_feature, feature)
+                        ]
                 self.stats["reidentified" if reid else "continued"] += 1
             team = det.get("team_hint") or "desconocido"
             self.tracks[tid]["teams"][team] += 1
