@@ -104,6 +104,8 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(7, exported["samples"][0]["p"][0][5])
         self.assertEqual([40.0, 31.0, 0, 7], exported["samples"][0]["pp"][0])
         self.assertEqual(1, exported["version"])
+        self.assertEqual(7, exported["player_stats"]["players"][0]["track_id"])
+        self.assertEqual(100, exported["player_stats"]["players"][0]["field_coverage_pct"])
 
 
 if __name__ == "__main__":
