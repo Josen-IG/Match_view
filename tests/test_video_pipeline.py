@@ -64,6 +64,52 @@ class _FakeCapture:
 
 
 class VideoPipelineTests(unittest.TestCase):
+    def test_pitch_filter_rejects_staff_and_spectators(self):
+        import video_track
+        class FakeMapper:
+            def __init__(self):
+                self.calidad = "alta"
+                self.ultima_t = 0.0
+            @property
+            def valido(self):
+                return True
+            def to_pitch(self, x, y):
+                # Jugador en x<60; grada/míster fuera del rectángulo.
+                return (20.0, 30.0) if x < 60 else (20.0, -4.0)
+        class Detector:
+            def __init__(self, weights):
+                pass
+            def predict(self, frame, **kwargs):
+                return [types.SimpleNamespace(boxes=types.SimpleNamespace(
+                    cls=_CpuTensor([1.0, 1.0]),
+                    xyxy=_CpuTensor([[25, 35, 50, 95], [90, 35, 115, 95]]),
+                    conf=_CpuTensor([.98, .98]),
+                ))]
+        cap = _FakeCapture()
+        with patch.dict(sys.modules, {"ultralytics": types.SimpleNamespace(YOLO=Detector)}), \\
+             patch("cv2.VideoCapture", return_value=cap), \\
+             patch.object(video_track, "video_duration", return_value=1.0), \\
+             patch.object(video_track, "PitchMapper", FakeMapper):
+            samples, _, teams = video_track._track_video(
+                "simulado.mp4", "modelo_propio.pt", sample_fps=10,
+                imgsz=320, color_local_hex="#FF0000",
+                color_visitante_hex="#0000FF", pitch_model="")
+        self.assertTrue(samples)
+        self.assertTrue(all(len(s["people"]) == 1 for s in samples))
+        self.assertEqual(1, len(teams))
+
+    def test_without_field_calibration_strict_mode_skips_people(self):
+        import video_track
+        cap = _FakeCapture()
+        with patch.dict(sys.modules, {"ultralytics": types.SimpleNamespace(YOLO=_FakeYOLO)}), \\
+             patch("cv2.VideoCapture", return_value=cap), \\
+             patch.object(video_track, "video_duration", return_value=1.0):
+            samples, _, _ = video_track._track_video(
+                "simulado.mp4", "modelo_propio.pt", sample_fps=10,
+                imgsz=320, color_local_hex="#FF0000",
+                color_visitante_hex="#0000FF", pitch_model="")
+        self.assertTrue(all(not s["people"] for s in samples))
+
     def test_synthetic_video_sampling_and_stable_identity(self):
         import video_track
         cap = _FakeCapture()
@@ -73,7 +119,7 @@ class VideoPipelineTests(unittest.TestCase):
             samples, duration, teams = video_track._track_video(
                 "simulado.mp4", "modelo_propio.pt", sample_fps=10,
                 imgsz=320, color_local_hex="#FF0000",
-                color_visitante_hex="#0000FF", pitch_model="")
+                color_visitante_hex="#0000FF", pitch_model="", pitch_only=False)
         self.assertEqual(10, len(samples))
         self.assertEqual(1.0, duration)
         self.assertEqual([round(i / 10, 1) for i in range(10)],
