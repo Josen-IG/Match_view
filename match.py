@@ -1447,6 +1447,17 @@ elif st.session_state.pagina == "video":
             ["Primeros 10 minutos (prueba)", "Partido completo"],
             key="video_gen_alcance",
         )
+    # La cola de un solo worker evita bloquear Streamlit durante YOLO.
+    # Desactivarla mantiene el análisis sincrónico anterior.
+    bg_video = st.checkbox(
+        "Procesar vídeo en segundo plano", value=True, key="video_background",
+        help="La interfaz puede seguir funcionando mientras YOLO analiza. "
+             "El trabajo se pierde si se reinicia el servidor.")
+    if bg_video and not hasattr(st, "fragment"):
+        st.info("Esta versión de Streamlit no admite actualización automática "
+                "del progreso. Se usará el modo clásico.")
+        bg_video = False
+
     # ¿Ya existe tracking para este vídeo? (mismo stem, en la carpeta de
     # la app, junto al vídeo o en su carpeta de clips).
     tracking_gen = None
@@ -1485,51 +1496,125 @@ elif st.session_state.pagina == "video":
                 st.session_state.video_fallo_path = ruta_gen
                 kickoff_gen = None
             if kickoff_gen is not None:
-                barra_gen = st.progress(0.0)
-                estado_gen = st.empty()
-                def _progreso_gen(mensaje, fraccion):
-                    barra_gen.progress(min(1.0, max(0.0, float(fraccion))))
-                    estado_gen.write(mensaje)
-                try:
-                    informe_gen = analyze_video_full(
-                        Path(ruta_gen),
-                        color_local=dp["color_local"],
-                        color_visitante=dp["color_visitante"],
-                        color_gk_local=dp.get("color_portero_local", "#FFEB3B"),
-                        color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
-                        color_arbitro=dp.get("color_arbitro", "#000000"),
-                        team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
-                        sample_fps=10,  # 10 fps también en partido completo: a 5 fps el balón rápido se pierde entre muestras
-                        min_confidence=0.65, yolo_model="modelo_propio.pt",
-                        max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
-                        kickoff_offset=kickoff_gen,
-                        camera_mode="seguimiento",
-                        formation_local=dp.get("form_local", ""),
-                        formation_visitante=dp.get("form_visitante", ""),
-                        pitch_model=None,
-                        progress=_progreso_gen,
-                        device="cpu",
+                if bg_video:
+                    from video_jobs import submit_video_job, get_video_job
+                    # No compartir estados entre sesiones ni crear jobs
+                    # nuevos en cada rerun de Streamlit.
+                    signature = (
+                        ruta_gen, kickoff_gen, alcance_gen,
+                        dp["eq_local"], dp["eq_visitante"],
+                        dp["color_local"], dp["color_visitante"],
+                        dp.get("color_portero_local", "#FFEB3B"),
+                        dp.get("color_portero_visitante", "#FF9800"),
+                        dp.get("color_arbitro", "#000000"),
                     )
-                    # Copiar el tracking JSON a la carpeta de la app para
-                    # que la pantalla manual lo encuentre en próximas sesiones.
-                    ruta_tracking_gen = informe_gen.get("tracking_json")
-                    if ruta_tracking_gen and os.path.isfile(ruta_tracking_gen):
-                        destino_gen = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
-                        if Path(ruta_tracking_gen).resolve() != destino_gen.resolve():
-                            shutil.copy(ruta_tracking_gen, destino_gen)
-                        tracking_gen = destino_gen
-                    st.session_state.video_analizado_path = ruta_gen
-                    st.session_state.pop("video_fallo_path", None)
-                    if tracking_gen is not None:
-                        st.session_state["tracking_del_video"] = str(tracking_gen)
-                    estado_gen.write("✅ Análisis completado: tracking generado de este vídeo.")
-                    st.rerun()
-                except VideoProcessingError as err:
-                    st.error(str(err))
-                    st.session_state.video_fallo_path = ruta_gen
-                except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
-                    st.error(f"Error inesperado durante el análisis: {err}")
-                    st.session_state.video_fallo_path = ruta_gen
+                    if st.session_state.get("video_bg_signature") != signature:
+                        parametros = {
+                            "video_path": Path(ruta_gen),
+                            "color_local": dp["color_local"],
+                            "color_visitante": dp["color_visitante"],
+                            "color_gk_local": dp.get("color_portero_local", "#FFEB3B"),
+                            "color_gk_visitante": dp.get("color_portero_visitante", "#FF9800"),
+                            "color_arbitro": dp.get("color_arbitro", "#000000"),
+                            "team_local": dp["eq_local"],
+                            "team_visitante": dp["eq_visitante"],
+                            "sample_fps": 10,
+                            "min_confidence": 0.65,
+                            "yolo_model": "modelo_propio.pt",
+                            "max_minutes": 10.0 if alcance_gen.startswith("Primeros") else None,
+                            "kickoff_offset": kickoff_gen,
+                            "camera_mode": "seguimiento",
+                            "formation_local": dp.get("form_local", ""),
+                            "formation_visitante": dp.get("form_visitante", ""),
+                            "pitch_model": None,
+                            "device": "cpu",
+                        }
+                        st.session_state.video_bg_job = submit_video_job(
+                            analyze_video_full, parametros)
+                        st.session_state.video_bg_signature = signature
+
+                    @st.fragment(run_every=3)
+                    def mostrar_trabajo_video():
+                        job = get_video_job(st.session_state.video_bg_job)
+                        if job is None:
+                            st.error("El trabajo ya no existe; reinicia el análisis.")
+                            st.session_state.video_fallo_path = ruta_gen
+                            st.rerun()
+                            return
+                        st.progress(job.get("progress") or 0.0)
+                        st.caption(job.get("message") or "Esperando...")
+                        if job["state"] == "queued":
+                            st.info("Vídeo en cola: ya hay un análisis en curso.")
+                        if job["state"] == "failed":
+                            st.error("Falló el análisis: " + str(job.get("error")))
+                            st.session_state.video_fallo_path = ruta_gen
+                            st.rerun()
+                        elif job["state"] == "completed":
+                            try:
+                                resultado = job.get("result") or {}
+                                tracking_resultado = resultado.get("tracking_json")
+                                if not tracking_resultado or not os.path.isfile(tracking_resultado):
+                                    raise VideoProcessingError(
+                                        "No se generó el archivo de tracking.")
+                                destino = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
+                                if Path(tracking_resultado).resolve() != destino.resolve():
+                                    shutil.copy(tracking_resultado, destino)
+                                st.session_state["tracking_del_video"] = str(destino)
+                                st.session_state.video_analizado_path = ruta_gen
+                                st.session_state.pop("video_fallo_path", None)
+                                st.success("Análisis terminado; tracking listo.")
+                            except Exception as error:
+                                st.error(f"No se pudo preparar el tracking: {error}")
+                                st.session_state.video_fallo_path = ruta_gen
+                            st.rerun()
+
+                    mostrar_trabajo_video()
+                else:
+                    barra_gen = st.progress(0.0)
+                    estado_gen = st.empty()
+                    def _progreso_gen(mensaje, fraccion):
+                        barra_gen.progress(min(1.0, max(0.0, float(fraccion))))
+                        estado_gen.write(mensaje)
+                    try:
+                        informe_gen = analyze_video_full(
+                            Path(ruta_gen),
+                            color_local=dp["color_local"],
+                            color_visitante=dp["color_visitante"],
+                            color_gk_local=dp.get("color_portero_local", "#FFEB3B"),
+                            color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
+                            color_arbitro=dp.get("color_arbitro", "#000000"),
+                            team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
+                            sample_fps=10,  # 10 fps también en partido completo: a 5 fps el balón rápido se pierde entre muestras
+                            min_confidence=0.65, yolo_model="modelo_propio.pt",
+                            max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
+                            kickoff_offset=kickoff_gen,
+                            camera_mode="seguimiento",
+                            formation_local=dp.get("form_local", ""),
+                            formation_visitante=dp.get("form_visitante", ""),
+                            pitch_model=None,
+                            progress=_progreso_gen,
+                            device="cpu",
+                        )
+                        # Copiar el tracking JSON a la carpeta de la app para
+                        # que la pantalla manual lo encuentre en próximas sesiones.
+                        ruta_tracking_gen = informe_gen.get("tracking_json")
+                        if ruta_tracking_gen and os.path.isfile(ruta_tracking_gen):
+                            destino_gen = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
+                            if Path(ruta_tracking_gen).resolve() != destino_gen.resolve():
+                                shutil.copy(ruta_tracking_gen, destino_gen)
+                            tracking_gen = destino_gen
+                        st.session_state.video_analizado_path = ruta_gen
+                        st.session_state.pop("video_fallo_path", None)
+                        if tracking_gen is not None:
+                            st.session_state["tracking_del_video"] = str(tracking_gen)
+                        estado_gen.write("✅ Análisis completado: tracking generado de este vídeo.")
+                        st.rerun()
+                    except VideoProcessingError as err:
+                        st.error(str(err))
+                        st.session_state.video_fallo_path = ruta_gen
+                    except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
+                        st.error(f"Error inesperado durante el análisis: {err}")
+                        st.session_state.video_fallo_path = ruta_gen
     # Fallback: re-analizar aunque ya exista tracking o haya fallado antes.
     if ruta_gen and (ya_cargado_gen or fallo_gen):
         if st.button("🔄 Re-analizar vídeo", key="video_gen_reanalizar"):
