@@ -85,6 +85,7 @@ from typing import Callable, Optional
 from player_tracking import (PlayerIDTracker, estimate_camera_transform,
                              flip_camera_transform)
 from player_metrics import compute_player_metrics
+from event_candidates import suggest_key_moments
 from tactical_metrics import compute_tactical_metrics
 from quality_metrics import assess_tracking_quality
 from pitch_filter import field_mask_from_frame, filter_pitch_people
@@ -2965,6 +2966,10 @@ def export_tracking_json(muestras: list[dict], informe: dict,
     player_stats = compute_player_metrics(muestras)
     tactical_stats = compute_tactical_metrics(muestras)
     quality_stats = assess_tracking_quality(muestras)
+    # Recomendaciones para revisar en el vídeo, no estadísticas oficiales.
+    # Usa únicamente bp calibrado y detecciones de balón directas.
+    suggested_events = suggest_key_moments(
+        samples, kickoff_s=float(informe.get("kickoff_offset_s") or 0.0))
     colores = dict(informe.get("team_colors") or {})
     data = {
         "version": 1,
@@ -2985,6 +2990,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         "camera": camera_mode,
         "team_code": dict(TRACKING_TEAM_CODE),
         "events": informe.get("results", []),
+        "suggested_events": suggested_events,
         "possession_by_period": informe.get("possession_by_period"),
         "stats": estadisticas,
         "player_stats": player_stats,
