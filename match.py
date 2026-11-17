@@ -1627,6 +1627,26 @@ elif st.session_state.pagina == "video":
             except (ValueError, OSError) as err:
                 st.warning(f"⚠️ No se pudo cargar {tracking_elegido.name}: {err}. "
                            "La pantalla cargará sin tracking.")
+        if isinstance(datos_tracking, dict):
+            calidad_tracking = datos_tracking.get("quality") or {}
+            if calidad_tracking:
+                with st.expander("Calidad y cobertura del tracking", expanded=False):
+                    q1, q2, q3, q4 = st.columns(4)
+                    q1.metric("Muestras", calidad_tracking.get("total_samples", 0))
+                    q2.metric("Balón YOLO (%)", calidad_tracking.get("ball_yolo_pct", 0))
+                    q3.metric("Campo válido (%)", calidad_tracking.get("pitch_coverage_pct", 0))
+                    q4.metric("Equipo desconocido (%)", calidad_tracking.get("unknown_team_pct", 0))
+                    st.caption(
+                        f"IDs distintos: {calidad_tracking.get('unique_track_ids', 0)} · "
+                        f"Personas por muestra: {calidad_tracking.get('avg_people_visible', 0)} · "
+                        f"Balón estimado (%): {calidad_tracking.get('ball_predicted_pct', 0)} · "
+                        f"Homografía por calidad: {calidad_tracking.get('pitch_quality_frames', {})}"
+                    )
+                    for aviso in calidad_tracking.get("warnings") or []:
+                        st.warning(aviso)
+                    st.caption(
+                        "Estos porcentajes indican disponibilidad de datos, no "
+                        "precisión del detector ni continuidad garantizada de los IDs.")
         # Compacidad táctica (idea VEO): si el tracking trae las
         # estadísticas, enseñar la forma de cada equipo por periodo.
         compacidad = {}
