@@ -27,11 +27,16 @@ def assess_tracking_quality(samples, max_people_per_team=16):
     people_sum = total_people = n_unknown = 0
     duplicate_frames = nonmonotonic = invalid_coords = 0
     pitch_quality = Counter()
+    field_filter = Counter()
     prev_t = None
     team_overflow_frames = 0
     observed_ids = set()
     for sample in samples:
         total += 1
+        for key in ("detected", "accepted", "rejected", "unverified"):
+            field_filter[key] += int((sample.get("field_filter") or {}).get(key, 0))
+        field_filter["mask_frames"] += bool((sample.get("field_filter") or {}).get("mask_active"))
+        field_filter["homography_frames"] += bool((sample.get("field_filter") or {}).get("homography_active"))
         t = sample.get("t", sample.get("t_video"))
         if _finite(t):
             t = float(t)
@@ -94,6 +99,10 @@ def assess_tracking_quality(samples, max_people_per_team=16):
             warnings.append("Pocas detecciones directas del balón; revisar umbrales y modelo.")
         if pct(n_unknown, total_people) > 35:
             warnings.append("Muchos jugadores sin equipo asignado; revisar colores de camisetas.")
+    if total and field_filter["unverified"]:
+        warnings.append("Algunas personas se omitieron porque no se pudo verificar el campo.")
+    if total and field_filter["accepted"] == 0 and field_filter["detected"] > 0:
+        warnings.append("Ninguna persona superó el filtro del terreno: revisar la máscara y homografía.")
     if duplicate_frames:
         warnings.append("Se han detectado IDs duplicados en una misma muestra.")
     if nonmonotonic:
@@ -112,6 +121,9 @@ def assess_tracking_quality(samples, max_people_per_team=16):
         "ball_predicted_pct": pct(n_ball_pred, total),
         "pitch_coverage_pct": pct(n_pitch, total),
         "pitch_quality_frames": dict(pitch_quality),
+        "field_filter": dict(field_filter),
+        "field_mask_coverage_pct": pct(field_filter["mask_frames"], total),
+        "field_filter_rejection_pct": pct(field_filter["rejected"], field_filter["detected"]),
         "unknown_team_pct": pct(n_unknown, total_people),
         "duplicate_track_id_occurrences": duplicate_frames,
         "nonmonotonic_samples": nonmonotonic,
