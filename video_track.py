@@ -1935,75 +1935,116 @@ def _elegir_balon(candidatos, pred, t, h_med_jugador):
 
 
 def _filtro_kalman_balon(muestras: list[dict]) -> list[dict]:
-    """Filtro de Kalman (velocidad constante) sobre el balón suavizado.
+    """Kalman with genuine YOLO anchors, retrospective gap hints and uncertainty.
 
-    Después de _suavizar_balon (EMA + interpolación lineal ≤1 s): el Kalman
-    corrige las detecciones (suaviza el ruido de posición de YOLO) y
-    PREDICE la posición en huecos de hasta KALMAN_MAX_GAP_S (1 s) cuando
-    el balón se pierde (oclusiones). Huecos más largos quedan en None: no
-    se inventan detecciones. Las posiciones predichas llevan
-    ball_s["fuente"] == "kalman" (las medidas, "medido"), y el JSON las
-    marca en "bf": la posesión y el territorio usan ball_scene, que sale
-    de ball_s, así que el puente de 1 s evita que la posesión se congele
-    en cada oclusión sin inventar juego que no existe.
-
-    Estado [x, y, vx, vy] en unidades de plano (0-100). Sin medición
-    durante más de 1 s el filtro se reinicia en la siguiente detección.
+    Crucial distinction: a linear interpolation is NOT a new observation.
+    Interpolated points may weakly influence the filter after both anchors
+    have been observed, but they never reset the last YOLO measurement age.
+    Any forward-only prediction expires after 1 s and is explicitly tagged.
     """
     import numpy as np
-    estado: np.ndarray | None = None
-    P: np.ndarray | None = None
-    t_prev: float | None = None
-    t_ult_med: float | None = None
-    for m in muestras:
-        t = m["t"]
-        med = m.get("ball_s")
+
+    estado = None
+    covariance = None
+    previous_t = None
+    last_yolo_t = None
+
+    for sample in muestras:
+        t = float(sample["t"])
+        candidate = sample.get("ball_s") or {}
+        source = candidate.get("fuente")
+        observed = source == "yolo" and sample.get("ball_yolo_accepted", False)
+        interpolated = source == "interpolado"
+
+        # The retained EMA value is NOT an observation. After the first
+        # accepted detection, start only from measured evidence.
         if estado is None:
-            if med is None:
+            if not observed:
+                sample["ball_s"] = None
                 continue
-            estado = np.array([med["x"], med["y"], 0.0, 0.0], dtype=float)
-            P = np.diag([1.0, 1.0, 100.0, 100.0])
-            t_prev = t
-            t_ult_med = t
-            m["ball_s"] = {"x": float(estado[0]), "y": float(estado[1]),
-                           "fuente": "medido"}
+            estado = np.array([candidate["x"], candidate["y"], 0., 0.],
+                              dtype=float)
+            covariance = np.diag([1., 1., 100., 100.])
+            previous_t = t
+            last_yolo_t = t
+            sample["ball_s"] = {
+                "x": float(estado[0]), "y": float(estado[1]),
+                "fuente": "yolo", "missing_s": 0.,
+                "sigma": 1.0,
+            }
             continue
-        dt = max(0.0, t - t_prev)
-        t_prev = t
-        # Predicción (velocidad constante).
-        F = np.array([[1, 0, dt, 0], [0, 1, 0, dt],
+
+        delta = max(0., t - previous_t)
+        previous_t = t
+        F = np.array([[1, 0, delta, 0], [0, 1, 0, delta],
                       [0, 0, 1, 0], [0, 0, 0, 1]], dtype=float)
         q = KALMAN_SIGMA_A ** 2
         Q = q * np.array([
-            [dt ** 4 / 4, 0, dt ** 3 / 2, 0],
-            [0, dt ** 4 / 4, 0, dt ** 3 / 2],
-            [dt ** 3 / 2, 0, dt ** 2, 0],
-            [0, dt ** 3 / 2, 0, dt ** 2]], dtype=float)
+            [delta**4 / 4, 0, delta**3 / 2, 0],
+            [0, delta**4 / 4, 0, delta**3 / 2],
+            [delta**3 / 2, 0, delta**2, 0],
+            [0, delta**3 / 2, 0, delta**2]], dtype=float)
         estado = F @ estado
-        P = F @ P @ F.T + Q
-        if med is not None:
-            # Corrección con la medida (EMA de _suavizar_balon).
-            H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], dtype=float)
-            R = np.eye(2) * KALMAN_R ** 2
-            z = np.array([med["x"], med["y"]], dtype=float)
-            S = H @ P @ H.T + R
-            K = P @ H.T @ np.linalg.inv(S)
-            estado = estado + K @ (z - H @ estado)
-            P = (np.eye(4) - K @ H) @ P
-            t_ult_med = t
-            m["ball_s"] = {"x": float(estado[0]), "y": float(estado[1]),
-                           "fuente": "medido"}
-        elif t_ult_med is not None and t - t_ult_med <= KALMAN_MAX_GAP_S:
-            # Hueco corto: posición predicha, marcada como tal.
-            m["ball_s"] = {"x": float(estado[0]), "y": float(estado[1]),
-                           "fuente": "kalman"}
+        covariance = F @ covariance @ F.T + Q
+
+        elapsed = t - last_yolo_t
+        if observed:
+            measurement_variance = KALMAN_R**2
+            output_source = "yolo"
+        elif interpolated and elapsed <= KALMAN_MAX_GAP_S:
+            # Weak retrospective evidence only, not a new detection.
+            measurement_variance = (4 * KALMAN_R)**2
+            output_source = "interpolado"
         else:
-            # Hueco largo: no se inventa nada; el filtro se reinicia en
-            # la siguiente detección.
-            m["ball_s"] = None
-            estado = None
-            P = None
-            t_ult_med = None
+            measurement_variance = None
+            output_source = "kalman"
+
+        if measurement_variance is not None:
+            H = np.array([[1., 0., 0., 0.], [0., 1., 0., 0.]], dtype=float)
+            R = np.eye(2) * measurement_variance
+            z = np.array([candidate["x"], candidate["y"]], dtype=float)
+            S = H @ covariance @ H.T + R
+            innovation = z - H @ estado
+            # Avoid trusting an isolated implausible detection more than
+            # the consistent previous motion. The upstream ball outlier
+            # filter remains the first defence.
+            mahalanobis = float(innovation @ np.linalg.solve(S, innovation))
+            if observed and elapsed < 0.35 and mahalanobis > 36.:
+                # A YOLO sighting at an impossible location is not accepted
+                # as a trajectory update; preserve it only as raw metadata.
+                observed = False
+                sample["ball_yolo_accepted"] = False
+                measurement_variance = None
+                output_source = "kalman"
+            else:
+                gain = covariance @ H.T @ np.linalg.inv(S)
+                estado = estado + gain @ innovation
+                # Joseph form remains positive semi-definite numerically.
+                identity = np.eye(4)
+                covariance = ((identity - gain @ H) @ covariance
+                              @ (identity - gain @ H).T + gain @ R @ gain.T)
+                if observed:
+                    last_yolo_t = t
+                    elapsed = 0.
+
+        if not observed and elapsed > KALMAN_MAX_GAP_S:
+            sample["ball_s"] = None
+            estado, covariance, last_yolo_t = None, None, None
+            continue
+
+        sigma = math.sqrt(max(0., float(max(covariance[0, 0],
+                                            covariance[1, 1]))))
+        if (not np.isfinite(estado).all() or not math.isfinite(sigma)
+                or not (-3 <= estado[0] <= 103 and -3 <= estado[1] <= 103)):
+            sample["ball_s"] = None
+            estado, covariance, last_yolo_t = None, None, None
+            continue
+        sample["ball_s"] = {
+            "x": float(estado[0]), "y": float(estado[1]),
+            "fuente": output_source,
+            "missing_s": round(float(elapsed), 3),
+            "sigma": round(sigma, 3),
+        }
     return muestras
 
 
