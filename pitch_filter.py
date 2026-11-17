@@ -138,3 +138,31 @@ def filter_pitch_people(detections, mapper, pitch_ok: bool, field_mask: FieldMas
             counts["rejected"] += 1
     counts["accepted"] = len(accepted)
     return accepted, counts
+
+
+def render_pitch_preview(frame):
+    """Previsualiza la región de césped detectada en RGB para Streamlit.
+
+    Es una máscara visual, no una calibración de coordenadas ni una
+    comprobación de YOLO; nunca altera el vídeo ni el balón.
+    """
+    import cv2
+
+    if frame is None or frame.ndim != 3:
+        raise ValueError("Fotograma no válido")
+    field = field_mask_from_frame(frame)
+    h, w = frame.shape[:2]
+    draw_w = min(w, 960)
+    draw_h = max(1, int(h * draw_w / w))
+    image = cv2.resize(frame, (draw_w, draw_h), interpolation=cv2.INTER_AREA)
+    if field.reliable:
+        resized_mask = cv2.resize(
+            field.mask, (draw_w, draw_h), interpolation=cv2.INTER_NEAREST)
+        contours, _ = cv2.findContours(
+            resized_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(image, contours, -1, (20, 220, 20), thickness=3)
+        info = "Región verde delimitada. Comprueba las cuatro bandas y porterías."
+    else:
+        info = ("No se pudo identificar una superficie de juego fiable: "
+                + field.reason)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB), field.reliable, info
