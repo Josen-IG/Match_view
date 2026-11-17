@@ -21,6 +21,35 @@ class TacticalDashboardTests(unittest.TestCase):
             self.assertIn(f"function {method}", html)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js no disponible")
+    def test_radar_rejects_legacy_and_unstable_calibration(self):
+        html = HTML.read_text(encoding="utf-8")
+        match = re.search(
+            r"/\\* MV-PURE-LOGIC-START \\*/(.*?)/\\* MV-PURE-LOGIC-END \\*/",
+            html, re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        script = match.group(1) + r"""
+const assert = require('assert');
+const player = (x,y,id) => [x,y,0,id];
+let sample={t:1,pp:[player(30,30,1),player(50,30,2),player(70,30,3)],bp:[52,34]};
+assert.strictEqual(reliableRadarSnapshot(sample,null).players.length,0);
+assert.strictEqual(reliableRadarSnapshot({...sample,rk:false},null).players.length,0);
+assert.strictEqual(reliableRadarSnapshot({...sample,rk:true},null).players.length,3);
+let old={t:1,rk:true,pp:[player(30,30,1),player(50,30,2),player(70,30,3)]};
+let jump={t:1.1,rk:true,pp:[player(38,30,1),player(58,30,2),player(78,30,3)]};
+let result=reliableRadarSnapshot(jump,old);
+assert.strictEqual(result.verified,false);
+assert.strictEqual(result.players.length,0);
+let normal={t:1.1,rk:true,pp:[player(30.3,30,1),player(50.4,30,2),player(70.2,30,3)]};
+assert.strictEqual(reliableRadarSnapshot(normal,old).players.length,3);
+console.log('radar quality OK');
+"""
+        result = subprocess.run(["node", "-e", script], text=True,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("radar quality OK", result.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js no disponible")
     def test_pure_analytics_without_invented_pitch_positions(self):
         html = HTML.read_text(encoding="utf-8")
         match = re.search(
