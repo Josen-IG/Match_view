@@ -2965,6 +2965,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
     colores = dict(informe.get("team_colors") or {})
     data = {
         "version": 1,
+        "pipeline_version": 2,
         "video_filename": video_filename or informe.get("video_filename", ""),
         "kickoff_s": informe.get("kickoff_offset_s", 0.0),
         "match_duration_s": round(float(informe.get("match_duration_s", 0.0)), 1),
