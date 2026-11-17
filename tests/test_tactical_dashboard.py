@@ -24,7 +24,7 @@ class TacticalDashboardTests(unittest.TestCase):
     def test_radar_rejects_legacy_and_unstable_calibration(self):
         html = HTML.read_text(encoding="utf-8")
         match = re.search(
-            r"/\\* MV-PURE-LOGIC-START \\*/(.*?)/\\* MV-PURE-LOGIC-END \\*/",
+            r"/\* MV-PURE-LOGIC-START \*/(.*?)/\* MV-PURE-LOGIC-END \*/",
             html, re.DOTALL,
         )
         self.assertIsNotNone(match)
