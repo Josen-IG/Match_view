@@ -1653,6 +1653,45 @@ elif st.session_state.pagina == "video":
                            "menos área = equipo más compacto. Anchura y "
                            "profundidad en metros.")
                 st.dataframe(filas_comp, use_container_width=True, hide_index=True)
+        # Geometría táctica ampliada calculada solo con jugadores visibles.
+        tactico = (datos_tracking.get("tactical_analysis") or {}
+                   if isinstance(datos_tracking, dict) else {})
+        periodos_tacticos = tactico.get("periods") or []
+        if periodos_tacticos:
+            filas_tacticas = []
+            nombres_equipo = datos_tracking.get("teams") or {}
+            for periodo in periodos_tacticos:
+                inicio = int(periodo.get("period_start_s", 0) // 60)
+                fin = int(periodo.get("period_end_s", 0) // 60)
+                cobertura = periodo.get("coverage") or {}
+                forma = periodo.get("teams") or {}
+                cambios = periodo.get("possession_recoveries_proxy") or {}
+                for lado in ("local", "visitante"):
+                    perfil = forma.get(lado) or {}
+                    filas_tacticas.append({
+                        "Tramo": f"{inicio}-{fin}'",
+                        "Equipo": nombres_equipo.get(lado, lado),
+                        "Muestras útiles": perfil.get("usable_frames", 0),
+                        "Muestras ambos equipos": cobertura.get("both_teams", 0),
+                        "Jugadores visibles": perfil.get("visible_players"),
+                        "Anchura visible (m)": perfil.get("width_m"),
+                        "Profundidad visible (m)": perfil.get("depth_m"),
+                        "Área visible (m²)": perfil.get("area_m2"),
+                        "Compañero más cercano (m)": perfil.get("nearest_teammate_m"),
+                        "Línea defensiva aprox. (m)": perfil.get("defensive_line_m"),
+                        "Defensores cerca del balón": perfil.get("defenders_near_ball_10m"),
+                        "Cambios de posesión (proxy)": cambios.get(lado, 0),
+                    })
+            with st.expander("Análisis táctico por tramos (geometría visible)",
+                             expanded=False):
+                st.caption(
+                    "La cámara puede mostrar solo una parte del campo. "
+                    "Anchura, profundidad y compactación corresponden al "
+                    "grupo de jugadores visibles, no necesariamente a los 11. "
+                    "La línea defensiva requiere ver al portero. "
+                    "Presión y recuperaciones son indicadores aproximados.")
+                st.dataframe(filas_tacticas, use_container_width=True,
+                             hide_index=True)
         components.html(html_pantalla, height=1100, scrolling=True)
     else:
         st.warning("⚠️ No se encontró analizador_video.html junto a match.py; "
