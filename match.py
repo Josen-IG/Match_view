@@ -1539,6 +1539,10 @@ elif st.session_state.pagina == "video":
         progreso_match_view()
     elif not listo:
         st.markdown("### Análisis de vídeo")
+        if trabajo and trabajo["state"] == "failed":
+            st.error("El último análisis falló: "
+                     + str(trabajo.get("error") or "Error desconocido")
+                     + ". Revisa la ruta y vuelve a intentarlo.")
         with st.form("mv_video_start_form", clear_on_submit=False):
             c1, c2, c3 = st.columns([3, 1, 1.5])
             with c1:
