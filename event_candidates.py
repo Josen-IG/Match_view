@@ -51,13 +51,18 @@ def _candidate(kind, t, score, reason, kickoff_s, duration_s):
     }
 
 
-def suggest_key_moments(samples, kickoff_s=0.0, max_events=120):
-    """Genera candidatos de eventos por geometría, sin inventar eventos.
+def suggest_key_moments(samples, kickoff_s=0.0, max_events=120, experimental=False):
+    """Retorna [] por defecto: la geometría sola da falsos tiros.
 
-    Se evitan posiciones sin homografía o predichas. Debe existir un
-    movimiento coherente hacia portería o una reanudación junto a esquina.
-    Si solo hay balón en píxeles, devuelve [].
+    Solo con experimental=True devuelve hipótesis para evaluación;
+    nunca se deben presentar como eventos deportivos reales.
     """
+    # El modelo actual no observa contacto pie-balón ni confirma
+    # acciones reglamentarias. Desactivamos por defecto los candidatos
+    # puramente geométricos: producían falsos tiros en partidos reales.
+    # Modo experimental exclusivo para validación con datos etiquetados.
+    if not experimental:
+        return []
     if not isinstance(samples, list) or len(samples) < 4:
         return []
 
