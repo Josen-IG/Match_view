@@ -14,6 +14,7 @@ import re
 import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tracking_catalog import read_tracking_header, inspect_tracking, deduplicate_library
 
 # OpenCV solo se necesita para exportar clips con overlay; si no está,
 # la exportación usa ffmpeg por CLI (corte sin overlay) o avisa.
@@ -812,37 +813,34 @@ def generar_figura_red_pases(df_eventos, dp):
 
 
 def leer_metadatos_tracking(ruta):
-    """Metadatos de un tracking sin quedarse con las muestras en memoria.
-    Devuelve dict o None si el archivo no se puede leer."""
+    """Metadatos del tracking sin cargar las muestras del partido en RAM."""
     try:
-        with open(ruta, encoding="utf-8") as f:
-            datos = json.load(f)
-        n_muestras = len(datos.get("samples") or [])
+        datos = read_tracking_header(ruta)
         teams = datos.get("teams") or {}
-        local = teams.get("local", "?")
-        visitante = teams.get("visitante", "?")
         dur = float(datos.get("match_duration_s") or 0)
-        # Las muestras no salen de aquí: solo se cuenta cuántas hay.
-        fecha = datetime.fromtimestamp(os.path.getmtime(ruta)).strftime("%d/%m/%Y")
-        return {"partido": f"{local} vs {visitante}",
-                "fecha": fecha,
-                "duracion": _mmss(dur),
-                "muestras": n_muestras,
-                "archivo": Path(ruta).name,
-                "ruta": str(ruta)}
-    except Exception:  # noqa: BLE001 - archivo corrupto: se salta
+        stamp = os.path.getmtime(ruta)
+        return {
+            "partido": f"{teams.get('local', '?')} vs {teams.get('visitante', '?')}",
+            "fecha": datetime.fromtimestamp(stamp).strftime("%d/%m/%Y"),
+            "duracion": _mmss(dur),
+            "muestras": datos.get("samples_count", "N/D"),
+            "archivo": Path(ruta).name,
+            "ruta": str(ruta),
+            "video_filename": datos.get("video_filename") or "",
+            "mtime": stamp,
+        }
+    except (OSError, ValueError, TypeError, KeyError):
         return None
 
 
 def buscar_biblioteca(carpeta_app):
-    """Todos los tracking_*.json bajo la carpeta de la app (recursivo),
-    con sus metadatos. Los corruptos se ignoran."""
+    """Deduplicar copias del mismo partido sin cargar los samples."""
     biblioteca = []
     for ruta in sorted(Path(carpeta_app).glob("**/tracking_*.json")):
         meta = leer_metadatos_tracking(ruta)
         if meta is not None:
             biblioteca.append(meta)
-    return biblioteca
+    return deduplicate_library(biblioteca)
 
 
 def _muestra_cercana(muestras, tiempos, t_frame):
@@ -1463,6 +1461,8 @@ elif st.session_state.pagina == "video":
     # ¿Ya existe tracking para este vídeo? (mismo stem, en la carpeta de
     # la app, junto al vídeo o en su carpeta de clips).
     tracking_gen = None
+    tracking_antiguo = None
+    tracking_incompatible = None
     if ruta_gen:
         stem_gen = Path(ruta_gen).stem
         for cand in (
@@ -1470,9 +1470,32 @@ elif st.session_state.pagina == "video":
             Path(ruta_gen).parent / f"{stem_gen}_tracking.json",
             Path(ruta_gen).parent / f"{stem_gen}_clips" / f"{stem_gen}_tracking.json",
         ):
-            if cand.is_file():
+            if not cand.is_file():
+                continue
+            try:
+                info = inspect_tracking(cand, Path(ruta_gen).name)
+            except (OSError, ValueError, TypeError):
+                continue
+            if info["state"] == "actual":
                 tracking_gen = cand
                 break
+            if info["state"] == "antiguo":
+                tracking_antiguo = cand
+            elif info["state"] == "otro_video":
+                tracking_incompatible = cand
+    if tracking_antiguo is not None and tracking_gen is None:
+        st.warning(
+            f"Existe un tracking antiguo ({tracking_antiguo.name}). "
+            "No se reutilizará automáticamente: no contiene el filtrado "
+            "de campo ni todas las métricas actuales.")
+    if tracking_incompatible is not None and tracking_gen is None:
+        st.error(
+            f"El tracking {tracking_incompatible.name} pertenece a otro vídeo. "
+            "No se cargará automáticamente.")
+    if tracking_gen is None and st.session_state.get("video_analizado_path") == ruta_gen:
+        st.session_state.pop("video_analizado_path", None)
+        if st.session_state.get("tracking_del_video"):
+            st.session_state.pop("tracking_del_video", None)
     forzar_gen = st.session_state.pop("video_forzar", False)
     # Si el JSON aparece antes de finalizar informes, continuar mostrando
     # el trabajo de fondo en lugar de dar el análisis por completado.
