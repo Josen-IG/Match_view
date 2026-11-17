@@ -1186,6 +1186,61 @@
       list.sort(function(x, y){ return y.n - x.n; });
       return { zones: zones, matrix: matrix, transitions: list, totalTransitions: transitions, total: total, fromCampo: fromCampo, fromAprox: fromAprox };
     }
+    /* Posesiones observadas: separar por cambio de equipo, disputa o
+       hueco del tracking. No se infieren pases, tiros ni recuperaciones. */
+    function possessionThird(sample){
+      if (!sample || !Array.isArray(sample.bp) || sample.bp.length < 2) return null;
+      var x=Number(sample.bp[0]), y=Number(sample.bp[1]);
+      if (!isFinite(x) || !isFinite(y) || x<0 || x>105 || y<0 || y>68) return null;
+      return x<35 ? 'Tercio izquierdo' : x<70 ? 'Tercio central' : 'Tercio derecho';
+    }
+    function derivePossessions(samples, minSeconds){
+      var out=[], current=null;
+      var threshold = minSeconds == null ? 1.2 : Math.max(0,Number(minSeconds)||0);
+      function flush(){
+        if (current && current.end_s-current.start_s>=threshold){
+          current.duration_s=+(current.end_s-current.start_s).toFixed(1);
+          out.push(current);
+        }
+        current=null;
+      }
+      (samples||[]).forEach(function(s){
+        var valid = s && isFinite(s.t) && (s.o===0 || s.o===1);
+        if (!valid){flush();return;}
+        var team = s.o===0 ? 'local' : 'visitante';
+        if (current && (team!==current.team || s.t-current.end_s>1.25 || s.t<current.end_s))
+          flush();
+        if (!current) current={team:team,start_s:s.t,end_s:s.t,
+          start_zone:possessionThird(s),end_zone:possessionThird(s),samples:0};
+        current.end_s=s.t;
+        current.samples++;
+        var z=possessionThird(s);
+        if (!current.start_zone && z) current.start_zone=z;
+        if (z) current.end_zone=z;
+      });
+      flush();
+      return out;
+    }
+    /* Radar: solo coordenadas métricas reales. Nunca convierte píxeles
+       de imagen a campo: esa conversión crea posiciones tácticas falsas. */
+    function radarSnapshot(s){
+      var out={players:[],ball:null};
+      if (!s) return out;
+      (s.pp||[]).forEach(function(p){
+        if (!Array.isArray(p)||p.length<3) return;
+        var x=Number(p[0]), y=Number(p[1]), team=Number(p[2]);
+        if (!isFinite(x)||!isFinite(y)||x<0||x>105||y<0||y>68) return;
+        if ([0,1,2,3].indexOf(team)<0) return;
+        out.players.push({x:x,y:y,code:team,id:p.length>3?p[3]:null});
+      });
+      if (Array.isArray(s.bp)&&s.bp.length>=2){
+        var bx=Number(s.bp[0]),by=Number(s.bp[1]);
+        if (isFinite(bx)&&isFinite(by)&&bx>=0&&bx<=105&&by>=0&&by<=68)
+          out.ball={x:bx,y:by,estimated:s.bf==='kalman'};
+      }
+      return out;
+    }
+
     /* MV-PURE-LOGIC-END */
     </script>
 
