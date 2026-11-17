@@ -1884,6 +1884,15 @@ elif st.session_state.pagina == "video":
                 try:
                     datos_tracking = cargar_tracking_json(
                         str(tracking_elegido), tracking_elegido.stat().st_mtime)
+                    # Un tracking anterior puede traer posiciones calibradas
+                    # pero no la lista de momentos IA. Calcularla en memoria,
+                    # sin pedir al usuario que suba ni edite ningún JSON.
+                    if "suggested_events" not in datos_tracking:
+                        from event_candidates import suggest_key_moments
+                        datos_tracking = dict(datos_tracking)
+                        datos_tracking["suggested_events"] = suggest_key_moments(
+                            datos_tracking.get("samples") or [],
+                            kickoff_s=float(datos_tracking.get("kickoff_s") or 0))
                     # Inyectar antes del script principal. Se escapa "<" para
                     # que ningún texto del JSON pueda cerrar el <script>. Si el
                     # vídeo se sirve por HTTP (url_video), se pasa también su
