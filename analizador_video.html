@@ -255,13 +255,76 @@
       .an-layers{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
       .an-layers button.active{ background:var(--acc); border-color:var(--acc); color:#fff; }
       .an-empty{ color:var(--dim); font-size:13px; padding:18px 4px; text-align:center; }
+      /* Match View: interfaz de vídeo compacta y priorizada. */
+      :root {
+        --bg:#0b1220; --panel:#121c2b; --panel2:#192638;
+        --line:#23344c; --line2:#30445d;
+        --txt:#edf3fb; --mut:#a8bbd2; --dim:#8298b3;
+        --acc:#347ff3; --radius:12px;
+      }
+      body { line-height:1.4; letter-spacing:.005em; }
+      header { padding:10px 14px; align-items:center; gap:10px 20px; }
+      header .brand h1 { font-size:16px; font-weight:750; letter-spacing:.015em; }
+      header .brand p { margin-top:2px; font-size:11px; }
+      .loaders { margin-left:auto; }
+      .loader label { font-size:10px; }
+      #statusLine {
+        background:transparent; padding:7px 14px;
+        border-bottom:1px solid var(--line); font-size:11px;
+        gap:5px 14px;
+      }
+      .layout {
+        grid-template-columns:54px minmax(0,1fr) 288px;
+        gap:10px; padding:10px 12px 20px;
+      }
+      .stage-wrap { padding:8px; border-radius:12px; }
+      .stage { border-radius:9px; }
+      .panel { padding:11px; border-radius:11px; }
+      .side { gap:10px; }
+      .view-tabs { margin-bottom:8px; gap:6px; }
+      .view-tab { min-height:34px; }
+      .controls { margin-top:8px; }
+      .ctrl-row { gap:6px; }
+      .ctrl-row button { min-height:32px; padding:5px 9px; }
+      .timebox { min-height:32px; padding:5px 9px; font-size:12px; }
+      .mv-video-advanced {
+        margin-top:8px; padding:5px 9px;
+        border:1px solid var(--line); border-radius:9px;
+        background:rgba(17,26,41,.75);
+      }
+      .mv-video-advanced summary {
+        cursor:pointer; list-style:none;
+        color:var(--mut); font-size:12px; padding:4px 2px;
+        display:flex; align-items:center; justify-content:space-between;
+      }
+      .mv-video-advanced summary::-webkit-details-marker { display:none; }
+      .mv-video-advanced summary::after {
+        content:"⌄"; font-size:16px; color:var(--mut);
+      }
+      .mv-video-advanced[open] summary { margin-bottom:8px; }
+      .mv-video-advanced[open] summary::after { content:"⌃"; }
+      .mv-video-advanced .ctrl-row { margin-top:4px; }
+      .mv-video-advanced .vista-row { margin-top:6px; }
+      .panel h2 { color:#C0D0E4; }
+      .hint, .an-note { line-height:1.45; }
+      button, .filebtn { transition:background-color .14s ease,border-color .14s ease; }
+      button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+        outline:2px solid #82B5FF; outline-offset:2px;
+      }
+      @media (max-width:1120px) {
+        .layout { grid-template-columns:54px minmax(0,1fr) 265px; }
+      }
+      @media (max-width:900px) {
+        .layout { grid-template-columns:54px minmax(0,1fr); }
+        .side { grid-column:1/-1; }
+      }
     </style>
   </head>
   <body>
     <header>
       <div class="brand">
-        <h1>Analizador de vídeo — Match_view</h1>
-        <p>Análisis manual con tracking YOLO: reproduce, señala acciones y exporta tu análisis.</p>
+        <h1>MATCH VIEW <span class="muted">/ Vídeo</span></h1>
+        <p>Reproduce, analiza y anota el partido.</p>
       </div>
       <div class="loaders">
         <div class="loader">
@@ -346,7 +409,7 @@
             <div class="stage-empty" id="stageEmpty">
               <div id="stageEmptyDefault">
                 <strong>Carga el vídeo del partido para empezar</strong>
-                Después carga el archivo JSON de tracking para ver las cajas, el balón y la trayectoria sobre el vídeo. Todo se procesa en tu equipo: ningún archivo sale de esta página.
+                El seguimiento se genera y carga desde Match_view. Solo necesitas seleccionar el vídeo.
               </div>
               <div id="stageEmptyNeedVideo" hidden>
                 <strong class="warn-title">Tracking cargado (<span id="needVideoSamples">0</span> muestras)</strong>
@@ -358,7 +421,7 @@
               <strong>⚠️ El tracking cargado es de otro vídeo</strong>
               <span>Tracking: <b class="fn" id="mismatchTrackName"></b></span>
               <span>Vídeo elegido: <b class="fn" id="mismatchVideoName"></b></span>
-              <span>Las cajas no corresponden a este vídeo, por eso no se dibujan. Genera el tracking de este vídeo (al subirlo en la app o con el notebook de Colab) para analizarlo.</span>
+              <span>El seguimiento no corresponde a este vídeo. Genera un análisis nuevo desde Match_view.</span>
             </div>
           </div>
 
@@ -385,6 +448,8 @@
                 <input type="range" id="volRange" min="0" max="1" step="0.05" value="1" />
               </div>
             </div>
+            <details class="mv-video-advanced">
+              <summary>Opciones de vista y cámara</summary>
             <div class="ctrl-row">
               <span class="small muted">Cámara virtual</span>
               <button type="button" class="zoom-btn active" data-zoom="1">1×</button>
@@ -403,6 +468,7 @@
               <label class="chk"><input type="checkbox" id="showConfidence" checked /> Mostrar confianza de detección</label>
               <label class="chk"><input type="checkbox" id="showAllAnnos" /> Mostrar todas las señalizaciones</label>
             </div>
+            </details>
           </div>
         </section>
 
@@ -445,7 +511,7 @@
               </select>
             </label>
           </div>
-          <div class="an-empty" id="analyticsEmpty">Sin tracking cargado: carga el JSON de tracking para ver el Analytics. Sin tracking no hay cifras: esta pestaña nunca inventa datos.</div>
+          <div class="an-empty" id="analyticsEmpty">Analiza el vídeo desde Match_view para ver las estadísticas.</div>
           <div id="analyticsContent" hidden>
             <div class="an-grid">
               <div class="an-card">
