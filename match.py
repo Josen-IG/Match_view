@@ -1884,6 +1884,7 @@ elif st.session_state.pagina == "video":
                 "Equipo": p.get("team"),
                 "Visible (s)": p.get("visible_s"),
                 "Campo válido (%)": p.get("field_coverage_pct"),
+                "Fiabilidad": p.get("reliability", "sin evaluar"),
                 "Distancia estimada (m)": p.get("distance_m"),
                 "Vel. media (km/h)": p.get("avg_speed_kmh"),
                 "Vel. máxima (km/h)": p.get("max_speed_kmh"),
@@ -1892,6 +1893,17 @@ elif st.session_state.pagina == "video":
                 "Sprints": p.get("sprints"),
                 "Cerca del balón (s)": p.get("ball_proximity_s"),
             } for p in filtrados]
+            comparativa = perfilado.get("team_comparison") or {}
+            if comparativa:
+                st.caption("Comparación orientativa: tracks con cobertura suficiente, no jugadores únicos.")
+                st.dataframe([{
+                    "Equipo": lado,
+                    "IDs observados": info.get("track_ids"),
+                    "IDs comparables": info.get("reliable_track_ids"),
+                    "Distancia registrada (m)": info.get("measured_distance_m"),
+                    "Mayor velocidad (km/h)": info.get("max_speed_kmh"),
+                } for lado, info in comparativa.items()],
+                use_container_width=True, hide_index=True)
             if filas:
                 df_ind = pd.DataFrame(filas)
                 st.dataframe(df_ind, use_container_width=True, hide_index=True)
@@ -1908,7 +1920,8 @@ elif st.session_state.pagina == "video":
                     f"Posición media (m): {perfil.get('mean_position_m')} · "
                     f"Tiempo con movimiento medible (s): "
                     f"{perfil.get('field_measured_s')} · "
-                    f"Calidad de campo: {perfil.get('pitch_quality', {})}")
+                    f"Calidad de campo: {perfil.get('pitch_quality', {})} · "
+                    f"Fiabilidad: {perfil.get('reliability', 'no evaluada')}")
                 duracion = float(datos_ind.get("match_duration_s") or 0)
                 if duracion > 0:
                     figura, nota = generar_figura_mapa_calor(
