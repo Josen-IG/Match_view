@@ -86,6 +86,7 @@ from player_tracking import (PlayerIDTracker, estimate_camera_transform,
                              flip_camera_transform)
 from player_metrics import compute_player_metrics
 from event_candidates import suggest_key_moments
+from radar_quality import radar_calibration_valid
 from tactical_metrics import compute_tactical_metrics
 from quality_metrics import assess_tracking_quality
 from pitch_filter import field_mask_from_frame, filter_pitch_people
@@ -1646,7 +1647,11 @@ def _track_video(
                                      if pitch_ok else None),
                                  "pitch_inlier_ratio": (
                                      getattr(mapper, "inlier_ratio", None)
-                                     if pitch_ok else None)})
+                                     if pitch_ok else None),
+                                 "pitch_age_s": (
+                                     max(0.0, t_video - mapper.ultima_t)
+                                     if pitch_ok and mapper.ultima_t is not None
+                                     else None)})
             frame_idx += 1
     finally:
         cap.release()
@@ -2948,8 +2953,15 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                     TRACKING_TEAM_CODE.get(p.get("team"), 5),
                     int(p.get("track_id", -1)),
                 ])
+        # Radar: la detección YOLO puede ser correcta aunque la última
+        # homografía esté desfasada por movimientos de la cámara VEO.
+        # Una calidad temporal insuficiente NO debe producir puntos 2D.
+        radar_ok = radar_calibration_valid(m)
         muestra_json = {
             "t": round(float(m["t_video"]), 2),
+            "rk": radar_ok,  # quality gate del radar (no de YOLO)
+            "ra": (round(float(m["pitch_age_s"]), 2)
+                   if m.get("pitch_age_s") is not None else None),
             "b": ball,
             "p": people,
             "o": TRACKING_POSESSION_CODE.get(
@@ -2957,9 +2969,12 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         }
         if bf is not None:
             muestra_json["bf"] = bf
-        if bp is not None:
+        # Sólo exportar coordenadas métricas como utilizables si la
+        # homografía sigue siendo reciente y geométricamente fiable.
+        # En el resto de casos se omiten, no se interpolan.
+        if radar_ok and bp is not None:
             muestra_json["bp"] = bp
-        if pp:
+        if radar_ok and pp:
             muestra_json["pp"] = pp
         samples.append(muestra_json)
     formacion = " / ".join(f for f in (formation_local, formation_visitante) if f)
