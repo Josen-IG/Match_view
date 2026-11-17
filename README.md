@@ -107,6 +107,29 @@ El analizador mantiene una sola vista de vídeo y prioriza radar, posesión y
 contexto táctico en la columna derecha. Configuración, dibujos, cortes y
 exportaciones están agrupados en paneles desplegables.
 
+### Fiabilidad de coordenadas del radar (VEO)
+
+La pantalla de vídeo conserva la detección YOLO de jugadores y balón
+aunque no pueda construir un radar fiable. Las posiciones de campo
+se incluyen en los nuevos JSON solo si hay una homografía de calidad
+media o alta, con reproyección ≤1,5 m, inliers ≥70 % y recalibración
+con una antigüedad máxima de 3 s. Esto evita dibujar jugadores usando
+homografías mantenidas durante decenas de segundos tras el movimiento
+de la cámara.
+
+El visor utiliza `rk` para indicar si la calibración de esa muestra
+supera el control de calidad y `ra` para la edad de la calibración.
+Si falta `rk` (JSON generado antes de esta mejora), no presenta
+posiciones de campo como fiables: **hay que reanalizar ese vídeo**.
+También se rechazan saltos imposibles de IDs y cambios colectivos de
+posición sospechosos entre muestras.
+
+Este filtro limita errores evidentes, pero no demuestra que una
+homografía aceptada coincida exactamente con el vídeo. Para validar
+la precisión hacen falta fragmentos con líneas/puntos del campo
+anotados manualmente y comparar reproyección, posiciones y estabilidad
+en grabaciones reales de distintos partidos.
+
 ### Radar táctico sincronizado y posesiones
 
 El visor de **Vídeo** muestra un radar 2D junto al reproductor. Las posiciones
