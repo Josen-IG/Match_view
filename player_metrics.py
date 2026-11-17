@@ -134,6 +134,17 @@ def compute_player_metrics(samples, pitch_length=105.0, pitch_width=68.0,
         if sprint_duration >= 1.0:
             sprints += 1
         has_motion = valid_steps > 0
+        coverage = 100 * p["field_samples"] / p["samples"] if p["samples"] else 0
+        high_quality_fraction = (p["quality"]["alta"] / p["field_samples"]
+                                 if p["field_samples"] else 0)
+        if not has_motion or measured_s < 2:
+            reliability = "insuficiente"
+        elif measured_s >= 60 and coverage >= 70 and high_quality_fraction >= .6:
+            reliability = "alta"
+        elif measured_s >= 15 and coverage >= 40:
+            reliability = "media"
+        else:
+            reliability = "baja"
         result.append({
             "track_id": tid,
             "team": team,
@@ -143,6 +154,8 @@ def compute_player_metrics(samples, pitch_length=105.0, pitch_width=68.0,
             "field_coverage_pct": round(100 * p["field_samples"] / p["samples"], 1),
             "pitch_quality": dict(p["quality"]),
             "field_measured_s": round(measured_s, 1),
+            "reliability": reliability,
+            "reliable_for_comparison": reliability in ("alta", "media"),
             "distance_m": round(distance, 1) if has_motion else None,
             "avg_speed_kmh": round(distance / measured_s * 3.6, 1) if measured_s else None,
             "max_speed_kmh": round(top_speed * 3.6, 1) if has_motion else None,
@@ -155,8 +168,24 @@ def compute_player_metrics(samples, pitch_length=105.0, pitch_width=68.0,
                            for key, count in sorted(zone_counts.items())},
             "ball_proximity_s": round(p["near_ball_s"], 1),
         })
+    comparison = {}
+    for team in ("local", "visitante"):
+        team_tracks = [p for p in result if p["team"] in
+                       ((team, "gk_" + team))]
+        dependable = [p for p in team_tracks if p["reliable_for_comparison"]]
+        comparison[team] = {
+            "track_ids": len(team_tracks),
+            "reliable_track_ids": len(dependable),
+            "measured_distance_m": round(sum(
+                p["distance_m"] for p in dependable
+                if p["distance_m"] is not None), 1) if dependable else None,
+            "max_speed_kmh": max(
+                (p["max_speed_kmh"] for p in dependable
+                 if p["max_speed_kmh"] is not None), default=None),
+        }
     return {
         "version": 1,
+        "team_comparison": comparison,
         "method": "Posiciones de homografia agregadas cada 0,5 s; estimaciones, no GPS.",
         "caveats": [
             "track_id identifica un track, no un dorsal ni un jugador verificado.",
@@ -164,6 +193,7 @@ def compute_player_metrics(samples, pitch_length=105.0, pitch_width=68.0,
             "Las distancias y velocidades dependen de la calidad de la homografia.",
             "Cercania al balon no es una estadistica de toques o pases.",
             "No se infieren eventos (pases, tiros, recuperaciones) sin etiquetado.",
+            "Las comparativas incluyen solo IDs con cobertura media o alta; no equivalen a los once jugadores.",
         ],
         "players": result,
     }
