@@ -1821,6 +1821,47 @@ elif st.session_state.pagina == "video":
                 st.caption(nota_hm)
                 plt.close(fig_hm)
 
+    # --- 7d. INFORMES AUTOMÁTICOS ---
+    st.divider()
+    st.markdown("#### Informes postpartido (PDF, Excel y CSV)")
+    st.caption(
+        "Se generan a partir del tracking ya analizado. No se inventan "
+        "goles, pases ni tiros: solo se incluyen eventos etiquetados.")
+    if tracking_elegido is None:
+        st.info("Carga un tracking para generar el informe del partido.")
+    else:
+        if st.button("Generar o actualizar informes", key="report_generate"):
+            try:
+                from match_reports import generate_match_reports
+                rutas_reportes = generate_match_reports(tracking_elegido)
+                st.success("Informes generados correctamente.")
+            except Exception as error:
+                st.error(f"No se pudieron generar los informes: {error}")
+        base_reportes = tracking_elegido.with_suffix("")
+        descargas = [
+            ("PDF del partido", "_informe.pdf", "application/pdf", "pdf"),
+            ("Excel de estadísticas", "_estadisticas.xlsx",
+             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
+            ("CSV jugadores", "_jugadores.csv", "text/csv", "csv"),
+            ("CSV táctico", "_tactica.csv", "text/csv", "csv"),
+        ]
+        rutas_existentes = [
+            (titulo, Path(str(base_reportes) + sufijo), mime, extension)
+            for titulo, sufijo, mime, extension in descargas
+            if Path(str(base_reportes) + sufijo).is_file()
+        ]
+        if rutas_existentes:
+            columnas_descarga = st.columns(len(rutas_existentes))
+            for columna, (titulo, ruta, mime, extension) in zip(
+                    columnas_descarga, rutas_existentes):
+                with columna:
+                    st.download_button(
+                        titulo, data=ruta.read_bytes(),
+                        file_name=ruta.name, mime=mime,
+                        key=f"report_download_{extension}_{ruta.stem}")
+        else:
+            st.info("Todavía no hay informes generados para este tracking.")
+
     # --- 7c. BIBLIOTECA DE PARTIDOS ---
     st.divider()
     st.markdown("#### 📚 Biblioteca de partidos")
