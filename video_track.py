@@ -2382,7 +2382,7 @@ def _compacidad_equipos(muestras: list[dict],
 
     Por periodo y equipo (solo jugadores de campo, sin porteros ni
     árbitro): área del Convex Hull de las posiciones en campo (m²),
-    anchura (max x - min x), profundidad (max y - min y) y centroide.
+    anchura (max y - min y), profundidad (max x - min x) y centroide.
     Se calcula por MUESTRA (la forma del equipo en ese instante) y se
     toma la MEDIANA del periodo: la mediana por track inflaba el área
     (un track fragmentado aporta varios puntos a lo largo de su
