@@ -392,6 +392,24 @@
       .mv-side-details summary{cursor:pointer;color:#d1e1f5;font-size:12px;font-weight:650}
       .mv-side-details[open] summary{margin-bottom:12px}
       .sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+      .mv-measured-analysis{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:13px;margin-top:10px}
+      .mv-measured-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+      .mv-measured-head h2{font-size:15px;margin:0;color:#eaf3ff}
+      .mv-measured-head p{font-size:11px;color:#9fb4cd;margin:4px 0}
+      .mv-measured-head label{display:flex;gap:8px;align-items:center;color:#b6c8de;font-size:11px}
+      .mv-measured-head select{min-height:32px;max-width:155px}
+      .mv-measured-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
+      .mv-measured-kpis>div{padding:12px 10px;background:#1b293c;border:1px solid #293c55;border-radius:9px}
+      .mv-measured-kpis strong{display:block;color:#f0f6ff;font-size:20px}
+      .mv-measured-kpis span{font-size:11px;color:#9fb4cc}
+      .mv-measured-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(210px,.8fr);gap:13px;align-items:start}
+      #mvMeasuredField{display:block;width:100%;max-width:630px;height:auto;border-radius:9px}
+      .mv-measured-summary{color:#b4c8dd;font-size:12px;line-height:1.6}
+      .mv-measured-summary h3{font-size:13px;color:#e9f2ff;margin:0 0 7px}
+      .mv-measured-summary p{font-size:11px;color:#91a9c5}
+      .mv-measured-zone{border-bottom:1px solid #2b3b50;padding:7px 0;display:flex;justify-content:space-between;gap:10px}
+      .mv-measured-zone b{color:#e7f1ff}
+      @media(max-width:760px){.mv-measured-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mv-measured-grid{grid-template-columns:1fr}}
     </style>
   </head>
   <body>
@@ -568,6 +586,34 @@
           </div>
           <div class="ai-legend"><span class="ai-key shot">●</span>Tiro posible <span class="ai-key corner">●</span>Córner posible <span class="ai-key goal">●</span>Gol posible</div>
           <div class="ai-events-list" id="aiEventsList" aria-live="polite"><p class="ai-empty">Analiza un vídeo para ver posibles jugadas.</p></div>
+        </section>
+
+        <section class="mv-measured-analysis" aria-label="Analítica observada">
+          <div class="mv-measured-head">
+            <div><h2>Analítica del seguimiento</h2>
+              <p>Solo datos observados o calibrados. No son goles, tiros ni distancias GPS.</p></div>
+            <label for="mvMeasuredPeriod">Tramo
+              <select id="mvMeasuredPeriod">
+                <option value="all">Todo el análisis</option>
+              </select>
+            </label>
+          </div>
+          <div class="mv-measured-kpis">
+            <div><strong id="mvMeasuredSamples">—</strong><span>Muestras analizadas</span></div>
+            <div><strong id="mvMeasuredBall">—</strong><span>Balón visto por YOLO</span></div>
+            <div><strong id="mvMeasuredPitch">—</strong><span>Balón calibrado al campo</span></div>
+            <div><strong id="mvMeasuredPlayers">—</strong><span>Jugadores visibles por muestra</span></div>
+          </div>
+          <div class="mv-measured-grid">
+            <canvas id="mvMeasuredField" width="630" height="408" role="img"
+              aria-label="Mapa de observaciones calibradas de jugadores sobre el campo"></canvas>
+            <div class="mv-measured-summary">
+              <h3>Distribución territorial observada</h3>
+              <div id="mvMeasuredZones">Sin datos calibrados.</div>
+              <p>La orientación izquierda/derecha es la del modelo de campo; no se presupone qué portería ataca cada equipo.</p>
+              <p>Si la cámara no muestra un jugador, no se estima su posición. La cobertura no mide precisión.</p>
+            </div>
+          </div>
         </section>
 
         <section class="analytics-wrap" id="analyticsWrap" hidden aria-label="Analytics">
