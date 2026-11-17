@@ -1640,10 +1640,11 @@ def _track_video(
                                  else "ninguna",
                                  "field_filter": field_filter,
                                  "pitch_reprojection_error_m": (
-                                     mapper.reprojection_error_m
+                                     getattr(mapper, "reprojection_error_m", None)
                                      if pitch_ok else None),
                                  "pitch_inlier_ratio": (
-                                     mapper.inlier_ratio if pitch_ok else None)})
+                                     getattr(mapper, "inlier_ratio", None)
+                                     if pitch_ok else None)})
             frame_idx += 1
     finally:
         cap.release()
