@@ -594,6 +594,41 @@ def _color_torso(frame, x0: int, y0: int, x1: int, y1: int,
     return float(mediana[0]), float(mediana[1]), float(mediana[2])
 
 
+def _appearance_torso(frame, x0, y0, x1, y1):
+    """Lightweight jersey descriptor; NOT a learned person ReID embedding.
+
+    Hue/saturation/value histograms of a trimmed upper-body patch. Tiny or
+    heavily grass-coloured patches abstain, avoiding false confidence.
+    """
+    import cv2
+    import numpy as np
+    h, w = frame.shape[:2]
+    tx0 = max(0, int(x0 + .32 * (x1 - x0)))
+    tx1 = min(w, int(x0 + .68 * (x1 - x0)))
+    ty0 = max(0, int(y0 + .27 * (y1 - y0)))
+    ty1 = min(h, int(y0 + .58 * (y1 - y0)))
+    if tx1 - tx0 < 5 or ty1 - ty0 < 5:
+        return None
+    patch = frame[ty0:ty1, tx0:tx1]
+    if patch.size == 0:
+        return None
+    pix = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    mask = ~((pix[:, 0] >= GRASS_H_MIN)
+             & (pix[:, 0] <= GRASS_H_MAX)
+             & (pix[:, 1] >= 40)
+             & (pix[:, 1] <= GRASS_S_MAX)
+             & (pix[:, 2] < GRASS_V_MAX))
+    if mask.sum() < max(20, len(pix) * .25):
+        return None
+    pix = pix[mask]
+    histograms = [
+        np.histogram(pix[:, 0], bins=12, range=(0, 180))[0],
+        np.histogram(pix[:, 1], bins=4, range=(0, 256))[0],
+        np.histogram(pix[:, 2], bins=4, range=(0, 256))[0],
+    ]
+    return [float(v) for hist in histograms for v in (hist / len(pix))]
+
+
 def _hsv_a_hex(hsv) -> str | None:
     """Color HSV OpenCV -> hex RGB ('#RRGGBB'). Es el color real de la
     camiseta tal como se ve en el vídeo: sirve para dibujar en el radar
@@ -1588,6 +1623,7 @@ def _track_video(
                     x0, y0, x1, y1 = det["caja"]
                     hsv = _color_torso(frame, x0, y0, x1, y1)
                     det["hsv"] = hsv
+                    det["appearance"] = _appearance_torso(frame, x0, y0, x1, y1)
                     det["team_hint"] = _clasificar_color(
                         hsv, ref_local, ref_visitante, ref_gk_local,
                         ref_gk_visitante, ref_arbitro)
