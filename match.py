@@ -858,10 +858,9 @@ def _muestra_cercana(muestras, tiempos, t_frame):
 
 
 def _dibujar_overlay_cv2(frame, tracking, muestras, tiempos, t_frame, ancho, alto):
-    """Overlay como la pantalla manual: cajas con el color del equipo
-    (porteros con la caja rellena), balón con círculo + triángulo y
-    trayectoria del balón de los últimos 3 s. p = [x, y, w, h, code,
-    track_id] con x,y = centro (0-100)."""
+    """Anillos a los pies, confianza YOLO y trayectoria del balón.
+    p = [x, y, w, h, code, track_id, confianza?]. La confianza
+    mide detección, no continuidad de identidad ni calibración."""
     muestra = _muestra_cercana(muestras, tiempos, t_frame)
     if muestra is None:
         return
@@ -890,26 +889,41 @@ def _dibujar_overlay_cv2(frame, tracking, muestras, tiempos, t_frame, ancho, alt
             alfa = 0.85 * (1 - j / len(pts))
             color = (int(255 * alfa), int(139 * alfa), int(61 * alfa))
             cv2.line(frame, pts[j], pts[j + 1], color, grosor)
-    # Jugadores.
+    # Jugadores: anillos finos bajo los pies, sin ocultar el cuerpo.
     for per in muestra.get("p") or []:
         if len(per) < 5:
             continue
-        x, y, w, h, code = (float(v) for v in per[:5])
+        try:
+            x, y, w, h, code = (float(v) for v in per[:5])
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) for v in (x, y, w, h, code)):
+            continue
         col = _hex_a_bgr(mapa_color.get(int(code), "#888888"))
-        x1 = int((x - w / 2) / 100 * ancho)
-        y1 = int((y - h / 2) / 100 * alto)
-        x2 = int((x + w / 2) / 100 * ancho)
-        y2 = int((y + h / 2) / 100 * alto)
-        cx, cy = int(x / 100 * ancho), int(y / 100 * alto)
-        if int(code) in codigos_portero:
-            relleno = frame.copy()
-            cv2.rectangle(relleno, (x1, y1), (x2, y2), col, -1)
-            cv2.addWeighted(relleno, 0.45, frame, 0.55, 0, frame)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), grosor)
-        else:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), col, grosor)
-        tri = np.array([[cx - 6, y1 - 4], [cx + 6, y1 - 4], [cx, y1 + 8]], dtype=np.int32)
-        cv2.fillPoly(frame, [tri], col)
+        cx = int(x / 100 * ancho)
+        cy = int((y + h / 2) / 100 * alto) - 2
+        radius_x = max(7, min(24, int(w / 100 * ancho * .63)))
+        radius_y = max(4, min(10, int(radius_x * .36)))
+        cy = max(radius_y, min(alto - radius_y, cy))
+        cv2.ellipse(frame, (cx, cy), (radius_x, radius_y),
+                    0, 0, 360, col,
+                    4 if int(code) in codigos_portero else 3,
+                    cv2.LINE_AA)
+        # El porcentaje viene del score YOLO del propio fotograma.
+        # Sin score (JSON heredado), no se inventa fiabilidad.
+        confidence = None
+        if len(per) > 6 and per[6] is not None:
+            try:
+                confidence = float(per[6])
+            except (ValueError, TypeError):
+                pass
+        if confidence is not None and math.isfinite(confidence):
+            label = f"{round(max(0.0, min(1.0, confidence)) * 100)}%"
+            pos = (cx - 15, max(12, cy - max(16, int(h / 100 * alto * .55))))
+            cv2.putText(frame, label, pos, cv2.FONT_HERSHEY_SIMPLEX,
+                        .42, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, label, pos, cv2.FONT_HERSHEY_SIMPLEX,
+                        .42, (255, 255, 255), 1, cv2.LINE_AA)
     # Balón: círculo + triángulo amarillo (como la pantalla manual).
     b = muestra.get("b")
     if b:
@@ -2156,8 +2170,8 @@ elif st.session_state.pagina == "video":
     # --- 7d. EXPORTAR CLIPS COMO VÍDEO ---
     st.divider()
     st.markdown("#### 🎬 Exportar clips como vídeo")
-    st.caption("Renderiza un corte corto con el overlay del tracking "
-               "(cajas, balón y trayectoria) y descárgalo como .mp4.")
+    st.caption("Renderiza un corte corto con anillos bajo los jugadores, "
+               "confianza de detección, balón y trayectoria.")
     ruta_clip = st.text_input(
         "Vídeo",
         value=st.session_state.get("video_gen_path", ""),
