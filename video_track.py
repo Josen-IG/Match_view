@@ -86,7 +86,7 @@ from player_tracking import (PlayerIDTracker, estimate_camera_transform,
                              flip_camera_transform)
 from player_metrics import compute_player_metrics
 from event_candidates import suggest_key_moments
-from radar_quality import radar_calibration_valid
+from radar_quality import radar_calibration_valid, reject_collective_pitch_jumps
 from tactical_metrics import compute_tactical_metrics
 from quality_metrics import assess_tracking_quality
 from pitch_filter import field_mask_from_frame, filter_pitch_people
@@ -4266,6 +4266,9 @@ def _analizar_impl(
     # Corregir el eje x del campo con los porteros (la homografía con
     # keypoints solo del centro comprime todo hacia el centro).
     _corregir_eje_x_campo(muestras)
+    # Invalidar saltos de toda la escena que indican homografía
+    # inestable. No afecta las detecciones en píxeles.
+    reject_collective_pitch_jumps(muestras)
     posesion_tramos = posesion_por_tramos(muestras, team_local, team_visitante)
     # Sin clasificación de candidatos/eventos (decisión del usuario,
     # 2026-11-13): el análisis solo trackea (jugadores + balón),
