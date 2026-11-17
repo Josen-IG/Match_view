@@ -1337,6 +1337,7 @@ def _track_video(
     pitch_keyframe_seconds: float = PITCH_KEYFRAME_SECONDS,
     device: str = "cpu",
     ball_sel: bool = False,
+    pitch_only: bool = True,
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
 
@@ -1526,6 +1527,42 @@ def _track_video(
                             else:
                                 balon = max(candidatos_balon,
                                             key=lambda c: c["conf"])
+                # Keyframe del campo: recalibrar la homografía con los
+                # keypoints visibles en este fotograma (0,20 s a 320 px).
+                if (modelo_campo is not None
+                        and t_video - ultimo_keyframe >= pitch_keyframe_seconds):
+                    ultimo_keyframe = t_video
+                    try:
+                        rk = modelo_campo.predict(
+                            frame, imgsz=PITCH_KEYPOINT_IMGSZ, conf=0.25,
+                            verbose=False)[0]
+                        if (rk.keypoints is not None
+                                and len(rk.keypoints.data) > 0):
+                            mapper.update(rk.keypoints.data[0].cpu().numpy(),
+                                          t_video)
+                    except Exception:
+                        pass
+                # Filtrar ANTES de crear IDs: el punto de contacto con
+                # el césped son los pies (centro inferior de la caja).
+                # No ampliar los límites: entrenador y grada quedan fuera.
+                # Si no hay homografía fiable, no se puede certificar que
+                # una detección esté en el campo: se omite en modo estricto.
+                pitch_ok_ahora = (
+                    mapper.valido and mapper.ultima_t is not None
+                    and t_video - mapper.ultima_t <= PITCH_H_MAX_AGE_S
+                    and mapper.calidad in ("alta", "media")
+                )
+                if pitch_only:
+                    filtradas = []
+                    for det in detecciones:
+                        x0, _y0, x1, y1 = det["caja"]
+                        posicion = (mapper.to_pitch((x0 + x1) / 2.0, float(y1))
+                                    if pitch_ok_ahora else None)
+                        if (posicion is not None
+                                and 0.0 <= posicion[0] <= PITCH_LENGTH_M
+                                and 0.0 <= posicion[1] <= PITCH_WIDTH_M):
+                            filtradas.append(det)
+                    detecciones = filtradas
                 # Usar apariencia antes de asociar: evita intercambiar IDs
                 # cuando dos jugadores están próximos o se cruzan.
                 for det in detecciones:
@@ -1562,28 +1599,14 @@ def _track_video(
                     for det in detecciones
                     for x0, y0, x1, y1 in [det["caja"]]
                 ]
-                # Keyframe del campo: recalibrar la homografía con los
-                # keypoints visibles en este fotograma (0,20 s a 320 px).
-                if (modelo_campo is not None
-                        and t_video - ultimo_keyframe >= pitch_keyframe_seconds):
-                    ultimo_keyframe = t_video
-                    try:
-                        rk = modelo_campo.predict(
-                            frame, imgsz=PITCH_KEYPOINT_IMGSZ, conf=0.25,
-                            verbose=False)[0]
-                        if (rk.keypoints is not None
-                                and len(rk.keypoints.data) > 0):
-                            mapper.update(rk.keypoints.data[0].cpu().numpy(),
-                                          t_video)
-                    except Exception:
-                        pass
                 # Marcar la fuente del balón (YOLO): el JSON la guarda
                 # en "bf" ("yolo" / "kalman" para las predicciones).
                 if balon is not None:
                     balon["fuente"] = "yolo"
                 # Mapear pies/balón a metros de campo con la H vigente.
-                pitch_ok = (mapper.valido and mapper.ultima_t is not None
-                            and t_video - mapper.ultima_t <= PITCH_H_MAX_AGE_S)
+                pitch_ok = pitch_ok_ahora if pitch_only else (
+                    mapper.valido and mapper.ultima_t is not None
+                    and t_video - mapper.ultima_t <= PITCH_H_MAX_AGE_S)
                 if pitch_ok:
                     for persona in personas:
                         pp = mapper.to_pitch(persona["px"], persona["py"])
