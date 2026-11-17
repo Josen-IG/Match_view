@@ -387,6 +387,7 @@ def _puntos_mapa_calor(tracking, sujeto, t_ini_video, t_fin_video):
     tc = tracking.get("team_code") or {}
     codigos = {"local": {tc.get("local", 0), tc.get("gk_local", 2)},
                "visitante": {tc.get("visitante", 1), tc.get("gk_visitante", 3)}}.get(sujeto)
+    track_id = int(sujeto.split(":", 1)[1]) if sujeto.startswith("jugador:") else None
     usa_campo = any(("pp" in s or "bp" in s) for s in muestras[:200])
     xs, ys = [], []
     for s in muestras:
@@ -400,7 +401,10 @@ def _puntos_mapa_calor(tracking, sujeto, t_ini_video, t_fin_video):
                     xs.append(float(bp[0])); ys.append(float(bp[1]))
             else:
                 for pt in s.get("pp") or []:
-                    if len(pt) >= 3 and pt[2] in codigos:
+                    if ((track_id is not None and len(pt) >= 4
+                         and pt[3] == track_id)
+                            or (track_id is None and codigos is not None
+                                and len(pt) >= 3 and pt[2] in codigos)):
                         xs.append(float(pt[0])); ys.append(float(pt[1]))
         else:
             if sujeto == "balon":
@@ -409,7 +413,10 @@ def _puntos_mapa_calor(tracking, sujeto, t_ini_video, t_fin_video):
                     xs.append(float(b[0])); ys.append(float(b[1]))
             else:
                 for per in s.get("p") or []:
-                    if len(per) >= 5 and per[4] in codigos:
+                    if ((track_id is not None and len(per) >= 6
+                         and per[5] == track_id)
+                            or (track_id is None and codigos is not None
+                                and len(per) >= 5 and per[4] in codigos)):
                         xs.append(float(per[0])); ys.append(float(per[1]))
     return xs, ys, usa_campo
 
@@ -449,6 +456,16 @@ def generar_figura_mapa_calor(tracking, sujeto, tramo):
     if sujeto == "balon":
         titulo = "Balón"
         color_hex = "#FFD21F"
+    elif sujeto.startswith("jugador:"):
+        track_id = int(sujeto.split(":", 1)[1])
+        titulo = f"Jugador (ID {track_id})"
+        perfil = next((p for p in
+                       (tracking.get("player_stats") or {}).get("players", [])
+                       if p.get("track_id") == track_id), {})
+        equipo = perfil.get("team", "local")
+        color_hex = colors.get(
+            "visitante" if equipo in ("visitante", "gk_visitante") else "local",
+            "#1E88E5")
     elif sujeto == "local":
         titulo = teams.get("local", "Local")
         color_hex = colors.get("local", "#1E88E5")
@@ -1641,7 +1658,86 @@ elif st.session_state.pagina == "video":
         st.warning("⚠️ No se encontró analizador_video.html junto a match.py; "
                    "la pantalla de análisis manual no se puede mostrar.")
 
-    # --- 7b. MAPAS DE CALOR ---
+    # --- 7b. ESTADÍSTICAS INDIVIDUALES (solo tracks, no dorsales) ---
+    st.divider()
+    st.markdown("#### Estadísticas individuales por jugador")
+    if tracking_elegido is not None:
+        try:
+            datos_ind = cargar_tracking_json(
+                str(tracking_elegido), tracking_elegido.stat().st_mtime)
+        except (OSError, ValueError) as error:
+            datos_ind = {}
+            st.warning(f"No se pudieron cargar las métricas: {error}")
+        perfilado = datos_ind.get("player_stats") or {}
+        jugadores_ind = perfilado.get("players") or []
+        if jugadores_ind:
+            st.caption(
+                "Los IDs identifican trayectorias, no dorsales verificados. "
+                "Distancias, velocidades, sprints y aceleraciones son estimaciones "
+                "calculadas solo con posiciones válidas de campo, no datos GPS. "
+                "El tiempo visible no equivale a minutos disputados.")
+            opciones_equipo = ["Todos", "local", "visitante", "desconocido"]
+            filtro_equipo = st.selectbox(
+                "Equipo para estadísticas", opciones_equipo, key="individual_team")
+            def equipo_individual(equipo):
+                if equipo == "gk_local":
+                    return "local"
+                if equipo == "gk_visitante":
+                    return "visitante"
+                return equipo
+            filtrados = [p for p in jugadores_ind
+                         if filtro_equipo == "Todos"
+                         or equipo_individual(p.get("team")) == filtro_equipo]
+            filas = [{
+                "ID": p.get("track_id"),
+                "Equipo": p.get("team"),
+                "Visible (s)": p.get("visible_s"),
+                "Campo válido (%)": p.get("field_coverage_pct"),
+                "Distancia estimada (m)": p.get("distance_m"),
+                "Vel. media (km/h)": p.get("avg_speed_kmh"),
+                "Vel. máxima (km/h)": p.get("max_speed_kmh"),
+                "Aceleraciones": p.get("accelerations"),
+                "Frenadas": p.get("decelerations"),
+                "Sprints": p.get("sprints"),
+                "Cerca del balón (s)": p.get("ball_proximity_s"),
+            } for p in filtrados]
+            if filas:
+                df_ind = pd.DataFrame(filas)
+                st.dataframe(df_ind, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Exportar tabla individual (CSV)",
+                    data=df_ind.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="estadisticas_individuales.csv",
+                    mime="text/csv", key="individual_export_csv")
+                id_elegido = st.selectbox(
+                    "ID para mapa de calor individual",
+                    [p["track_id"] for p in filtrados], key="individual_track")
+                perfil = next(p for p in filtrados if p["track_id"] == id_elegido)
+                st.caption(
+                    f"Posición media (m): {perfil.get('mean_position_m')} · "
+                    f"Tiempo con movimiento medible (s): "
+                    f"{perfil.get('field_measured_s')} · "
+                    f"Calidad de campo: {perfil.get('pitch_quality', {})}")
+                duracion = float(datos_ind.get("match_duration_s") or 0)
+                if duracion > 0:
+                    figura, nota = generar_figura_mapa_calor(
+                        datos_ind, f"jugador:{id_elegido}",
+                        ("Partido completo", 0.0, duracion))
+                    if figura is not None:
+                        st.pyplot(figura, use_container_width=True)
+                        st.caption(nota)
+                        plt.close(figura)
+                    else:
+                        st.info(nota)
+            else:
+                st.info("No hay trayectorias del equipo seleccionado.")
+        else:
+            st.info("Este tracking aún no incluye métricas individuales. "
+                    "Regenera el análisis con la versión nueva.")
+    else:
+        st.info("Carga un tracking para mostrar estadísticas por jugador.")
+
+    # --- 7c. MAPAS DE CALOR ---
     st.divider()
     st.markdown("#### 🔥 Mapas de calor")
     if tracking_elegido is None:
