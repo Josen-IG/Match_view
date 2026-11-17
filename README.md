@@ -33,9 +33,10 @@ antes de arrancar Streamlit.
 La pantalla de Vídeo analiza el partido con YOLO11 (`video_track.py`):
 detección y seguimiento propio de personas y balón, clasificación de
 equipos por color de camiseta (definidos en Alineaciones), homografía
-para posiciones estimadas en metros y radar con los jugadores. Los eventos
-(goles, pases, tiros, etc.) se marcan **manualmente**: el análisis de
-vídeo no genera candidatos ni cortes automáticos de eventos.
+para posiciones estimadas en metros y radar con los jugadores. El sistema
+también identifica **candidatos a tiro, córner y posible gol** usando
+trayectorias del balón proyectadas al campo, sin confundirlos con eventos
+confirmados. La detección es orientativa y requiere revisión del vídeo.
 
 - El modelo de keypoints del campo (`pitch_keypoints.pt`, 85 MB) tiene
   que estar junto a `video_track.py`. Sin él no hay mapa ni radar.
@@ -54,7 +55,7 @@ Groq se eliminó: la clasificación es solo con YOLO y las reglas de
 `video_track.py`. `video_ai.py` (flujo antiguo con Groq) y `prueba.py`
 (prototipo) se mantienen en el repo por referencia, no son la app base.
 
-## Tracking, métricas e informes (rama de desarrollo)
+## Tracking, métricas e informes
 
 El análisis de fútbol incorpora módulos reutilizables:
 
@@ -67,10 +68,35 @@ El análisis de fútbol incorpora módulos reutilizables:
 | `quality_metrics.py` | Cobertura del tracking, avisos de calidad e inconsistencias |
 | `match_reports.py` | Informes PDF, Excel y CSV exportables desde JSON |
 | `video_jobs.py` | Cola local de vídeo en segundo plano y progreso por trabajo |
+| `event_candidates.py` | Sugerencias conservadoras de tiros, córneres y posibles cruces de línea de gol |
 | `match.py` | Interfaz Streamlit: filtros, mapas, reportes, descargas |
 
 Cada archivo se mantiene una sola vez. Los módulos de análisis se pueden
 importar para pruebas sin abrir Streamlit.
+
+### Jugadas sugeridas por IA
+
+Tras analizar un partido en la pantalla de vídeo, el JSON generado
+automáticamente incorpora `suggested_events` con momentos **posibles**:
+tiros, córneres y cruces de línea de gol. No son eventos verificados;
+los goles no se contabilizan automáticamente.
+
+El modelo exige coordenadas de balón calibradas al campo (`bp`) y
+detecciones directas de YOLO (`bf=yolo`). Si faltan, **no inventa
+jugadas**. Los clips sugeridos incluyen aproximadamente ocho segundos
+antes y seis después de la detección, sujetos al tramo analizado.
+
+En el visor, la línea de tiempo muestra una pista de **Jugadas IA**
+con marcadores de colores. Se puede reproducir el momento, guardar un
+corte y clasificarlo como revisado o descartado. Los estados de revisión
+y cortes sugeridos se guardan localmente en el navegador cuando está
+disponible su almacenamiento. No es necesario subir archivos JSON:
+`match.py` lee el tracking automáticamente. Los datos antiguos con
+coordenadas válidas pueden generar sugerencias en memoria.
+
+**Limitación importante:** estas reglas geométricas aún no han sido
+validadas con partidos completos etiquetados. La perspectiva y los
+movimientos de cámara pueden generar falsos positivos y omisiones.
 
 ### Estadísticas por jugador
 
@@ -90,7 +116,7 @@ de identidad de los IDs hacen falta vídeos con anotaciones humanas.
 El tracking se guarda como `<video>_tracking.json`, conservando el campo
 `p` del formato anterior; `pp` incorpora opcionalmente un cuarto elemento,
 el ID de track. Se incluyen además `player_stats`, `tactical_analysis`
-y `quality`. Los datos antiguos se pueden seguir abriendo; para obtener las
+y `quality`, además de `suggested_events`. Los datos antiguos se pueden seguir abriendo; para obtener las
 métricas nuevas hay que regenerar el tracking.
 
 El informe genera, junto al JSON:
