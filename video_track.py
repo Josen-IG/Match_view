@@ -86,6 +86,7 @@ from player_tracking import (PlayerIDTracker, estimate_camera_transform,
                              flip_camera_transform)
 from player_metrics import compute_player_metrics
 from tactical_metrics import compute_tactical_metrics
+from quality_metrics import assess_tracking_quality
 
 # ---------------------------------------------------------------------------
 # Constantes / defaults (todos configurables por parámetro)
@@ -2913,6 +2914,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
     formacion = " / ".join(f for f in (formation_local, formation_visitante) if f)
     player_stats = compute_player_metrics(muestras)
     tactical_stats = compute_tactical_metrics(muestras)
+    quality_stats = assess_tracking_quality(muestras)
     colores = dict(informe.get("team_colors") or {})
     data = {
         "version": 1,
@@ -2936,6 +2938,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         "stats": estadisticas,
         "player_stats": player_stats,
         "tactical_analysis": tactical_stats,
+        "quality": quality_stats,
         "samples": samples,
     }
     output_path = Path(output_path)
