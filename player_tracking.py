@@ -192,3 +192,42 @@ class PlayerIDTracker:
             self.tracks[tid]["teams"][team] += 1
             output_ids.append(tid)
         return output_ids
+
+    def predict_missing(self, sample_index, max_gap_seconds=1.0):
+        """Short-horizon image-space hypotheses for temporarily hidden IDs.
+
+        These are NOT detections or estimated field positions. The
+        hypotheses are stored separately, with age and uncertainty, so
+        downstream statistics cannot accidentally count invisible players.
+        """
+        if self.last_sample is None or sample_index != self.last_sample:
+            raise ValueError("Predicciones solo para la última muestra procesada")
+        horizon = min(float(max_gap_seconds), self.max_gap/self.sample_fps)
+        result = []
+        for tid, track in self.tracks.items():
+            gap = sample_index - track["last"]
+            if gap < 1 or gap/self.sample_fps > horizon:
+                continue
+            # The velocity is estimated over observed samples. After a
+            # longer occlusion it is less trustworthy: decay to avoid
+            # projecting a player across the whole pitch.
+            damp = min(gap, 5) / gap if gap > 5 else 1.0
+            x = track["x"] + track["vx"]*gap*damp
+            y = track["y"] + track["vy"]*gap*damp
+            if not (math.isfinite(x) and math.isfinite(y)
+                    and 0 <= x <= 100 and 0 <= y <= 100):
+                continue
+            votes = [(name, count) for name,count in track["teams"].items()
+                     if name != "desconocido"]
+            known_team = max(votes, key=lambda item:item[1])[0] if votes else "desconocido"
+            age = gap/self.sample_fps
+            uncertainty = min(25.0, 1.5 + 6.0*age
+                              + 0.4*math.hypot(track["vx"],track["vy"])*gap)
+            result.append({
+                "track_id": tid,
+                "x": round(x, 2), "y": round(y, 2),
+                "team": known_team, "age_s": round(age, 3),
+                "uncertainty_u": round(uncertainty, 2),
+                "source": "predicted",
+            })
+        return sorted(result, key=lambda p:p["track_id"])
