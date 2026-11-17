@@ -987,21 +987,6 @@ def _dibujar_overlay_cv2(frame, tracking, muestras, tiempos, t_frame, ancho, alt
                     0, 0, 360, col,
                     4 if int(code) in codigos_portero else 3,
                     cv2.LINE_AA)
-        # El porcentaje viene del score YOLO del propio fotograma.
-        # Sin score (JSON heredado), no se inventa fiabilidad.
-        confidence = None
-        if len(per) > 6 and per[6] is not None:
-            try:
-                confidence = float(per[6])
-            except (ValueError, TypeError):
-                pass
-        if confidence is not None and math.isfinite(confidence):
-            label = f"{round(max(0.0, min(1.0, confidence)) * 100)}%"
-            pos = (cx - 15, max(12, cy - max(16, int(h / 100 * alto * .55))))
-            cv2.putText(frame, label, pos, cv2.FONT_HERSHEY_SIMPLEX,
-                        .42, (0, 0, 0), 3, cv2.LINE_AA)
-            cv2.putText(frame, label, pos, cv2.FONT_HERSHEY_SIMPLEX,
-                        .42, (255, 255, 255), 1, cv2.LINE_AA)
     # Balón: círculo + triángulo amarillo (como la pantalla manual).
     b = muestra.get("b")
     if b:
@@ -2236,8 +2221,7 @@ elif st.session_state.pagina == "video":
         # --- 7d. EXPORTAR CLIPS COMO VÍDEO ---
         st.divider()
         st.markdown("#### 🎬 Exportar clips como vídeo")
-        st.caption("Renderiza un corte corto con anillos bajo los jugadores, "
-                   "confianza de detección, balón y trayectoria.")
+        st.caption("Exporta un clip con círculos bajo los jugadores y seguimiento del balón.")
         ruta_clip = st.text_input(
             "Vídeo",
             value=st.session_state.get("video_gen_path", ""),
