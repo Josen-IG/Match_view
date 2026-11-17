@@ -84,6 +84,7 @@ from typing import Callable, Optional
 
 from player_tracking import (PlayerIDTracker, estimate_camera_transform,
                              flip_camera_transform)
+from player_metrics import compute_player_metrics
 
 # ---------------------------------------------------------------------------
 # Constantes / defaults (todos configurables por parámetro)
@@ -2902,6 +2903,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
             muestra_json["pp"] = pp
         samples.append(muestra_json)
     formacion = " / ".join(f for f in (formation_local, formation_visitante) if f)
+    player_stats = compute_player_metrics(muestras)
     colores = dict(informe.get("team_colors") or {})
     data = {
         "version": 1,
@@ -2923,6 +2925,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         "events": informe.get("results", []),
         "possession_by_period": informe.get("possession_by_period"),
         "stats": estadisticas,
+        "player_stats": player_stats,
         "samples": samples,
     }
     output_path = Path(output_path)
