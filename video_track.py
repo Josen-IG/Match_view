@@ -1762,6 +1762,7 @@ def _suavizar_balon(muestras: list[dict]) -> list[dict]:
         for m in muestras:
             m["ball_s"] = None
             m["ball_pitch_s"] = None
+            m["ball_yolo_accepted"] = False
         return muestras
     import numpy as np
     alturas_todas = [p["h"] for m in muestras for p in m.get("people", [])
@@ -1811,9 +1812,12 @@ def _suavizar_balon(muestras: list[dict]) -> list[dict]:
         for m in muestras:
             m["ball_s"] = None
             m["ball_pitch_s"] = None
+            m["ball_yolo_accepted"] = False
         return muestras
     serie: dict[int, tuple[float, float]] = {}
     serie_pitch: dict[int, tuple[float, float] | None] = {}
+    # La interpolación no constituye una detección YOLO observada.
+    indices_medidos = {item[0] for item in detecciones}
     for k, (idx, t, x, y, px, py) in enumerate(detecciones):
         serie[idx] = (x, y)
         serie_pitch[idx] = (px, py) if px is not None and py is not None else None
@@ -1840,7 +1844,9 @@ def _suavizar_balon(muestras: list[dict]) -> list[dict]:
                 BALL_EMA_ALPHA * pos[1] + (1 - BALL_EMA_ALPHA) * ema[1],
             )
             ultimo_t = t
-            m["ball_s"] = {"x": ema[0], "y": ema[1]}
+            fuente = "yolo" if i in indices_medidos else "interpolado"
+            m["ball_yolo_accepted"] = fuente == "yolo"
+            m["ball_s"] = {"x": ema[0], "y": ema[1], "fuente": fuente}
             if pos_pitch is not None:
                 ema_pitch = pos_pitch if ema_pitch is None else (
                     BALL_EMA_ALPHA * pos_pitch[0] + (1 - BALL_EMA_ALPHA) * ema_pitch[0],
@@ -1853,7 +1859,9 @@ def _suavizar_balon(muestras: list[dict]) -> list[dict]:
             if ultimo_t is not None and t - ultimo_t > BALL_GAP_MAX_SECONDS:
                 ema = None
                 ema_pitch = None
-            m["ball_s"] = {"x": ema[0], "y": ema[1]} if ema is not None else None
+            m["ball_yolo_accepted"] = False
+            m["ball_s"] = ({"x": ema[0], "y": ema[1], "fuente": "retenido"}
+                           if ema is not None else None)
             m["ball_pitch_s"] = ({"x": ema_pitch[0], "y": ema_pitch[1]}
                                  if ema_pitch is not None else None)
     return muestras
