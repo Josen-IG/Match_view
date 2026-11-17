@@ -926,6 +926,8 @@ class PitchMapper:
         self.H = None
         self.calidad = "ninguna"
         self.n_puntos = 0
+        self.inlier_ratio = 0.0
+        self.reprojection_error_m = None
         self.ultima_t: float | None = None
 
     def update(self, kpts, t: float) -> bool:
@@ -940,22 +942,32 @@ class PitchMapper:
                            dtype=np.float32)
             dst = np.array([PITCH_KEYPOINTS_M[i] for i in vis],
                            dtype=np.float32)
-            H, _mask = cv2.findHomography(src, dst, cv2.RANSAC, 3.0)
-            if H is not None:
-                proj = cv2.perspectiveTransform(
-                    src.reshape(-1, 1, 2), H).reshape(-1, 2)
-                err = float(np.linalg.norm(proj - dst, axis=1).mean())
-                if err <= 2.0:
-                    spread_x = float(dst[:, 0].max() - dst[:, 0].min())
-                    calidad = ("alta" if spread_x >= 40.0
-                               else "media" if spread_x >= 20.0 else "baja")
-                    if self.H is not None:
-                        H = 0.7 * H + 0.3 * self.H
-                        H = H / H[2, 2]
-                    self.H = H
-                    self.calidad = calidad
-                    self.n_puntos = len(vis)
-                    self.ultima_t = t
+            H, inliers = cv2.findHomography(src, dst, cv2.RANSAC, 3.0)
+            if H is not None and inliers is not None:
+                flags = inliers.reshape(-1).astype(bool)
+                valid_count = int(flags.sum())
+                ratio = valid_count / len(vis)
+                if valid_count >= 4 and ratio >= 0.65:
+                    projected = cv2.perspectiveTransform(
+                        src[flags].reshape(-1, 1, 2), H).reshape(-1, 2)
+                    error = float(np.linalg.norm(
+                        projected - dst[flags], axis=1).mean())
+                    spread_x = float(np.ptp(dst[flags, 0]))
+                    spread_y = float(np.ptp(dst[flags, 1]))
+                    # No aceptar homografías degeneradas o inestables.
+                    if (np.isfinite(H).all() and abs(float(np.linalg.det(H))) > 1e-10
+                            and math.isfinite(error) and error <= 2.0
+                            and spread_x >= 20.0 and spread_y >= 8.0):
+                        calidad = "alta" if spread_x >= 40.0 else "media"
+                        # No promediar matrices de dos vistas distintas:
+                        # una cámara VEO en movimiento necesita la nueva H
+                        # del fotograma, no una mezcla geométricamente inválida.
+                        self.H = H
+                        self.calidad = calidad
+                        self.n_puntos = valid_count
+                        self.inlier_ratio = round(ratio, 3)
+                        self.reprojection_error_m = round(error, 3)
+                        self.ultima_t = t
         if self.H is None:
             return False
         if self.ultima_t is not None and t - self.ultima_t > PITCH_H_MAX_AGE_S:
@@ -971,6 +983,8 @@ class PitchMapper:
             np.array([[[float(x_px), float(y_px)]]], dtype=np.float32),
             self.H)[0, 0]
         x_m, y_m = float(p[0]), float(p[1])
+        if not (math.isfinite(x_m) and math.isfinite(y_m)):
+            return None
         # La homografía con pocos keypoints extrapola mal lejos de ellos
         # (porteros en x=2273 m): fuera de un margen sensato el punto no
         # es fiable y se descarta en vez de envenenar estadísticas y radar.
@@ -1624,7 +1638,12 @@ def _track_video(
                                  "pitch_ok": pitch_ok,
                                  "pitch_calidad": mapper.calidad if pitch_ok
                                  else "ninguna",
-                                 "field_filter": field_filter})
+                                 "field_filter": field_filter,
+                                 "pitch_reprojection_error_m": (
+                                     mapper.reprojection_error_m
+                                     if pitch_ok else None),
+                                 "pitch_inlier_ratio": (
+                                     mapper.inlier_ratio if pitch_ok else None)})
             frame_idx += 1
     finally:
         cap.release()
