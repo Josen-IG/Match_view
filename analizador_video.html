@@ -465,7 +465,6 @@
               <span class="vista-title">Vista</span>
               <label class="chk"><input type="checkbox" id="showTrack" checked /> Mostrar tracking</label>
               <label class="chk"><input type="checkbox" id="dotsMode" checked /> Círculos bajo los jugadores</label>
-              <label class="chk"><input type="checkbox" id="showConfidence" checked /> Mostrar confianza de detección</label>
               <label class="chk"><input type="checkbox" id="showAllAnnos" /> Mostrar todas las señalizaciones</label>
             </div>
             </details>
@@ -1841,10 +1840,8 @@
       }
       // Jugadores: cada círculo se ancla al borde INFERIOR del bbox
       // (posición aproximada de los pies), no al centro del cuerpo.
-      // La confianza mostrada es la de detección YOLO, no la probabilidad
-      // de que el ID sea correcto. Los JSON antiguos carecen de ella.
+      // Los anillos se dibujan a la altura de los pies, no del torso.
       var circles = $('dotsMode').checked;
-      var showConfidence = $('showConfidence').checked;
       var people = s.p || [];
       for (var k = 0; k < people.length; k++){
         var per = people[k];
@@ -1855,8 +1852,6 @@
         var col = codeColor(code);
         var cx = x/100*W, footY = (y + h/2)/100*H;
         var isGk = (code === 2 || code === 3);
-        var detectionConfidence = per.length > 6 && per[6] !== null &&
-          per[6] !== undefined ? Number(per[6]) : NaN;
         if (circles){
           // Anillo elíptico translúcido bajo el jugador. Anchura adaptada
           // al bbox, con límites para que no cubra toda la pantalla.
@@ -1880,21 +1875,6 @@
           tctx.lineWidth = isGk ? 3.5 : 2;
           tctx.strokeStyle = col;
           tctx.strokeRect(left, top, bw, bh);
-        }
-        if (showConfidence && Number.isFinite(detectionConfidence)){
-          var percent = Math.round(Math.max(0, Math.min(1, detectionConfidence))*100);
-          var label = percent + '%';
-          var labelY = Math.max(12, footY - Math.max(16, h/100*H*0.55));
-          tctx.save();
-          tctx.font = 'bold 11px sans-serif';
-          tctx.textAlign = 'center';
-          tctx.textBaseline = 'middle';
-          tctx.lineWidth = 3;
-          tctx.strokeStyle = 'rgba(0,0,0,.85)';
-          tctx.strokeText(label, cx, labelY);
-          tctx.fillStyle = '#ffffff';
-          tctx.fillText(label, cx, labelY);
-          tctx.restore();
         }
       }
       // Balón
