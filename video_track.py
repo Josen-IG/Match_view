@@ -85,6 +85,7 @@ from typing import Callable, Optional
 from player_tracking import (PlayerIDTracker, estimate_camera_transform,
                              flip_camera_transform)
 from player_metrics import compute_player_metrics
+from tactical_metrics import compute_tactical_metrics
 
 # ---------------------------------------------------------------------------
 # Constantes / defaults (todos configurables por parámetro)
@@ -2421,8 +2422,8 @@ def _compacidad_equipos(muestras: list[dict],
                 xs = [q[0] for q in pts]
                 ys = [q[1] for q in pts]
                 areas.append(_convex_hull_area(pts))
-                anchos.append(max(xs) - min(xs))
-                profs.append(max(ys) - min(ys))
+                anchos.append(max(ys) - min(ys))  # ancho = eje Y
+                profs.append(max(xs) - min(xs))   # profundidad = eje X
                 cxs.append(sum(xs) / len(xs))
                 cys.append(sum(ys) / len(ys))
                 ns.append(len(pts))
@@ -2904,6 +2905,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         samples.append(muestra_json)
     formacion = " / ".join(f for f in (formation_local, formation_visitante) if f)
     player_stats = compute_player_metrics(muestras)
+    tactical_stats = compute_tactical_metrics(muestras)
     colores = dict(informe.get("team_colors") or {})
     data = {
         "version": 1,
@@ -2926,6 +2928,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         "possession_by_period": informe.get("possession_by_period"),
         "stats": estadisticas,
         "player_stats": player_stats,
+        "tactical_analysis": tactical_stats,
         "samples": samples,
     }
     output_path = Path(output_path)
