@@ -2958,18 +2958,21 @@ def export_tracking_json(muestras: list[dict], informe: dict,
     samples = []
     for m in muestras:
         b = m.get("ball")
-        ball = ([round(float(b["x"]), 1), round(float(b["y"]), 1)]
-                if b is not None else None)
-        # Fuente del balón ("bf", campo nuevo; los antiguos no cambian):
-        # "yolo" (detección YOLO) o "kalman" (predicción del filtro en un
-        # hueco de hasta 1 s, sin detección: la posición es estimada, no
-        # medida). Si no hay balón ni predicción, no hay "bf".
-        bf = b.get("fuente", "yolo") if b is not None else None
-        if ball is None:
-            bs = m.get("ball_s")
-            if bs is not None and bs.get("fuente") == "kalman":
-                ball = [round(float(bs["x"]), 1), round(float(bs["y"]), 1)]
-                bf = "kalman"
+        bs = m.get("ball_s") or {}
+        # La detección YOLO en bruto puede haber sido descartada por
+        # saltos o por la innovación del Kalman: NO etiquetarla como
+        # observación válida tras ese rechazo. Para antiguos JSON de
+        # pruebas sin preprocesado se conserva compatibilidad.
+        accepted = bool(m.get("ball_yolo_accepted", b is not None))
+        if b is not None and accepted:
+            ball = [round(float(b["x"]), 1), round(float(b["y"]), 1)]
+            bf = "yolo"
+        elif bs and bs.get("fuente") in ("kalman", "interpolado"):
+            ball = [round(float(bs["x"]), 1), round(float(bs["y"]), 1)]
+            bf = bs["fuente"]
+        else:
+            ball = None
+            bf = None
         people = []
         for p in m.get("people", []):
             people.append([
@@ -2989,9 +2992,11 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         # entonces las coordenadas del fotograma.
         bp = None
         bps = m.get("ball_pitch_s")
-        if bps is not None and bps.get("x") is not None and bps.get("y") is not None:
+        if (accepted and bps is not None
+                and bps.get("x") is not None and bps.get("y") is not None):
             bp = [round(float(bps["x"]), 1), round(float(bps["y"]), 1)]
-        elif b is not None and b.get("pitch_x") is not None and b.get("pitch_y") is not None:
+        elif (accepted and b is not None
+              and b.get("pitch_x") is not None and b.get("pitch_y") is not None):
             bp = [round(float(b["pitch_x"]), 1), round(float(b["pitch_y"]), 1)]
         pp = []
         for p in m.get("people", []):
@@ -3018,6 +3023,11 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         }
         if bf is not None:
             muestra_json["bf"] = bf
+        if bs and bs.get("sigma") is not None:
+            # Desviación de posición (unidades normalizadas de imagen),
+            # estimación interna del filtro, no error validado frente a GT.
+            muestra_json["bu"] = round(float(bs["sigma"]), 2)
+            muestra_json["bg"] = round(float(bs.get("missing_s", 0.0)), 2)
         # Sólo exportar coordenadas métricas como utilizables si la
         # homografía sigue siendo reciente y geométricamente fiable.
         # En el resto de casos se omiten, no se interpolan.
