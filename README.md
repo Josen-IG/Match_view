@@ -74,29 +74,38 @@ El análisis de fútbol incorpora módulos reutilizables:
 Cada archivo se mantiene una sola vez. Los módulos de análisis se pueden
 importar para pruebas sin abrir Streamlit.
 
-### Jugadas sugeridas por IA
+### Jugadas y eventos verificados
 
-Tras analizar un partido en la pantalla de vídeo, el JSON generado
-automáticamente incorpora `suggested_events` con momentos **posibles**:
-tiros, córneres y cruces de línea de gol. No son eventos verificados;
-los goles no se contabilizan automáticamente.
+Las antiguas reglas de velocidad y dirección del balón confundían despejes,
+centros o pases largos con tiros. **Se han desactivado por defecto**:
+`suggest_key_moments` devuelve una lista vacía en producción y el visor
+omite los eventos heredados con `source=ball_pitch_heuristic`. Se conserva el
+código experimental para evaluar hipótesis en vídeos anotados
+(`experimental=True`), pero sus resultados no se publican como eventos
+reales.
 
-El modelo exige coordenadas de balón calibradas al campo (`bp`) y
-detecciones directas de YOLO (`bf=yolo`). Si faltan, **no inventa
-jugadas**. Los clips sugeridos incluyen aproximadamente ocho segundos
-antes y seis después de la detección, sujetos al tramo analizado.
+La línea de tiempo, el reproductor, las anotaciones y los cortes manuales
+siguen disponibles. Los eventos aportados por una fuente independiente
+con trazabilidad no se deben mezclar con las hipótesis geométricas.
+Para reactivar **tiros, goles o córneres automáticos** se necesita un banco
+de clips etiquetados y un detector temporal que verifique contexto de
+jugador-balón, portería y reanudación, con evaluación de precisión y recall
+en vídeos reales.
 
-En el visor, la línea de tiempo muestra una pista de **Jugadas IA**
-con marcadores de colores. Se puede reproducir el momento, guardar un
-corte y clasificarlo como revisado o descartado. Los estados de revisión
-y cortes sugeridos se guardan localmente en el navegador cuando está
-disponible su almacenamiento. No es necesario subir archivos JSON:
-`match.py` lee el tracking automáticamente. Los datos antiguos con
-coordenadas válidas pueden generar sugerencias en memoria.
+### Analítica observada, sin cifras inventadas
 
-**Limitación importante:** estas reglas geométricas aún no han sido
-validadas con partidos completos etiquetados. La perspectiva y los
-movimientos de cámara pueden generar falsos positivos y omisiones.
+Debajo de la lista de jugadas se muestran métricas directamente derivadas
+de `samples` del tracking: número de muestras, porcentaje con balón visto
+directamente por YOLO, porcentaje con posición del balón calibrada,
+detecciones de personas por muestra y distribución de observaciones de
+jugadores sobre el terreno. Se puede filtrar por tramos de cinco minutos.
+**Cobertura no significa precisión**; tampoco se confunden detecciones con
+jugadores únicos. Si no existen coordenadas calibradas, el mapa permanece
+sin datos en vez de proyectar píxeles linealmente.
+
+El analizador mantiene una sola vista de vídeo y prioriza radar, posesión y
+contexto táctico en la columna derecha. Configuración, dibujos, cortes y
+exportaciones están agrupados en paneles desplegables.
 
 ### Radar táctico sincronizado y posesiones
 
