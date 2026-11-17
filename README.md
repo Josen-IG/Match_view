@@ -34,9 +34,9 @@ La pantalla de Vídeo analiza el partido con YOLO11 (`video_track.py`):
 detección y seguimiento propio de personas y balón, clasificación de
 equipos por color de camiseta (definidos en Alineaciones), homografía
 para posiciones estimadas en metros y radar con los jugadores. El sistema
-también identifica **candidatos a tiro, córner y posible gol** usando
-trayectorias del balón proyectadas al campo, sin confundirlos con eventos
-confirmados. La detección es orientativa y requiere revisión del vídeo.
+no etiqueta tiros, córneres ni goles de forma automática: las antiguas
+reglas geométricas producían falsos positivos y están desactivadas hasta
+disponer de un detector temporal validado con vídeos etiquetados.
 
 - El modelo de keypoints del campo (`pitch_keypoints.pt`, 85 MB) tiene
   que estar junto a `video_track.py`. Sin él no hay mapa ni radar.
@@ -54,6 +54,45 @@ confirmados. La detección es orientativa y requiere revisión del vídeo.
 Groq se eliminó: la clasificación es solo con YOLO y las reglas de
 `video_track.py`. `video_ai.py` (flujo antiguo con Groq) y `prueba.py`
 (prototipo) se mantienen en el repo por referencia, no son la app base.
+
+## Seguimiento temporal del balón y jugadores ocultos
+
+El backend distingue ahora tres clases de coordenadas del balón:
+
+- **YOLO (`bf=yolo`)**: detección observada que ha superado el filtro.
+- **Interpolación (`bf=interpolado`)**: posición reconstruida dentro de un
+  hueco corto con observaciones a ambos lados; no es una detección.
+- **Kalman (`bf=kalman`)**: pronóstico desde una observación anterior,
+  limitado a 1 segundo; si no reaparece, la posición queda desconocida.
+
+El filtro ya no reintroduce como detecciones reales los puntos intermedios
+interpolados. Las muestras pueden guardar `bu` (incertidumbre interna de
+posición en coordenadas de imagen 0-100) y `bg` (segundos sin observación);
+**no son errores medidos contra anotaciones humanas**. Se rechazan cambios
+incompatibles con la trayectoria y las detecciones descartadas no vuelven
+a contarse como balón observado.
+
+El tracker de jugadores guarda en `pe` hipótesis de posición a muy corto
+plazo para IDs temporalmente ocultos. **No se mezclan con `p` ni `pp`**,
+que representan detecciones reales y posiciones calibradas respectivamente;
+no afectan a distancias, velocidad ni radar. El backend marca la edad y
+la incertidumbre creciente, y deja de predecir tras el horizonte corto.
+Un portero fuera de cámara durante minutos sigue teniendo posición
+**desconocida**, aunque se conserve su último ID.
+
+`quality_metrics.py` distingue cobertura YOLO, interpolación, predicción,
+incertidumbre interna y número de hipótesis de jugadores ocultos. La
+interfaz no cambia; los campos nuevos aparecen tras **reanalizar el vídeo**.
+
+### Reentrenamiento de YOLO: datos necesarios
+
+Los pesos de `modelo_propio.pt` **no se han reentrenado** en esta fase:
+las imágenes completas del dataset no están en GitHub. En `dataset/`
+están las etiquetas, `data.yaml` y el proceso de preparación, mientras
+que `dataset/README.md` indica dónde está el ZIP de imágenes de
+entrenamiento. El ajuste posterior debe usar esos archivos y validar
+la detección de balón con partidos completos no vistos durante el entreno
+para evitar fugas entre fotogramas del mismo partido.
 
 ## Tracking, métricas e informes
 
