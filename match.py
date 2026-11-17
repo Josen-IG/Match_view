@@ -1471,891 +1471,207 @@ elif st.session_state.pagina == "final":
                 st.session_state.pagina = "alineaciones"
                 st.rerun()
 
-# --- 7. PANTALLA 4: VÍDEO (análisis manual) ---
+# --- 7. PANTALLA 4: VÍDEO (flujo guiado) ---
 elif st.session_state.pagina == "video":
     dp = st.session_state.datos_partido
     carpeta_app = Path(__file__).resolve().parent
-
-    st.markdown("### Análisis de vídeo")
-    st.caption("Selecciona el vídeo, revisa el campo y analiza el partido.")
-
-    # --- Generar tracking al proporcionar el vídeo (automático) ---
-    # Al pegar la ruta del vídeo, la app lanza el análisis YOLO en ese
-    # mismo momento (la subida es el disparador, no hay botón de analizar):
-    # el tracking que se enseña abajo es el recién generado de ESE vídeo.
-    # Si el vídeo ya tiene su tracking (mismo stem), se carga directamente
-    # sin re-analizar. El botón de re-analizar es solo un fallback.
-    st.markdown("##### 🎥 Vídeo del partido")
-    st.caption("Los datos del seguimiento se generan y cargan automáticamente.")
-    c_gen1, c_gen2, c_gen3 = st.columns([3, 1, 1.4])
-    with c_gen1:
-        ruta_gen = st.text_input(
-            "Ruta local del vídeo",
-            value=st.session_state.get("video_gen_path", ""),
-            key="video_gen_path_input",
-            placeholder=r"C:\Videos\partido.mp4",
-        )
-        # Windows pega la ruta entre comillas cuando tiene espacios.
-        ruta_gen = ruta_gen.strip().strip('"').strip("'").strip()
-        st.session_state.video_gen_path = ruta_gen
-    with c_gen2:
-        st.session_state.video_gen_kickoff = st.text_input(
-            "Saque inicial (MM:SS)",
-            value=st.session_state.get("video_gen_kickoff", "00:00"),
-            key="video_gen_kickoff_input",
-            help="El análisis empieza en este minuto: corta el vídeo "
-                 "ahí (el calentamiento anterior no se analiza). El "
-                 "minuto de partido 00:00 es este saque. Con 00:00 se "
-                 "analiza desde el principio del vídeo.",
-        )
-    with c_gen3:
-        alcance_gen = st.selectbox(
-            "Alcance",
-            ["Primeros 10 minutos (prueba)", "Partido completo"],
-            key="video_gen_alcance",
-        )
-    with st.expander("Ajustes avanzados de procesamiento", expanded=False):
-        sample_fps_gen = st.selectbox(
-            "FPS del análisis", [10, 5], index=0,
-            key="video_gen_sample_fps",
-            help="10 FPS conserva mejor el balón; 5 FPS reduce carga de CPU.")
-        bg_video = st.checkbox(
-            "Procesar en segundo plano", value=True,
-            key="video_background",
-            help="Un trabajo a la vez. El progreso se pierde si se reinicia Streamlit.")
-    if bg_video and not hasattr(st, "fragment"):
-        st.info("Esta versión de Streamlit no admite actualización automática "
-                "del progreso. Se usará el modo clásico.")
-        bg_video = False
-
-    # Previsualizar sin lanzar YOLO: comprobar que la máscara excluye
-    # graderío y personal fuera de las líneas antes de analizar horas.
-    if ruta_gen and os.path.isfile(ruta_gen):
-        if st.button("Previsualizar límites del campo", key="video_preview_field"):
-            try:
-                from pitch_filter import render_pitch_preview
-                if not CV2_DISPONIBLE:
-                    raise RuntimeError("OpenCV no está disponible.")
-                tiempo_inicio = parse_mmss(
-                    st.session_state.video_gen_kickoff or "00:00")
-                video_pre = cv2.VideoCapture(ruta_gen)
-                try:
-                    if not video_pre.isOpened():
-                        raise RuntimeError("No se pudo abrir el vídeo.")
-                    video_pre.set(cv2.CAP_PROP_POS_MSEC, tiempo_inicio * 1000)
-                    ok_pre, frame_pre = video_pre.read()
-                finally:
-                    video_pre.release()
-                if not ok_pre:
-                    raise RuntimeError("No se pudo obtener el fotograma del saque inicial.")
-                preview, campo_detectado, mensaje_campo = render_pitch_preview(frame_pre)
-                st.image(preview, caption="Línea verde: contorno del césped detectado.",
-                         use_container_width=True)
-                if campo_detectado:
-                    st.success(mensaje_campo)
-                else:
-                    st.warning(mensaje_campo)
-                st.caption("Esta vista no ejecuta YOLO. Comprueba que el contorno "
-                           "no incluye espectadores, entrenadores ni zona técnica.")
-            except Exception as error:
-                st.error(f"No se pudo previsualizar el campo: {error}")
-    trabajo_actual = st.session_state.get("video_bg_job")
-    ocupado = False
-    if trabajo_actual:
-        from video_jobs import get_video_job
-        snapshot = get_video_job(trabajo_actual)
-        ocupado = bool(snapshot and snapshot["state"] in ("queued", "running"))
-    iniciar_analisis = st.button(
-        "Analizar vídeo con YOLO", key="video_launch_analysis",
-        disabled=not (ruta_gen and os.path.isfile(ruta_gen)) or ocupado,
-        help="Inicia el tracking con la configuración actual. Usa primero "
-             "los 10 minutos de prueba para revisar el filtrado del campo.")
-
-    # ¿Ya existe tracking para este vídeo? (mismo stem, en la carpeta de
-    # la app, junto al vídeo o en su carpeta de clips).
-    tracking_gen = None
-    tracking_antiguo = None
-    tracking_incompatible = None
-    if ruta_gen:
-        stem_gen = Path(ruta_gen).stem
-        for cand in (
-            carpeta_app / f"{stem_gen}_tracking.json",
-            Path(ruta_gen).parent / f"{stem_gen}_tracking.json",
-            Path(ruta_gen).parent / f"{stem_gen}_clips" / f"{stem_gen}_tracking.json",
-        ):
-            if not cand.is_file():
-                continue
-            try:
-                info = inspect_tracking(cand, Path(ruta_gen).name)
-            except (OSError, ValueError, TypeError):
-                continue
-            if info["state"] == "actual":
-                tracking_gen = cand
-                break
-            if info["state"] == "antiguo":
-                tracking_antiguo = cand
-            elif info["state"] == "otro_video":
-                tracking_incompatible = cand
-    if tracking_antiguo is not None and tracking_gen is None:
-        st.warning(
-            f"Existe un tracking antiguo ({tracking_antiguo.name}). "
-            "No se reutilizará automáticamente: no contiene el filtrado "
-            "de campo ni todas las métricas actuales.")
-    if tracking_incompatible is not None and tracking_gen is None:
-        st.error(
-            f"El tracking {tracking_incompatible.name} pertenece a otro vídeo. "
-            "No se cargará automáticamente.")
-    if tracking_gen is None and st.session_state.get("video_analizado_path") == ruta_gen:
-        st.session_state.pop("video_analizado_path", None)
-        if st.session_state.get("tracking_del_video"):
-            st.session_state.pop("tracking_del_video", None)
-    if iniciar_analisis:
-        # Reprocesar incluso si ya existe un JSON antiguo o un resultado
-        # en caché. No reutilizar el ID de un trabajo ya completado.
-        for key in ("video_analizado_path", "video_fallo_path",
-                    "video_bg_signature", "video_bg_job", "tracking_del_video"):
-            st.session_state.pop(key, None)
-    forzar_gen = st.session_state.pop("video_forzar", False) or iniciar_analisis
-    # Si el JSON aparece antes de finalizar informes, continuar mostrando
-    # el trabajo de fondo en lugar de dar el análisis por completado.
-    pendiente_bg = False
-    if bg_video and st.session_state.get("video_bg_job"):
-        from video_jobs import get_video_job
-        estado_bg = get_video_job(st.session_state.video_bg_job)
-        firma_bg = st.session_state.get("video_bg_signature")
-        pendiente_bg = bool(
-            firma_bg and firma_bg[0] == ruta_gen
-            and estado_bg and estado_bg["state"] in ("queued", "running"))
-    ya_cargado_gen = bool(ruta_gen) and st.session_state.get("video_analizado_path") == ruta_gen
-    fallo_gen = bool(ruta_gen) and st.session_state.get("video_fallo_path") == ruta_gen
-    if ruta_gen and not os.path.isfile(ruta_gen):
-        st.warning("⚠️ Esa ruta de vídeo no existe en este equipo. Revisa la ruta.")
-    elif ruta_gen and tracking_gen is not None and not forzar_gen and not ya_cargado_gen and not pendiente_bg:
-        # Tracking ya generado: cargarlo sin re-analizar.
-        st.session_state.video_analizado_path = ruta_gen
-        st.session_state.pop("video_fallo_path", None)
-        st.session_state["tracking_del_video"] = str(tracking_gen)
-        st.success(f"✅ Tracking ya generado para este vídeo ({tracking_gen.name}). Cargado en la pantalla manual.")
-    elif (ruta_gen and (tracking_gen is None or forzar_gen or pendiente_bg)
-          and not ya_cargado_gen and not fallo_gen
-          and (iniciar_analisis or forzar_gen or pendiente_bg)):
-        # No hay tracking: lanzar el análisis automáticamente.
-        if not VIDEO_DISPONIBLE:
-            st.error(f"⚠️ El análisis no está disponible en este equipo: {VIDEO_ERROR}. "
-                     "Genera el tracking con el notebook de Colab.")
-            st.session_state.video_fallo_path = ruta_gen
-        else:
-            try:
-                kickoff_gen = parse_mmss(st.session_state.video_gen_kickoff or "00:00")
-            except (ValueError, TypeError):
-                st.error("El saque inicial debe ser MM:SS, por ejemplo 17:06.")
-                st.session_state.video_fallo_path = ruta_gen
-                kickoff_gen = None
-            if kickoff_gen is not None:
-                if bg_video:
-                    from video_jobs import submit_video_job, get_video_job
-                    # No compartir estados entre sesiones ni crear jobs
-                    # nuevos en cada rerun de Streamlit.
-                    signature = (
-                        ruta_gen, kickoff_gen, alcance_gen, sample_fps_gen,
-                        dp["eq_local"], dp["eq_visitante"],
-                        dp["color_local"], dp["color_visitante"],
-                        dp.get("color_portero_local", "#FFEB3B"),
-                        dp.get("color_portero_visitante", "#FF9800"),
-                        dp.get("color_arbitro", "#000000"),
-                    )
-                    if st.session_state.get("video_bg_signature") != signature:
-                        parametros = {
-                            "video_path": Path(ruta_gen),
-                            "color_local": dp["color_local"],
-                            "color_visitante": dp["color_visitante"],
-                            "color_gk_local": dp.get("color_portero_local", "#FFEB3B"),
-                            "color_gk_visitante": dp.get("color_portero_visitante", "#FF9800"),
-                            "color_arbitro": dp.get("color_arbitro", "#000000"),
-                            "team_local": dp["eq_local"],
-                            "team_visitante": dp["eq_visitante"],
-                            "sample_fps": sample_fps_gen,
-                            "min_confidence": 0.65,
-                            "yolo_model": "modelo_propio.pt",
-                            "max_minutes": 10.0 if alcance_gen.startswith("Primeros") else None,
-                            "kickoff_offset": kickoff_gen,
-                            "camera_mode": "seguimiento",
-                            "formation_local": dp.get("form_local", ""),
-                            "formation_visitante": dp.get("form_visitante", ""),
-                            "pitch_model": None,
-                            "device": "cpu",
-                        }
-                        st.session_state.video_bg_job = submit_video_job(
-                            analyze_video_full, parametros)
-                        st.session_state.video_bg_signature = signature
-
-                    @st.fragment(run_every=3)
-                    def mostrar_trabajo_video():
-                        job = get_video_job(st.session_state.video_bg_job)
-                        if job is None:
-                            st.error("El trabajo ya no existe; reinicia el análisis.")
-                            st.session_state.video_fallo_path = ruta_gen
-                            st.rerun()
-                            return
-                        st.progress(job.get("progress") or 0.0)
-                        st.caption(job.get("message") or "Esperando...")
-                        if job["state"] == "queued":
-                            st.info("Vídeo en cola: ya hay un análisis en curso.")
-                        if job["state"] == "failed":
-                            st.error("Falló el análisis: " + str(job.get("error")))
-                            st.session_state.video_fallo_path = ruta_gen
-                            st.rerun()
-                        elif job["state"] == "completed":
-                            try:
-                                resultado = job.get("result") or {}
-                                tracking_resultado = resultado.get("tracking_json")
-                                if not tracking_resultado or not os.path.isfile(tracking_resultado):
-                                    raise VideoProcessingError(
-                                        "No se generó el archivo de tracking.")
-                                destino = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
-                                if Path(tracking_resultado).resolve() != destino.resolve():
-                                    shutil.copy(tracking_resultado, destino)
-                                st.session_state["tracking_del_video"] = str(destino)
-                                st.session_state.video_analizado_path = ruta_gen
-                                st.session_state.pop("video_fallo_path", None)
-                                st.success("Análisis terminado; tracking listo.")
-                            except Exception as error:
-                                st.error(f"No se pudo preparar el tracking: {error}")
-                                st.session_state.video_fallo_path = ruta_gen
-                            st.rerun()
-
-                    mostrar_trabajo_video()
-                else:
-                    barra_gen = st.progress(0.0)
-                    estado_gen = st.empty()
-                    def _progreso_gen(mensaje, fraccion):
-                        barra_gen.progress(min(1.0, max(0.0, float(fraccion))))
-                        estado_gen.write(mensaje)
-                    try:
-                        informe_gen = analyze_video_full(
-                            Path(ruta_gen),
-                            color_local=dp["color_local"],
-                            color_visitante=dp["color_visitante"],
-                            color_gk_local=dp.get("color_portero_local", "#FFEB3B"),
-                            color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
-                            color_arbitro=dp.get("color_arbitro", "#000000"),
-                            team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
-                            sample_fps=sample_fps_gen,
-                            min_confidence=0.65, yolo_model="modelo_propio.pt",
-                            max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
-                            kickoff_offset=kickoff_gen,
-                            camera_mode="seguimiento",
-                            formation_local=dp.get("form_local", ""),
-                            formation_visitante=dp.get("form_visitante", ""),
-                            pitch_model=None,
-                            progress=_progreso_gen,
-                            device="cpu",
-                        )
-                        # Copiar el tracking JSON a la carpeta de la app para
-                        # que la pantalla manual lo encuentre en próximas sesiones.
-                        ruta_tracking_gen = informe_gen.get("tracking_json")
-                        if ruta_tracking_gen and os.path.isfile(ruta_tracking_gen):
-                            destino_gen = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
-                            if Path(ruta_tracking_gen).resolve() != destino_gen.resolve():
-                                shutil.copy(ruta_tracking_gen, destino_gen)
-                            tracking_gen = destino_gen
-                        st.session_state.video_analizado_path = ruta_gen
-                        st.session_state.pop("video_fallo_path", None)
-                        if tracking_gen is not None:
-                            st.session_state["tracking_del_video"] = str(tracking_gen)
-                        estado_gen.write("✅ Análisis completado: tracking generado de este vídeo.")
-                        st.rerun()
-                    except VideoProcessingError as err:
-                        st.error(str(err))
-                        st.session_state.video_fallo_path = ruta_gen
-                    except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
-                        st.error(f"Error inesperado durante el análisis: {err}")
-                        st.session_state.video_fallo_path = ruta_gen
-    if (ruta_gen and tracking_gen is None and not pendiente_bg
-            and not fallo_gen and not iniciar_analisis and not forzar_gen):
-        st.info("Vídeo listo. Revisa los límites del campo y pulsa "
-                "«Analizar vídeo con YOLO» para iniciar el procesamiento.")
-
-    # Fallback: re-analizar aunque ya exista tracking o haya fallado antes.
-    if ruta_gen and (ya_cargado_gen or fallo_gen):
-        if st.button("🔄 Re-analizar vídeo", key="video_gen_reanalizar"):
-            st.session_state.pop("video_analizado_path", None)
-            st.session_state.pop("video_fallo_path", None)
-            st.session_state.video_forzar = True
-            st.session_state.pop("video_bg_signature", None)
-            st.session_state.pop("video_bg_job", None)
-            st.rerun()
-
-    # --- Análisis manual del vídeo ---
-    # El análisis manual se hace en esta pantalla (analizador_video.html,
-    # junto a match.py). El tracking (tracking_*.json, generado con el
-    # notebook de Colab o por script/VM) se lee de la carpeta y se inyecta
-    # en el HTML, sin subirlo a mano. Solo falta elegir el vídeo dentro
-    # de la pantalla (4,2 GB, no se puede incrustar).
-    st.markdown("#### Partido y seguimiento")
-    st.caption("El análisis se guarda automáticamente en tu equipo; no necesitas subir archivos JSON.")
-    # Qué tracking inyectar.
-    # Prioridad: el del vídeo proporcionado arriba (recién generado o ya
-    # existente para ese vídeo) > el elegido en la carpeta (tracking_*.json).
-    tracking_elegido = None
-    ruta_del_video = st.session_state.get("tracking_del_video", "")
-    if ruta_del_video and os.path.isfile(ruta_del_video):
-        tracking_elegido = Path(ruta_del_video)
-    if tracking_elegido is None:
-        archivos_tracking = sorted(carpeta_app.glob("tracking_*.json"))
-        if len(archivos_tracking) > 1:
-            nombres_tracking = [a.name for a in archivos_tracking]
-            if st.session_state.get("tracking_elegido") not in nombres_tracking:
-                st.session_state.tracking_elegido = nombres_tracking[0]
-            st.selectbox(
-                "Tracking del partido",
-                nombres_tracking,
-                key="tracking_elegido",
-                help="Hay varios tracking en la carpeta; elige el del partido que vas a analizar.",
-            )
-            tracking_elegido = carpeta_app / st.session_state.tracking_elegido
-        elif len(archivos_tracking) == 1:
-            tracking_elegido = archivos_tracking[0]
-    # ¿Se puede auto-cargar el vídeo en la pantalla manual? Solo si el
-    # tracking inyectado es el del vídeo proporcionado arriba: ese vídeo
-    # se sirve por HTTP (ver servir_video) y la pantalla lo carga sola,
-    # sin volver a elegirlo. Si el tracking es otro (elegido en la
-    # carpeta), el vídeo se elige a mano dentro de la pantalla.
-    url_video = ""
-    if (tracking_elegido is not None and ruta_del_video
-            and Path(ruta_del_video) == tracking_elegido
-            and ruta_gen and os.path.isfile(ruta_gen)):
-        url_video = servir_video(ruta_gen)
-    if tracking_elegido is None:
-        st.warning("⚠️ No hay ningún tracking (tracking_*.json) en la carpeta: "
-                   "la pantalla cargará solo el vídeo, sin cajas ni estadísticas. "
-                   "Proporciona el vídeo arriba para generar su tracking, o genera "
-                   "el tracking con el notebook de Colab o por script.")
-    elif url_video:
-        st.success("✅ Tracking cargado y vídeo listo: el vídeo se carga solo "
-                   "en la pantalla manual con el tracking encima.")
-    else:
-        # El tracking está cargado, pero el vídeo hay que elegirlo dentro
-        # de la pantalla manual (el navegador no abre un archivo local
-        # solo con su ruta): que quede claro el paso que falta.
-        st.info("✅ Tracking cargado. Ahora selecciona el vídeo dentro de la "
-                "pantalla manual (botón «Seleccionar vídeo…») para verlo con "
-                "el tracking encima.")
-    if tracking_elegido is not None:
-        try:
-            cabecera = read_tracking_header(tracking_elegido)
-            calidad = cabecera.get("quality") or {}
-        except (OSError, ValueError, TypeError):
-            calidad = {}
-        if calidad:
-            filtro = calidad.get("field_filter") or {}
-            with st.expander("Diagnóstico: personas dentro/fuera del campo", expanded=False):
-                q1, q2, q3, q4 = st.columns(4)
-                q1.metric("Personas detectadas", filtro.get("detected", 0))
-                q2.metric("Aceptadas", filtro.get("accepted", 0))
-                q3.metric("Descartadas", filtro.get("rejected", 0))
-                q4.metric("Sin verificar", filtro.get("unverified", 0))
-                st.caption(
-                    f"Fotogramas con máscara de césped: "
-                    f"{calidad.get('field_mask_coverage_pct', 0)} % · "
-                    f"Descartes del filtro: "
-                    f"{calidad.get('field_filter_rejection_pct', 0)} %. "
-                    "Son indicadores de cobertura, no precisión contrastada.")
-                for aviso in calidad.get("warnings", []):
-                    st.warning(aviso)
-
-
-    st.markdown("#### Explorar resultados")
-    panel_video = st.radio(
-        "Sección", ["Vídeo","Jugadores","Táctica","Informes","Biblioteca"],
-        horizontal=True, key="mv_video_panel", label_visibility="collapsed",
+    ruta_gen = st.session_state.get("video_gen_path", "")
+    tracking_actual = st.session_state.get("tracking_del_video", "")
+    listo = bool(
+        ruta_gen and os.path.isfile(ruta_gen)
+        and st.session_state.get("mv_video_ready_path") == ruta_gen
+        and tracking_actual and os.path.isfile(tracking_actual)
     )
-    if panel_video == "Vídeo":
-        mostrar_editor = st.checkbox(
-            "Abrir el analizador manual con vídeo y seguimiento",
-            value=False, key="video_show_manual_editor",
-            help="Carga el tracking completo en el navegador solo al abrirlo. "
-                 "Desactivado para mejorar el tiempo de inicio y consumo de memoria.")
-        ruta_pantalla = carpeta_app / "analizador_video.html"
-        if ruta_pantalla.is_file() and mostrar_editor:
-            html_pantalla = ruta_pantalla.read_text(encoding="utf-8")
-            datos_tracking = None
-            if tracking_elegido is not None:
+
+    # Evita renderizar información de otro partido, incluso si quedó
+    # en la sesión o en la carpeta tras un análisis anterior.
+    if listo:
+        try:
+            cabecera_actual = read_tracking_header(Path(tracking_actual))
+            nombre_tracking = cabecera_actual.get("video_filename")
+            if nombre_tracking and nombre_tracking != Path(ruta_gen).name:
+                listo = False
+                st.session_state.pop("mv_video_ready_path", None)
+        except (ValueError, OSError, TypeError):
+            listo = False
+            st.session_state.pop("mv_video_ready_path", None)
+
+    trabajo_id = st.session_state.get("mv_video_job")
+    from video_jobs import get_video_job, submit_video_job
+    trabajo = get_video_job(trabajo_id) if trabajo_id else None
+
+    if not listo and trabajo and trabajo["state"] in ("queued", "running", "completed"):
+        # El formulario desaparece durante el procesamiento; sólo hay
+        # progreso y, al terminar, el analizador de Match View.
+        @st.fragment(run_every=2)
+        def progreso_match_view():
+            estado = get_video_job(st.session_state.get("mv_video_job"))
+            if not estado:
+                st.error("El proceso ya no está disponible. Inicia otro análisis.")
+                st.session_state.pop("mv_video_job", None)
+                return
+            st.markdown("### Analizando vídeo")
+            st.progress(float(estado.get("progress") or 0.0))
+            st.caption(estado.get("message") or "Procesando vídeo…")
+            if estado["state"] == "queued":
+                st.caption("Esperando al trabajo de vídeo anterior.")
+            if estado["state"] == "failed":
+                st.error("Error durante el análisis: " + str(estado.get("error")))
+                st.session_state.pop("mv_video_job", None)
+                return
+            if estado["state"] == "completed":
                 try:
-                    datos_tracking = cargar_tracking_json(
-                        str(tracking_elegido), tracking_elegido.stat().st_mtime)
-                    # Un tracking anterior puede traer posiciones calibradas
-                    # pero no la lista de momentos IA. Calcularla en memoria,
-                    # sin pedir al usuario que suba ni edite ningún JSON.
-                    if "suggested_events" not in datos_tracking:
-                        from event_candidates import suggest_key_moments
-                        datos_tracking = dict(datos_tracking)
-                        datos_tracking["suggested_events"] = suggest_key_moments(
-                            datos_tracking.get("samples") or [],
-                            kickoff_s=float(datos_tracking.get("kickoff_s") or 0))
-                    # Inyectar antes del script principal. Se escapa "<" para
-                    # que ningún texto del JSON pueda cerrar el <script>. Si el
-                    # vídeo se sirve por HTTP (url_video), se pasa también su
-                    # URL y su nombre para que la pantalla lo cargue solo.
-                    inj = ("<script>window.TRACKING_DATA = "
-                           + json.dumps(datos_tracking, ensure_ascii=False,
-                                        separators=(",", ":")).replace("<", "\\u003c")
-                           + "; window.TRACKING_FILE_NAME = "
-                           + json.dumps(tracking_elegido.name, ensure_ascii=False)
-                           + ";")
-                    if url_video:
-                        inj += ("window.VIDEO_URL = " + json.dumps(url_video)
-                                + "; window.VIDEO_NAME = "
-                                + json.dumps(Path(ruta_gen).name, ensure_ascii=False)
-                                + ";")
-                    inj += "</script>"
-                    html_pantalla = html_pantalla.replace("<!-- TRACKING_DATA -->", inj, 1)
-                except (ValueError, OSError) as err:
-                    st.warning(f"⚠️ No se pudo cargar {tracking_elegido.name}: {err}. "
-                               "La pantalla cargará sin tracking.")
-            if isinstance(datos_tracking, dict):
-                calidad_tracking = datos_tracking.get("quality") or {}
-                if calidad_tracking:
-                    with st.expander("Calidad y cobertura del tracking", expanded=False):
-                        q1, q2, q3, q4 = st.columns(4)
-                        q1.metric("Muestras", calidad_tracking.get("total_samples", 0))
-                        q2.metric("Balón YOLO (%)", calidad_tracking.get("ball_yolo_pct", 0))
-                        q3.metric("Campo válido (%)", calidad_tracking.get("pitch_coverage_pct", 0))
-                        q4.metric("Equipo desconocido (%)", calidad_tracking.get("unknown_team_pct", 0))
-                        st.caption(
-                            f"IDs distintos: {calidad_tracking.get('unique_track_ids', 0)} · "
-                            f"Personas por muestra: {calidad_tracking.get('avg_people_visible', 0)} · "
-                            f"Balón estimado (%): {calidad_tracking.get('ball_predicted_pct', 0)} · "
-                            f"Homografía por calidad: {calidad_tracking.get('pitch_quality_frames', {})}"
-                        )
-                        for aviso in calidad_tracking.get("warnings") or []:
-                            st.warning(aviso)
-                        st.caption(
-                            "Estos porcentajes indican disponibilidad de datos, no "
-                            "precisión del detector ni continuidad garantizada de los IDs.")
-            # Compacidad táctica (idea VEO): si el tracking trae las
-            # estadísticas, enseñar la forma de cada equipo por periodo.
-            compacidad = {}
-            if isinstance(datos_tracking, dict):
-                compacidad = datos_tracking.get("stats", {}).get("compacidad", {}) or {}
-            tramos_comp = compacidad.get("tramos") if isinstance(compacidad, dict) else None
-            if tramos_comp:
-                filas_comp = []
-                for fila in tramos_comp:
-                    loc = fila.get("local") or {}
-                    vis = fila.get("visitante") or {}
-                    filas_comp.append({
-                        "Tramo": fila.get("tramo", ""),
-                        "Área local (m²)": loc.get("area_m2"),
-                        "Área visitante (m²)": vis.get("area_m2"),
-                        "Anchura local (m)": loc.get("anchura_m"),
-                        "Anchura visitante (m)": vis.get("anchura_m"),
-                        "Profundidad local (m)": loc.get("profundidad_m"),
-                        "Profundidad visitante (m)": vis.get("profundidad_m"),
-                    })
-                with st.expander("📐 Compacidad táctica (forma del equipo por periodo)",
-                                 expanded=False):
-                    st.caption("Área del Convex Hull de las posiciones en campo: "
-                               "menos área = equipo más compacto. Anchura y "
-                               "profundidad en metros.")
-                    st.dataframe(filas_comp, use_container_width=True, hide_index=True)
-            # Geometría táctica ampliada calculada solo con jugadores visibles.
-            tactico = (datos_tracking.get("tactical_analysis") or {}
-                       if isinstance(datos_tracking, dict) else {})
-            periodos_tacticos = tactico.get("periods") or []
-            if periodos_tacticos:
-                filas_tacticas = []
-                nombres_equipo = datos_tracking.get("teams") or {}
-                for periodo in periodos_tacticos:
-                    inicio = int(periodo.get("period_start_s", 0) // 60)
-                    fin = int(periodo.get("period_end_s", 0) // 60)
-                    cobertura = periodo.get("coverage") or {}
-                    forma = periodo.get("teams") or {}
-                    cambios = periodo.get("possession_recoveries_proxy") or {}
-                    for lado in ("local", "visitante"):
-                        perfil = forma.get(lado) or {}
-                        filas_tacticas.append({
-                            "Tramo": f"{inicio}-{fin}'",
-                            "Equipo": nombres_equipo.get(lado, lado),
-                            "Muestras útiles": perfil.get("usable_frames", 0),
-                            "Muestras ambos equipos": cobertura.get("both_teams", 0),
-                            "Jugadores visibles": perfil.get("visible_players"),
-                            "Anchura visible (m)": perfil.get("width_m"),
-                            "Profundidad visible (m)": perfil.get("depth_m"),
-                            "Área visible (m²)": perfil.get("area_m2"),
-                            "Compañero más cercano (m)": perfil.get("nearest_teammate_m"),
-                            "Línea defensiva aprox. (m)": perfil.get("defensive_line_m"),
-                            "Defensores cerca del balón": perfil.get("defenders_near_ball_10m"),
-                            "Cambios de posesión (proxy)": cambios.get(lado, 0),
-                        })
-                with st.expander("Análisis táctico por tramos (geometría visible)",
-                                 expanded=False):
-                    st.caption(
-                        "La cámara puede mostrar solo una parte del campo. "
-                        "Anchura, profundidad y compactación corresponden al "
-                        "grupo de jugadores visibles, no necesariamente a los 11. "
-                        "La línea defensiva requiere ver al portero. "
-                        "Presión y recuperaciones son indicadores aproximados.")
-                    st.dataframe(filas_tacticas, use_container_width=True,
-                                 hide_index=True)
-            components.html(html_pantalla, height=1100, scrolling=True)
-        elif ruta_pantalla.is_file():
-            st.info("El analizador manual está cerrado para ahorrar memoria. "
-                    "Activa la casilla anterior para cargar el vídeo con overlays.")
-        else:
-            st.warning("No se encontró analizador_video.html junto a match.py; "
-                       "la pantalla manual no se puede mostrar.")
-
-
-    elif panel_video == "Jugadores":
-        # --- 7b. ESTADÍSTICAS INDIVIDUALES (solo tracks, no dorsales) ---
-        st.divider()
-        st.markdown("#### Estadísticas individuales por jugador")
-        if tracking_elegido is not None:
-            try:
-                datos_ind = cargar_tracking_json(
-                    str(tracking_elegido), tracking_elegido.stat().st_mtime)
-            except (OSError, ValueError) as error:
-                datos_ind = {}
-                st.warning(f"No se pudieron cargar las métricas: {error}")
-            perfilado = datos_ind.get("player_stats") or {}
-            jugadores_ind = perfilado.get("players") or []
-            if jugadores_ind:
-                st.caption(
-                    "Los IDs identifican trayectorias, no dorsales verificados. "
-                    "Distancias, velocidades, sprints y aceleraciones son estimaciones "
-                    "calculadas solo con posiciones válidas de campo, no datos GPS. "
-                    "El tiempo visible no equivale a minutos disputados.")
-                opciones_equipo = ["Todos", "local", "visitante", "desconocido"]
-                filtro_equipo = st.selectbox(
-                    "Equipo para estadísticas", opciones_equipo, key="individual_team")
-                def equipo_individual(equipo):
-                    if equipo == "gk_local":
-                        return "local"
-                    if equipo == "gk_visitante":
-                        return "visitante"
-                    return equipo
-                filtrados = [p for p in jugadores_ind
-                             if filtro_equipo == "Todos"
-                             or equipo_individual(p.get("team")) == filtro_equipo]
-                filas = [{
-                    "ID": p.get("track_id"),
-                    "Equipo": p.get("team"),
-                    "Visible (s)": p.get("visible_s"),
-                    "Campo válido (%)": p.get("field_coverage_pct"),
-                    "Fiabilidad": p.get("reliability", "sin evaluar"),
-                    "Distancia estimada (m)": p.get("distance_m"),
-                    "Vel. media (km/h)": p.get("avg_speed_kmh"),
-                    "Vel. máxima (km/h)": p.get("max_speed_kmh"),
-                    "Aceleraciones": p.get("accelerations"),
-                    "Frenadas": p.get("decelerations"),
-                    "Sprints": p.get("sprints"),
-                    "Cerca del balón (s)": p.get("ball_proximity_s"),
-                } for p in filtrados]
-                comparativa = perfilado.get("team_comparison") or {}
-                if comparativa:
-                    st.caption("Comparación orientativa: tracks con cobertura suficiente, no jugadores únicos.")
-                    st.dataframe([{
-                        "Equipo": lado,
-                        "IDs observados": info.get("track_ids"),
-                        "IDs comparables": info.get("reliable_track_ids"),
-                        "Distancia registrada (m)": info.get("measured_distance_m"),
-                        "Mayor velocidad (km/h)": info.get("max_speed_kmh"),
-                    } for lado, info in comparativa.items()],
-                    use_container_width=True, hide_index=True)
-                if filas:
-                    df_ind = pd.DataFrame(filas)
-                    st.dataframe(df_ind, use_container_width=True, hide_index=True)
-                    st.download_button(
-                        "Exportar tabla individual (CSV)",
-                        data=df_ind.to_csv(index=False).encode("utf-8-sig"),
-                        file_name="estadisticas_individuales.csv",
-                        mime="text/csv", key="individual_export_csv")
-                    id_elegido = st.selectbox(
-                        "ID para mapa de calor individual",
-                        [p["track_id"] for p in filtrados], key="individual_track")
-                    perfil = next(p for p in filtrados if p["track_id"] == id_elegido)
-                    st.caption(
-                        f"Posición media (m): {perfil.get('mean_position_m')} · "
-                        f"Tiempo con movimiento medible (s): "
-                        f"{perfil.get('field_measured_s')} · "
-                        f"Calidad de campo: {perfil.get('pitch_quality', {})} · "
-                        f"Fiabilidad: {perfil.get('reliability', 'no evaluada')}")
-                    duracion = float(datos_ind.get("match_duration_s") or 0)
-                    if duracion > 0:
-                        figura, nota = generar_figura_mapa_calor(
-                            datos_ind, f"jugador:{id_elegido}",
-                            ("Partido completo", 0.0, duracion))
-                        if figura is not None:
-                            try:
-                                _mostrar_figura_streamlit(figura)
-                                st.caption(nota)
-                            finally:
-                                plt.close(figura)
-                        else:
-                            st.info(nota)
-                else:
-                    st.info("No hay trayectorias del equipo seleccionado.")
-            else:
-                st.info("Este tracking aún no incluye métricas individuales. "
-                        "Regenera el análisis con la versión nueva.")
-        else:
-            st.info("Carga un tracking para mostrar estadísticas por jugador.")
-
-
-    elif panel_video == "Táctica":
-        # --- 7c. MAPAS DE CALOR ---
-        st.divider()
-        st.markdown("#### 🔥 Mapas de calor")
-        if tracking_elegido is None:
-            st.info("ℹ️ Carga un tracking (proporciona el vídeo arriba o pon un "
-                    "tracking_*.json en la carpeta) para ver los mapas de calor.")
-        else:
-            try:
-                datos_hm = cargar_tracking_json(
-                    str(tracking_elegido), tracking_elegido.stat().st_mtime)
-            except Exception as err:  # noqa: BLE001
-                datos_hm = None
-                st.error(f"No se pudo leer {tracking_elegido.name}: {err}")
-            if datos_hm is not None:
-                teams_hm = datos_hm.get("teams") or {}
-                nombre_local = teams_hm.get("local", "Local")
-                nombre_visitante = teams_hm.get("visitante", "Visitante")
-                dur_hm = float(datos_hm.get("match_duration_s") or 0)
-                c_hm1, c_hm2 = st.columns(2)
-                with c_hm1:
-                    sujeto_hm = st.selectbox(
-                        "Qué mostrar",
-                        ["local", "visitante", "balon"],
-                        format_func=lambda v: {
-                            "local": f"{nombre_local} (local)",
-                            "visitante": f"{nombre_visitante} (visitante)",
-                            "balon": "Balón"}[v],
-                        key="hm_sujeto",
-                    )
-                with c_hm2:
-                    tramos_hm = tramos_partido(dur_hm)
-                    tramo_hm = st.selectbox(
-                        "Tramo", tramos_hm,
-                        format_func=lambda t: t[0],
-                        key="hm_tramo",
-                    )
-                fig_hm, nota_hm = generar_figura_mapa_calor(
-                    datos_hm, sujeto_hm, tramo_hm)
-                if fig_hm is None:
-                    st.warning(f"⚠️ {nota_hm}")
-                else:
-                    try:
-                        _mostrar_figura_streamlit(fig_hm)
-                        st.caption(nota_hm)
-                    finally:
-                        plt.close(fig_hm)
-
-
-    elif panel_video == "Informes":
-        # --- 7d. INFORMES AUTOMÁTICOS ---
-        st.divider()
-        st.markdown("#### Informes postpartido (PDF, Excel y CSV)")
-        st.caption(
-            "Se generan a partir del tracking ya analizado. No se inventan "
-            "goles, pases ni tiros: solo se incluyen eventos etiquetados.")
-        if tracking_elegido is None:
-            st.info("Carga un tracking para generar el informe del partido.")
-        else:
-            if st.button("Generar o actualizar informes", key="report_generate"):
-                try:
-                    from match_reports import generate_match_reports
-                    rutas_reportes = generate_match_reports(tracking_elegido)
-                    st.success("Informes generados correctamente.")
-                except Exception as error:
-                    st.error(f"No se pudieron generar los informes: {error}")
-            base_reportes = tracking_elegido.with_suffix("")
-            descargas = [
-                ("PDF del partido", "_informe.pdf", "application/pdf", "pdf"),
-                ("Excel de estadísticas", "_estadisticas.xlsx",
-                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
-                ("CSV jugadores", "_jugadores.csv", "text/csv", "csv"),
-                ("CSV táctico", "_tactica.csv", "text/csv", "csv"),
-            ]
-            rutas_existentes = [
-                (titulo, Path(str(base_reportes) + sufijo), mime, extension)
-                for titulo, sufijo, mime, extension in descargas
-                if Path(str(base_reportes) + sufijo).is_file()
-            ]
-            if rutas_existentes:
-                columnas_descarga = st.columns(len(rutas_existentes))
-                for columna, (titulo, ruta, mime, extension) in zip(
-                        columnas_descarga, rutas_existentes):
-                    with columna:
-                        st.download_button(
-                            titulo, data=ruta.read_bytes(),
-                            file_name=ruta.name, mime=mime,
-                            key=f"report_download_{extension}_{ruta.stem}")
-            else:
-                st.info("Todavía no hay informes generados para este tracking.")
-
-
-    elif panel_video == "Biblioteca":
-        # --- 7c. BIBLIOTECA DE PARTIDOS ---
-        st.divider()
-        st.markdown("#### 📚 Biblioteca de partidos")
-        st.caption("Todos los tracking_*.json encontrados bajo la carpeta de la app.")
-        biblioteca = buscar_biblioteca(carpeta_app)
-        if not biblioteca:
-            st.info("ℹ️ No hay ningún tracking (tracking_*.json) en la carpeta ni "
-                    "en sus subcarpetas. Genera uno proporcionando el vídeo "
-                    "arriba o con el notebook de Colab.")
-        else:
-            df_bib = pd.DataFrame([{
-                "Partido": m["partido"],
-                "Fecha": m["fecha"],
-                "Duración": m["duracion"],
-                "Muestras": m["muestras"],
-                "Archivo": m["archivo"],
-            } for m in biblioteca])
-            st.dataframe(df_bib, use_container_width=True, hide_index=True)
-            opciones_bib = [f"{m['partido']} · {m['archivo']}" for m in biblioteca]
-            sel_bib = st.selectbox(
-                "Elige un partido para cargarlo en la pantalla manual",
-                opciones_bib, key="bib_select")
-            if st.button("📥 Cargar en la pantalla manual", key="bib_cargar"):
-                idx_bib = opciones_bib.index(sel_bib)
-                st.session_state["tracking_del_video"] = biblioteca[idx_bib]["ruta"]
-                st.success(f"✅ {biblioteca[idx_bib]['partido']} cargado en la "
-                           "pantalla manual.")
-                st.rerun()
-
-
-    if panel_video == "Informes":
-        # --- 7d. EXPORTAR CLIPS COMO VÍDEO ---
-        st.divider()
-        st.markdown("#### 🎬 Exportar clips como vídeo")
-        st.caption("Exporta un clip con círculos bajo los jugadores y seguimiento del balón.")
-        ruta_clip = st.text_input(
-            "Vídeo",
-            value=st.session_state.get("video_gen_path", ""),
-            key="clip_video_path",
-            placeholder=r"C:\Videos\partido.mp4",
-        ).strip().strip('"').strip("'").strip()
-        # Aviso si el tracking es de otro vídeo que el elegido.
-        if tracking_elegido is not None and ruta_clip:
-            try:
-                datos_clip = cargar_tracking_json(
-                    str(tracking_elegido), tracking_elegido.stat().st_mtime)
-                vf_clip = datos_clip.get("video_filename")
-                if vf_clip and Path(ruta_clip).name != vf_clip:
-                    st.warning(f"⚠️ El tracking es del vídeo «{vf_clip}» y el "
-                               f"vídeo elegido es «{Path(ruta_clip).name}»: "
-                               "el clip saldría con el tracking de otro partido.")
-            except Exception:  # noqa: BLE001 - el aviso es opcional
-                pass
-        origen_clip = st.radio(
-            "Corte a exportar",
-            ["JSON exportado desde la pantalla manual", "Inicio/fin manuales"],
-            horizontal=True, key="clip_origen",
-        )
-        inicio_clip = fin_clip = None
-        etiqueta_clip = "jugada"
-        if origen_clip.startswith("JSON"):
-            archivo_cortes = st.file_uploader(
-                "Sube analisis_match_view.json (exportado desde la pantalla manual)",
-                type=["json"], key="clip_json")
-            if archivo_cortes is not None:
-                try:
-                    datos_cortes = json.loads(archivo_cortes.read().decode("utf-8"))
-                    cortes = datos_cortes.get("cuts") or []
-                    if not cortes:
-                        st.warning("⚠️ Ese JSON no trae cortes (cuts).")
-                    else:
-                        opciones_cortes = [
-                            f"{c.get('label', 'corte')} "
-                            f"({_mmss(c.get('start_s', 0))}–{_mmss(c.get('end_s', 0))})"
-                            for c in cortes]
-                        sel_corte = st.selectbox(
-                            "Elige un corte", opciones_cortes, key="clip_corte")
-                        corte = cortes[opciones_cortes.index(sel_corte)]
-                        inicio_clip = float(corte.get("start_s", 0))
-                        fin_clip = float(corte.get("end_s", 0))
-                        etiqueta_clip = str(corte.get("label", "jugada"))
-                        st.caption(f"Inicio {inicio_clip:.1f} s – fin {fin_clip:.1f} s "
-                                   "(segundos de vídeo).")
-                except (ValueError, UnicodeDecodeError) as err:
-                    st.error(f"No se pudo leer ese JSON: {err}")
-        else:
-            c_clip1, c_clip2, c_clip3 = st.columns(3)
-            with c_clip1:
-                inicio_clip = st.number_input(
-                    "Inicio (s de vídeo)", min_value=0.0, value=0.0, step=1.0,
-                    key="clip_inicio")
-            with c_clip2:
-                fin_clip = st.number_input(
-                    "Fin (s de vídeo)", min_value=0.0, value=10.0, step=1.0,
-                    key="clip_fin")
-            with c_clip3:
-                etiqueta_clip = st.text_input(
-                    "Etiqueta", value="jugada", key="clip_etiqueta")
-        nombre_clip = ("clip_" + "".join(
-            ch if ch.isalnum() or ch in "-_" else "_" for ch in etiqueta_clip
-        ).strip("_")[:40] + f"_{int(inicio_clip or 0)}.mp4") if inicio_clip is not None else ""
-        if st.button("🎬 Exportar clip", type="primary", key="clip_exportar"):
-            if not ruta_clip or not os.path.isfile(ruta_clip):
-                st.error("⚠️ Indica la ruta de un vídeo que exista en este equipo.")
-            elif tracking_elegido is None:
-                st.error("⚠️ No hay ningún tracking cargado para dibujar el overlay.")
-            elif inicio_clip is None or fin_clip is None:
-                st.error("⚠️ Elige un corte o pon inicio y fin.")
-            elif fin_clip <= inicio_clip:
-                st.error("⚠️ El fin tiene que ser mayor que el inicio.")
-            elif fin_clip - inicio_clip > 300:
-                st.error("⚠️ El clip es demasiado largo (máx. 5 min).")
-            else:
-                try:
-                    datos_clip = cargar_tracking_json(
-                        str(tracking_elegido), tracking_elegido.stat().st_mtime)
-                except Exception as err:  # noqa: BLE001
-                    datos_clip = None
-                    st.error(f"No se pudo leer {tracking_elegido.name}: {err}")
-                if datos_clip is not None:
-                    if CV2_DISPONIBLE:
-                        barra_clip = st.progress(0.0)
-                        estado_clip = st.empty()
-                        try:
-                            bytes_clip = render_clip_cv2(
-                                ruta_clip, datos_clip, inicio_clip, fin_clip,
-                                progreso_cb=lambda f, m: (
-                                    barra_clip.progress(f), estado_clip.write(m)))
-                            st.session_state["clip_bytes"] = bytes_clip
-                            st.session_state["clip_nombre"] = nombre_clip
-                            estado_clip.write("✅ Clip renderizado con overlay.")
-                        except Exception as err:  # noqa: BLE001
-                            st.error(f"No se pudo renderizar el clip: {err}")
-                    elif shutil.which("ffmpeg") is not None:
-                        tmp_clip = tempfile.NamedTemporaryFile(
-                            suffix=".mp4", delete=False)
-                        tmp_clip.close()
-                        try:
-                            if cortar_clip_ffmpeg(ruta_clip, inicio_clip, fin_clip,
-                                                  tmp_clip.name):
-                                st.session_state["clip_bytes"] = Path(tmp_clip.name).read_bytes()
-                                st.session_state["clip_nombre"] = nombre_clip
-                                st.warning("⚠️ Clip exportado sin overlay: ffmpeg "
-                                           "no puede dibujar el tracking encima "
-                                           "(OpenCV no está disponible).")
-                            else:
-                                st.error("ffmpeg falló al cortar el clip.")
-                        finally:
-                            try:
-                                os.unlink(tmp_clip.name)
-                            except OSError:
-                                pass
-                    else:
-                        st.error("⚠️ Ni OpenCV ni ffmpeg están disponibles en este "
-                                 "equipo: no se puede exportar el clip.")
-        if st.session_state.get("clip_bytes"):
-            st.download_button(
-                label=f"📥 Descargar {st.session_state.get('clip_nombre', 'clip.mp4')}",
-                data=st.session_state["clip_bytes"],
-                file_name=st.session_state.get("clip_nombre", "clip.mp4"),
-                mime="video/mp4",
-                key="clip_descargar",
+                    resultado = estado.get("result") or {}
+                    generado = resultado.get("tracking_json")
+                    if not generado or not os.path.isfile(generado):
+                        raise ValueError("El análisis terminó sin generar tracking.")
+                    destino = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
+                    if Path(generado).resolve() != destino.resolve():
+                        shutil.copy2(generado, destino)
+                    st.session_state["tracking_del_video"] = str(destino)
+                    st.session_state["video_analizado_path"] = ruta_gen
+                    st.session_state["mv_video_ready_path"] = ruta_gen
+                    st.session_state.pop("mv_video_job", None)
+                    st.rerun()
+                except (OSError, ValueError, TypeError) as error:
+                    st.session_state.pop("mv_video_job", None)
+                    st.error(f"No se pudo abrir el tracking generado: {error}")
+        progreso_match_view()
+    elif not listo:
+        st.markdown("### Análisis de vídeo")
+        with st.form("mv_video_start_form", clear_on_submit=False):
+            c1, c2, c3 = st.columns([3, 1, 1.5])
+            with c1:
+                ruta_form = st.text_input(
+                    "Ruta local del vídeo",
+                    value=ruta_gen,
+                    placeholder=r"C:\Videos\partido.mp4",
+                )
+            with c2:
+                saque_form = st.text_input(
+                    "Saque inicial (MM:SS)",
+                    value=st.session_state.get("video_gen_kickoff", "00:00"),
+                    help="Se omite el vídeo anterior al saque. "
+                         "Este instante será el minuto 00:00 del partido.",
+                )
+            with c3:
+                alcance_form = st.selectbox(
+                    "Alcance",
+                    ["Primeros 10 minutos (prueba)", "Partido completo"],
+                    index=0 if st.session_state.get("video_gen_alcance",
+                                  "Primeros 10 minutos (prueba)").startswith("Primeros")
+                            else 1,
+                )
+            iniciar = st.form_submit_button(
+                "Analizar vídeo", type="primary", use_container_width=False,
             )
+        if iniciar:
+            ruta_form = ruta_form.strip().strip('"').strip("'").strip()
+            if not ruta_form or not os.path.isfile(ruta_form):
+                st.error("Introduce la ruta de un vídeo existente en este equipo.")
+            elif not VIDEO_DISPONIBLE:
+                st.error(f"No se puede iniciar YOLO: {VIDEO_ERROR}")
+            else:
+                try:
+                    saque_segundos = parse_mmss(saque_form)
+                    if saque_segundos is None or saque_segundos < 0:
+                        raise ValueError("Saque inicial inválido.")
+                except (ValueError, TypeError):
+                    st.error("Indica el saque inicial en formato MM:SS, por ejemplo 15:00.")
+                else:
+                    st.session_state["video_gen_path"] = ruta_form
+                    st.session_state["video_gen_kickoff"] = saque_form
+                    st.session_state["video_gen_alcance"] = alcance_form
+                    st.session_state.pop("mv_video_ready_path", None)
+                    st.session_state.pop("tracking_del_video", None)
+                    parametros = {
+                        "video_path": Path(ruta_form),
+                        "color_local": dp["color_local"],
+                        "color_visitante": dp["color_visitante"],
+                        "color_gk_local": dp.get("color_portero_local", "#FFEB3B"),
+                        "color_gk_visitante": dp.get("color_portero_visitante", "#FF9800"),
+                        "color_arbitro": dp.get("color_arbitro", "#000000"),
+                        "team_local": dp["eq_local"],
+                        "team_visitante": dp["eq_visitante"],
+                        "sample_fps": 10,
+                        "min_confidence": 0.65,
+                        "yolo_model": "modelo_propio.pt",
+                        "max_minutes": 10.0 if alcance_form.startswith("Primeros") else None,
+                        "kickoff_offset": saque_segundos,
+                        "camera_mode": "seguimiento",
+                        "formation_local": dp.get("form_local", ""),
+                        "formation_visitante": dp.get("form_visitante", ""),
+                        "pitch_model": None,
+                        "device": "cpu",
+                    }
+                    if hasattr(st, "fragment"):
+                        st.session_state["mv_video_job"] = submit_video_job(
+                            analyze_video_full, parametros,
+                        )
+                        st.rerun()
+                    else:
+                        barra = st.progress(0.0)
+                        mensaje = st.empty()
+                        def actualizar_progreso(texto, fraccion):
+                            barra.progress(max(0.0, min(1.0, float(fraccion))))
+                            mensaje.caption(texto)
+                        try:
+                            resultado = analyze_video_full(
+                                **parametros, progress=actualizar_progreso,
+                            )
+                            generado = resultado.get("tracking_json")
+                            if not generado or not os.path.isfile(generado):
+                                raise ValueError("No se generó el tracking.")
+                            destino = carpeta_app / f"{Path(ruta_form).stem}_tracking.json"
+                            if Path(generado).resolve() != destino.resolve():
+                                shutil.copy2(generado, destino)
+                            st.session_state["tracking_del_video"] = str(destino)
+                            st.session_state["video_analizado_path"] = ruta_form
+                            st.session_state["mv_video_ready_path"] = ruta_form
+                            st.rerun()
+                        except Exception as error:
+                            st.error(f"No se pudo analizar el vídeo: {error}")
+    else:
+        # Solamente Match View / Vídeo tras finalizar el tracking.
+        ruta_pantalla = carpeta_app / "analizador_video.html"
+        if not ruta_pantalla.is_file():
+            st.error("No se encontró analizador_video.html junto a match.py.")
+        else:
+            html_pantalla = ruta_pantalla.read_text(encoding="utf-8")
+            try:
+                pista = Path(tracking_actual)
+                datos_tracking = cargar_tracking_json(
+                    str(pista), pista.stat().st_mtime,
+                )
+                if "suggested_events" not in datos_tracking:
+                    from event_candidates import suggest_key_moments
+                    datos_tracking = dict(datos_tracking)
+                    datos_tracking["suggested_events"] = suggest_key_moments(
+                        datos_tracking.get("samples") or [],
+                        kickoff_s=float(datos_tracking.get("kickoff_s") or 0),
+                    )
+                url_video = servir_video(ruta_gen)
+                inj = ("<script>window.TRACKING_DATA = "
+                       + json.dumps(datos_tracking, ensure_ascii=False,
+                                    separators=(",", ":")).replace("<", "\\u003c")
+                       + "; window.TRACKING_FILE_NAME = "
+                       + json.dumps(pista.name, ensure_ascii=False)
+                       + ";")
+                if url_video:
+                    inj += ("window.VIDEO_URL = " + json.dumps(url_video)
+                            + "; window.VIDEO_NAME = "
+                            + json.dumps(Path(ruta_gen).name, ensure_ascii=False)
+                            + ";")
+                inj += "</script>"
+                html_pantalla = html_pantalla.replace(
+                    "<!-- TRACKING_DATA -->", inj, 1,
+                )
+                components.html(html_pantalla, height=1180, scrolling=True)
+            except (OSError, TypeError, ValueError) as error:
+                st.error(f"No se pudo cargar el análisis: {error}")
+        # Sólo este control discreto permite regresar al formulario.
+        if st.button("Analizar otro vídeo", key="mv_video_new_analysis"):
+            for clave in ("mv_video_ready_path", "mv_video_job",
+                          "tracking_del_video", "video_analizado_path"):
+                st.session_state.pop(clave, None)
+            st.rerun()
