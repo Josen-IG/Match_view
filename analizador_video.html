@@ -376,6 +376,22 @@
       .mv-tactical-item{display:flex;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #293d56;border-radius:8px;color:#c9d9ed;font-size:11px}
       .mv-tactical-item b{color:#fff;white-space:nowrap}
       .mv-internal-file-control{display:none!important}
+      /* Orden funcional: campo y posesión antes de los ajustes/manuales. */
+      aside.side{display:flex;flex-direction:column;gap:10px}
+      aside.side>section{flex:none}
+      .mv-radar-panel{order:1}
+      .mv-live-panel{order:2}
+      .mv-possession-panel{order:3}
+      .mv-tactical-panel{order:4}
+      .mv-summary-panel{order:5}
+      .mv-context-panel{order:6}
+      .mv-annotations-panel{order:7}
+      .mv-properties-panel{order:8}
+      .mv-cuts-panel{order:9}
+      .mv-export-panel{order:10}
+      .mv-side-details summary{cursor:pointer;color:#d1e1f5;font-size:12px;font-weight:650}
+      .mv-side-details[open] summary{margin-bottom:12px}
+      .sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     </style>
   </head>
   <body>
@@ -649,8 +665,10 @@
       </div>
 
       <aside class="side">
-        <section class="panel">
-          <h2>Contexto del partido</h2>
+        <section class="panel mv-context-panel">
+          <details class="mv-side-details">
+            <summary>Configuración del partido</summary>
+          <h2 class="sr-only">Contexto del partido</h2>
           <div class="ctx-grid">
             <div>
               <label for="ctxLocalName">Equipo local</label>
@@ -693,7 +711,8 @@
               <input type="text" id="ctxCamera" placeholder="VEO, móvil…" />
             </div>
           </div>
-          <p class="hint">Se rellena con lo que trae el JSON de tracking y puedes corregirlo aquí: cualquier cambio se aplica al momento (cajas, posesión, estadísticas y minuto de partido) y se guarda en la exportación.</p>
+          <p class="hint">Los datos del partido pueden corregirse sin volver a analizar el vídeo.</p>
+          </details>
         </section>
 
         <section class="panel mv-radar-panel" aria-label="Radar táctico sincronizado">
@@ -724,8 +743,8 @@
           <p class="mv-muted">Solo se interpretan posiciones visibles con homografía. No se atribuyen formaciones a jugadores ocultos.</p>
         </section>
 
-        <section class="panel">
-          <h2>Estadísticas en vivo</h2>
+        <section class="panel mv-live-panel">
+          <h2>Posesión en directo</h2>
           <div class="poss-legend">
             <span><span class="team" id="possLocalName">Local</span> · <span id="possLocalPct">–</span></span>
             <span><span id="possVisPct">–</span> · <span class="team" id="possVisName">Visitante</span></span>
@@ -742,22 +761,28 @@
           </div>
         </section>
 
-        <section class="panel">
-          <h2>Resumen del partido (tracking)</h2>
+        <section class="panel mv-summary-panel">
+          <details class="mv-side-details">
+            <summary>Resumen del tracking</summary>
+          <h2 class="sr-only">Resumen del partido</h2>
           <div id="fullSummary"><div class="empty">Sin datos de tracking cargados.</div></div>
+          </details>
         </section>
 
-        <section class="panel">
-          <h2>Mis señalizaciones</h2>
+        <section class="panel mv-annotations-panel">
+          <details class="mv-side-details">
+            <summary>Anotaciones manuales</summary>
+          <h2 class="sr-only">Mis señalizaciones</h2>
           <input type="text" id="annoLabel" placeholder="Etiqueta de la señalización (opcional)…" style="width:100%;margin-bottom:8px" />
           <ul class="list" id="annoList"><li class="empty" style="cursor:default">Todavía no has señalado ninguna acción.</li></ul>
           <p class="hint">Elige una herramienta en la barra de la izquierda y dibuja sobre el vídeo: la señalización se guarda con el minuto actual y se ve cuando el vídeo pasa por ese momento (±2 s). Con «Texto», escribe la etiqueta arriba y haz clic donde quieras colocarla. Con «Nº», cada clic coloca el siguiente número (1, 2, 3…). Haz clic en una señalización para seleccionarla y editar sus propiedades; Ctrl+Z deshace el último cambio.</p>
           <div class="btn-row">
             <button type="button" class="danger" id="clearAnnos">Limpiar todo</button>
           </div>
+          </details>
         </section>
 
-        <section class="panel" id="propsPanel">
+        <section class="panel mv-properties-panel" id="propsPanel">
           <h2>Propiedades</h2>
           <div id="propsEmpty" class="empty">Haz clic en una señalización (en el vídeo, en la lista o en la línea de tiempo) para ver y editar sus propiedades.</div>
           <div id="propsForm" hidden>
@@ -775,8 +800,10 @@
           </div>
         </section>
 
-        <section class="panel">
-          <h2>Cortes</h2>
+        <section class="panel mv-cuts-panel">
+          <details class="mv-side-details">
+            <summary>Cortes manuales</summary>
+          <h2 class="sr-only">Cortes</h2>
           <div class="cuts-grid">
             <div>
               <button type="button" id="markStart" style="width:100%">Marcar inicio</button>
@@ -793,10 +820,13 @@
             <button type="button" id="playAllCuts" title="Reproduce todos los cortes en orden">▶ Reproducir todo</button>
           </div>
           <ul class="list" id="cutList"><li class="empty" style="cursor:default">Sin cortes guardados.</li></ul>
+          </details>
         </section>
 
-        <section class="panel">
-          <h2>Exportar / importar</h2>
+        <section class="panel mv-export-panel">
+          <details class="mv-side-details">
+            <summary>Exportación y herramientas</summary>
+          <h2 class="sr-only">Exportar / importar</h2>
           <div class="btn-row" style="margin-top:0">
             <button type="button" class="primary" id="exportBtn">Exportar análisis (JSON)</button>
             <button type="button" id="captureBtn">Captura (PNG)</button>
@@ -806,7 +836,8 @@
             <button type="button" class="filebtn" id="importPick" style="margin-top:4px">Seleccionar análisis…</button>
             <input type="file" id="importFile" class="srfile" accept=".json,application/json" />
           </div>
-          <p class="hint">La exportación guarda tus señalizaciones, tus cortes y las estadísticas en un archivo JSON que puedes volver a importar aquí.</p>
+          <p class="hint">Exportación opcional. Match View guarda el tracking automáticamente.</p>
+          </details>
         </section>
       </aside>
     </div>
