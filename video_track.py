@@ -1594,6 +1594,9 @@ def _track_video(
                 # Actualizar también en muestras sin detecciones.
                 track_ids = id_tracker.update(
                     detecciones, procesados, camera_transform=camera_affine)
+                # Estimaciones en píxeles para IDs temporalmente ocultos;
+                # no se suman como detecciones ni se asignan al radar.
+                predicted_people = id_tracker.predict_missing(procesados)
                 for det, tid in zip(detecciones, track_ids):
                     x0, y0, x1, y1 = det["caja"]
                     personas.append({
@@ -1638,6 +1641,7 @@ def _track_video(
                             pp if pp is not None else (None, None))
                 muestras.append({"t": t, "t_video": t_video,
                                  "people": personas, "ball": balon,
+                                 "predicted_people": predicted_people,
                                  "pitch_ok": pitch_ok,
                                  "pitch_calidad": mapper.calidad if pitch_ok
                                  else "ninguna",
@@ -3021,6 +3025,16 @@ def export_tracking_json(muestras: list[dict], informe: dict,
             "o": TRACKING_POSESSION_CODE.get(
                 m.get("possession_suave", "desconocido"), -1),
         }
+        # Pronósticos separados de p/pp: nunca se convierten en
+        # jugadores detectados ni contaminan distancias y estadísticas.
+        pred_people = m.get("predicted_people") or []
+        if pred_people:
+            muestra_json["pe"] = [
+                [round(float(p["x"]), 2), round(float(p["y"]), 2),
+                 int(p["track_id"]), round(float(p["age_s"]), 3),
+                 round(float(p["uncertainty_u"]), 2)]
+                for p in pred_people
+            ]
         if bf is not None:
             muestra_json["bf"] = bf
         if bs and bs.get("sigma") is not None:
