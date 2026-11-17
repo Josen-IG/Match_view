@@ -32,3 +32,55 @@ def radar_calibration_valid(sample: dict) -> bool:
         and math.isfinite(error) and 0 <= error <= MAX_RADAR_REPROJECTION_ERROR_M
         and math.isfinite(ratio) and MIN_RADAR_INLIER_RATIO <= ratio <= 1
     )
+
+
+def reject_collective_pitch_jumps(samples, max_speed_m_s=13.0):
+    """Invalidate a suspicious collective coordinate jump after calibration.
+
+    Uses >=3 repeatedly identified observed players, not extrapolated IDs.
+    The gate is intentionally conservative: a single sprint or tracking
+    identity swap must never invalidate an otherwise useful frame.
+    Returns rejected frame count. Keeps original image-space YOLO detections.
+    """
+    rejected = 0
+    previous = None
+    for sample in samples:
+        if not radar_calibration_valid(sample):
+            previous = None
+            continue
+        if previous is not None:
+            dt = float(sample.get("t_video", sample.get("t", 0))) - float(
+                previous.get("t_video", previous.get("t", 0)))
+            if 0.025 <= dt <= 0.35:
+                old = {p.get("track_id"): (p["pitch_x"], p["pitch_y"])
+                       for p in previous.get("people") or []
+                       if isinstance(p.get("track_id"), int)
+                       and p.get("pitch_x") is not None
+                       and p.get("pitch_y") is not None}
+                matched = []
+                for p in sample.get("people") or []:
+                    tid = p.get("track_id")
+                    pos = old.get(tid)
+                    if (pos is not None and p.get("pitch_x") is not None
+                            and p.get("pitch_y") is not None):
+                        distance = math.hypot(
+                            float(pos[0]) - float(p["pitch_x"]),
+                            float(pos[1]) - float(p["pitch_y"]))
+                        matched.append(distance / dt)
+                if len(matched) >= 3 and (
+                        sum(speed > max_speed_m_s for speed in matched) /
+                        len(matched) >= .67):
+                    sample["pitch_ok"] = False
+                    sample["pitch_jump_rejected"] = True
+                    for p in sample.get("people") or []:
+                        p["pitch_x"] = None
+                        p["pitch_y"] = None
+                    if sample.get("ball") is not None:
+                        sample["ball"]["pitch_x"] = None
+                        sample["ball"]["pitch_y"] = None
+                    sample["ball_pitch_s"] = None
+                    rejected += 1
+                    previous = None
+                    continue
+        previous = sample
+    return rejected
