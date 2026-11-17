@@ -350,6 +350,31 @@
       .ai-item .ai-actions { display:flex; gap:6px; flex-wrap:wrap; }
       .ai-item .ai-actions button { min-height:29px; padding:4px 8px; font-size:11px; }
       .ai-empty { grid-column:1/-1; padding:8px; color:var(--mut); }
+
+      /* Radar y posesiones: observación visible, nunca posiciones inventadas. */
+      .mv-radar-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+      .mv-radar-head h2{margin:0;font-size:13px;font-weight:750}
+      .mv-radar-quality{font-size:10px;color:#a6c1e1;background:#1b2d43;padding:4px 7px;border-radius:6px}
+      #radarCanvas{display:block;width:100%;height:auto;aspect-ratio:340/228;border:1px solid #315346;border-radius:9px;background:#133c31}
+      .mv-radar-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;color:#b3c9dc;margin-top:7px}
+      .mv-radar-info,.mv-muted{font-size:11px;color:#9aacbf;line-height:1.45}
+      .mv-radar-info{margin-top:5px}
+      .mv-possession-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin:9px 0}
+      .mv-possession-kpis>div{border-radius:7px;background:#1b293b;padding:8px 4px;text-align:center}
+      .mv-possession-kpis strong{font-size:16px;color:#edf5ff;display:block}
+      .mv-possession-kpis span{font-size:10px;color:#a2b7d0}
+      .mv-possession-controls{display:flex;align-items:center;gap:9px;justify-content:space-between;margin-bottom:6px;color:#bacbe2;font-size:11px}
+      .mv-possession-controls select{min-height:30px;padding:3px 8px;max-width:160px}
+      .mv-poss-list{display:flex;flex-direction:column;gap:5px;max-height:235px;overflow-y:auto}
+      .mv-poss-item{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:7px 9px;border:1px solid #293d56;border-radius:8px;background:#162437;text-align:left;min-height:0}
+      .mv-poss-item:hover{background:#243b54}
+      .mv-poss-item.active{outline:1px solid #82b5ff}
+      .mv-poss-item .team{display:block;font-size:11px;font-weight:700;color:#e4eefa}
+      .mv-poss-item .details{display:block;font-size:10px;color:#9aadc7;margin-top:2px}
+      .mv-poss-item .duration{color:#d0e1f5;font-size:12px;white-space:nowrap}
+      .mv-tactical-insights{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+      .mv-tactical-item{display:flex;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #293d56;border-radius:8px;color:#c9d9ed;font-size:11px}
+      .mv-tactical-item b{color:#fff;white-space:nowrap}
     </style>
   </head>
   <body>
@@ -673,6 +698,34 @@
             </div>
           </div>
           <p class="hint">Se rellena con lo que trae el JSON de tracking y puedes corregirlo aquí: cualquier cambio se aplica al momento (cajas, posesión, estadísticas y minuto de partido) y se guarda en la exportación.</p>
+        </section>
+
+        <section class="panel mv-radar-panel" aria-label="Radar táctico sincronizado">
+          <div class="mv-radar-head"><h2>Radar táctico</h2><span id="radarCoverage" class="mv-radar-quality">Sin tracking</span></div>
+          <canvas id="radarCanvas" width="340" height="228" role="img" aria-label="Posiciones de jugadores y balón calibradas al campo"></canvas>
+          <div class="mv-radar-foot"><span id="radarPlayers">Sin jugadores posicionados</span><span id="radarTime">00:00</span></div>
+          <div class="mv-radar-info" id="radarInfo">Se muestran únicamente las posiciones conocidas por homografía. No se inventan jugadores fuera de cámara.</div>
+        </section>
+
+        <section class="panel mv-possession-panel">
+          <h2>Posesiones</h2>
+          <div class="mv-possession-kpis">
+            <div><strong id="mvPossCount">—</strong><span>Registradas</span></div>
+            <div><strong id="mvPossAvg">—</strong><span>Media</span></div>
+            <div><strong id="mvPossNow">—</strong><span>Actual</span></div>
+          </div>
+          <div class="mv-possession-controls">
+            <label for="mvPossTeam">Equipo</label>
+            <select id="mvPossTeam"><option value="all">Ambos</option><option value="local">Local</option><option value="visitante">Visitante</option></select>
+          </div>
+          <div id="mvPossList" class="mv-poss-list"><p class="mv-muted">Carga un tracking para ver las posesiones estimadas.</p></div>
+          <p class="mv-muted">Segmentos estimados por control del balón; requieren validación si el seguimiento tiene huecos.</p>
+        </section>
+
+        <section class="panel mv-tactical-panel">
+          <div class="mv-radar-head"><h2>Contexto táctico</h2><span id="mvTacticalWindow" class="mv-radar-quality">—</span></div>
+          <div id="mvTacticalInsights" class="mv-tactical-insights"><p class="mv-muted">Sin mediciones tácticas fiables.</p></div>
+          <p class="mv-muted">Solo se interpretan posiciones visibles con homografía. No se atribuyen formaciones a jugadores ocultos.</p>
         </section>
 
         <section class="panel">
