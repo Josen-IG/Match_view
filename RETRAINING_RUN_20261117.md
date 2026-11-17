@@ -1,6 +1,7 @@
 # Match_view: experimento del 17 de noviembre de 2026
 
-Estado inicial: entrenamiento pendiente; no hay métricas nuevas ni despliegue.
+Estado: entrenamiento YOLO11n en ejecución real sobre Tesla T4; candidato final y
+comparación pendientes. YOLO11s está programado a continuación. No hay despliegue.
 Fuente de datos/código: commit 30061bd41b2385d0cb94f6c325ffb2cc0042dd40.
 
 ## Auditoría ejecutada en Colab T4
@@ -57,3 +58,26 @@ añadió una regresión que verifica ese límite de memoria. La evaluación AP d
 baseline sí terminó: balón mAP50 0,685 y mAP50-95 0,426; jugadores mAP50 0,959
 y mAP50-95 0,746 (cifras redondeadas del log, no comparación con candidato).
 El primer commit 9161103 pasó GitHub Actions.
+
+## Baseline medido (876 imágenes disponibles)
+
+Confianza fija 0,25; matching IoU 0,5; NMS IoU 0,7. Etiquetas automáticas,
+no ground truth humano independiente. Estos valores no prueban precisión real.
+
+| Métrica | Baseline | Candidato final |
+|---|---:|---|
+| Precision balón (umbral fijo) | 0,652393 | pendiente |
+| Recall balón (umbral fijo) | 0,700000 | pendiente |
+| mAP50 balón | 0,684972 | pendiente |
+| mAP50-95 balón | 0,426232 | pendiente |
+| Precision jugadores (umbral fijo) | 0,859824 | pendiente |
+| Recall jugadores (umbral fijo) | 0,921171 | pendiente |
+| mAP50 jugadores | 0,958622 | pendiente |
+| mAP50-95 jugadores | 0,745814 | pendiente |
+| FP balón / jugadores | 138 / 1606 | pendiente |
+| Recall balón diminuto (193 cajas) | 0,668394 | pendiente |
+| Mediana CPU, 40 imágenes, 2 hilos | 146,38 ms | pendiente |
+
+Artefactos verificados: https://drive.google.com/drive/folders/1GTxL8Le6s65G6UBuqZFEVZP0mmJPHIf9
+
+GitHub Actions también pasó para el ajuste de memoria 68522ea (112 pruebas).
