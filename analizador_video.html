@@ -1148,7 +1148,7 @@
 
     var state = {
       videoName: '', videoLoaded: false, videoFromServer: false,
-      track: null, samples: [], events: [], trackMismatch: false,
+      track: null, samples: [], events: [], suggestedEvents: [], trackMismatch: false,
       annotations: [], cuts: [],
       tool: 'none', color: '#FFD21F', lineWidth: 3, dashed: false,
       zoom: { z: 1, tx: 0, ty: 0, follow: false, lastBall: null, pan: null },
@@ -1377,12 +1377,26 @@
       syncBoardFromContext();
       state.samples = data.samples.slice().sort(function(a,b){ return a.t-b.t; });
       state.events = Array.isArray(data.events) ? data.events.slice().sort(function(a,b){ return a.seconds-b.seconds; }) : [];
+      state.suggestedEvents = Array.isArray(data.suggested_events) ?
+        data.suggested_events.filter(function(ev){
+          return ev && ['shot','corner','goal'].indexOf(ev.type) >= 0 &&
+            typeof ev.t === 'number' && isFinite(ev.t) &&
+            typeof ev.start_s === 'number' && typeof ev.end_s === 'number' &&
+            ev.end_s > ev.start_s;
+        }).map(function(ev, index){
+          return Object.assign({}, ev, {
+            id: String(ev.id || (ev.type + ':' + Math.round(ev.t*10) + ':' + index)),
+            status: 'suggested'
+          });
+        }).sort(function(a,b){ return a.t-b.t; }) : [];
+      restoreSuggestedReviews();
       updateStageEmpty();
       $('trackName').textContent = label + ' · ' + state.samples.length.toLocaleString('es-ES') + ' muestras';
       var fw = $('trackFallbackWrap');
       if (fw) fw.hidden = true;
       buildMarkers();
       renderTimeline();
+      renderSuggestedMoments();
       renderEventList();
       renderFullSummary();
       buildAnalyticsSegments();
