@@ -112,7 +112,10 @@ class TrackingTests(unittest.TestCase):
         sample = {"t_video": 5.0, "people": [
             {"x": 10, "y": 20, "w": 3, "h": 6, "team": "local",
              "track_id": 7, "pitch_x": 40, "pitch_y": 31}],
-            "ball": None, "possession_suave": "local"}
+            "ball": None, "possession_suave": "local",
+            "pitch_ok": True, "pitch_calidad": "alta",
+            "pitch_age_s": 0.1, "pitch_reprojection_error_m": 0.5,
+            "pitch_inlier_ratio": 0.9}
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "tracking.json"
             export_tracking_json([sample], {}, None, path)
@@ -120,6 +123,7 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(7, exported["samples"][0]["p"][0][5])
         self.assertIsNone(exported["samples"][0]["p"][0][6])
         self.assertEqual([40.0, 31.0, 0, 7], exported["samples"][0]["pp"][0])
+        self.assertIs(exported["samples"][0]["rk"], True)
         self.assertEqual(1, exported["version"])
         self.assertEqual(7, exported["player_stats"]["players"][0]["track_id"])
         self.assertEqual(100, exported["player_stats"]["players"][0]["field_coverage_pct"])
