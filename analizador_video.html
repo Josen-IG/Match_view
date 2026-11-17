@@ -1256,7 +1256,7 @@
 
     var state = {
       videoName: '', videoLoaded: false, videoFromServer: false,
-      track: null, samples: [], events: [], suggestedEvents: [], trackMismatch: false,
+      track: null, samples: [], events: [], suggestedEvents: [], possessions: [], trackMismatch: false,
       annotations: [], cuts: [],
       tool: 'none', color: '#FFD21F', lineWidth: 3, dashed: false,
       zoom: { z: 1, tx: 0, ty: 0, follow: false, lastBall: null, pan: null },
@@ -1595,6 +1595,9 @@
       syncContextUI();
       syncBoardFromContext();
       state.samples = data.samples.slice().sort(function(a,b){ return a.t-b.t; });
+      state.possessions = derivePossessions(state.samples);
+      radarLastIdx = -2;
+      radarLastSecond = -1;
       state.events = Array.isArray(data.events) ? data.events.slice().sort(function(a,b){ return a.seconds-b.seconds; }) : [];
       state.suggestedEvents = Array.isArray(data.suggested_events) ?
         data.suggested_events.filter(function(ev){
@@ -1616,6 +1619,7 @@
       buildMarkers();
       renderTimeline();
       renderSuggestedMoments();
+      renderPossessionPanel(true);
       renderEventList();
       renderFullSummary();
       buildAnalyticsSegments();
@@ -2093,6 +2097,141 @@
       ctx.closePath(); ctx.fill();
     }
 
+    /* Campo 105 × 68 m: solo jugadores y balón con homografía válida.
+       En VEO una cámara parcial no permite reconstruir a los 22. */
+    var radarLastIdx=-2, radarLastSecond=-1;
+    function renderLiveRadar(idx){
+      var canvas=$('radarCanvas'); if (!canvas) return;
+      var ctx=canvas.getContext('2d'), W=canvas.width, H=canvas.height;
+      var x0=14,y0=13,pw=W-28,ph=H-26;
+      ctx.clearRect(0,0,W,H);
+      ctx.fillStyle='#153e32';ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#205440';ctx.fillRect(x0,y0,pw,ph);
+      ctx.strokeStyle='rgba(233,249,241,.78)';ctx.lineWidth=1.2;
+      ctx.strokeRect(x0+.5,y0+.5,pw-1,ph-1);
+      ctx.beginPath();ctx.moveTo(W/2,y0);ctx.lineTo(W/2,y0+ph);ctx.stroke();
+      ctx.beginPath();ctx.ellipse(W/2,H/2,ph*9.15/68,ph*9.15/68,0,0,Math.PI*2);ctx.stroke();
+      ctx.strokeRect(x0,y0+ph*(68-40.32)/(2*68),pw*16.5/105,ph*40.32/68);
+      ctx.strokeRect(x0+pw*(105-16.5)/105,y0+ph*(68-40.32)/(2*68),pw*16.5/105,ph*40.32/68);
+      var sample=(!state.trackMismatch && idx>=0) ? state.samples[idx] : null;
+      var snapshot=radarSnapshot(sample);
+      function xx(n){return x0+n/105*pw;}
+      function yy(n){return y0+n/68*ph;}
+      var colors=teamColors();
+      snapshot.players.forEach(function(p){
+        var col=p.code===0?colors.local:p.code===1?colors.visitante:
+          p.code===2?colors.gk_local:colors.gk_visitante;
+        ctx.beginPath();ctx.arc(xx(p.x),yy(p.y),4.7,0,Math.PI*2);
+        ctx.fillStyle=col;ctx.fill();
+        ctx.strokeStyle='#f1f7fd';ctx.lineWidth=.8;ctx.stroke();
+      });
+      if(snapshot.ball){
+        ctx.beginPath();ctx.arc(xx(snapshot.ball.x),yy(snapshot.ball.y),3.8,0,Math.PI*2);
+        ctx.fillStyle='#ffde66';ctx.fill();
+        ctx.strokeStyle='#161f26';ctx.lineWidth=1.3;ctx.stroke();
+      }
+      var readable=sample&&snapshot.players.length>0;
+      $('radarCoverage').textContent=!state.track?'Sin tracking':state.trackMismatch?'Vídeo no coincide':
+        !sample?'Sin muestra':readable?'Cobertura parcial':'Sin posiciones válidas';
+      $('radarPlayers').textContent=snapshot.players.length+' jugadores visibles · '+(snapshot.ball?'balón':'sin balón calibrado');
+      $('radarTime').textContent=sample?fmtMatch(sample.t):'—';
+      $('radarInfo').textContent=!sample?'No se puede representar este instante.':
+        'Radar parcial basado en '+snapshot.players.length+
+        ' posiciones conocidas; no se reconstruyen jugadores fuera de cámara.';
+    }
+    /* Una posesión finaliza en pérdida, disputa o hueco del detector.
+       Mostrar siempre las limitaciones y evitar atribuir una acción. */
+    function renderPossessionPanel(force){
+      var box=$('mvPossList');if(!box)return;
+      var t=video.currentTime||0;
+      var second=Math.floor(t);
+      if(!force&&second===radarLastSecond)return;
+      radarLastSecond=second;
+      var all=state.trackMismatch?[]:(state.possessions||[]);
+      var team=$('mvPossTeam').value;
+      var subset=all.filter(function(p){return team==='all'||p.team===team;});
+      var current=subset.find(function(p){return t>=p.start_s&&t<=p.end_s+.5;});
+      var total=subset.reduce(function(sum,p){return sum+p.duration_s;},0);
+      $('mvPossCount').textContent=subset.length||'0';
+      $('mvPossAvg').textContent=subset.length?((total/subset.length).toFixed(1)+' s'):'—';
+      $('mvPossNow').textContent=current?current.duration_s.toFixed(1)+' s':'—';
+      box.replaceChildren();
+      var period=Math.max(0,Math.floor((t-kickoff())/300));
+      var first=kickoff()+period*300,last=first+300;
+      var entries=subset.filter(function(p){return p.end_s>=first&&p.start_s<last;}).slice(-8);
+      if(!entries.length){
+        var empty=document.createElement('p');empty.className='mv-muted';
+        empty.textContent='Sin posesiones suficientemente continuas en este tramo (5 min).';
+        box.appendChild(empty);return;
+      }
+      entries.forEach(function(p){
+        var btn=document.createElement('button');btn.type='button';
+        btn.className='mv-poss-item'+(current===p?' active':'');
+        var left=document.createElement('span'),teamText=document.createElement('span'),
+          details=document.createElement('span'),dur=document.createElement('span');
+        teamText.className='team';teamText.textContent=p.team==='local'?teamNames().local:teamNames().visitante;
+        details.className='details';
+        details.textContent=fmtMatch(p.start_s)+' · '+(p.start_zone||'Zona no disponible')+
+          (p.end_zone&&p.end_zone!==p.start_zone?' → '+p.end_zone:'');
+        dur.className='duration';dur.textContent=p.duration_s.toFixed(1)+' s';
+        left.appendChild(teamText);left.appendChild(details);
+        btn.appendChild(left);btn.appendChild(dur);
+        btn.addEventListener('click',function(){cancelPlayAll();jumpTo(p.start_s);});
+        box.appendChild(btn);
+      });
+    }
+    function renderTacticalContext(){
+      var box=$('mvTacticalInsights');if(!box)return;
+      box.replaceChildren();
+      var period=Math.max(0,Math.floor(((video.currentTime||0)-kickoff())/300));
+      var label=period*5+'–'+(period+1)*5+"'";
+      $('mvTacticalWindow').textContent=label;
+      var tactical=state.track&&state.track.tactical_analysis;
+      var entry=tactical&&Array.isArray(tactical.periods)?tactical.periods.find(
+        function(p){return Math.floor(Number(p.period_start_s||0)/300)===period;}):null;
+      if(!entry||state.trackMismatch){
+        var empty=document.createElement('p');empty.className='mv-muted';
+        empty.textContent='No hay mediciones tácticas calibradas para este tramo.';
+        box.appendChild(empty);return;
+      }
+      var valid=0,names=teamNames();
+      [['local',names.local],['visitante',names.visitante]].forEach(function(pair){
+        var p=entry.teams&&entry.teams[pair[0]];
+        if(!p||Number(p.usable_frames||0)<3||Number(p.visible_players||0)<4)return;
+        valid++;
+        var card=document.createElement('div');card.className='mv-tactical-item';
+        var info=document.createElement('span');info.textContent=pair[1]+
+          ' · '+Math.round(p.visible_players)+' visibles · '+Math.round(p.usable_frames)+' muestras';
+        var metrics=document.createElement('b');
+        metrics.textContent=(isFinite(p.width_m)?Math.round(p.width_m)+' m ancho':'—')+
+          ' / '+(isFinite(p.depth_m)?Math.round(p.depth_m)+' m profundidad':'—');
+        card.appendChild(info);card.appendChild(metrics);box.appendChild(card);
+        if(p.defenders_near_ball_10m!=null&&isFinite(p.defenders_near_ball_10m)){
+          var pressure=document.createElement('p');pressure.className='mv-muted';
+          pressure.textContent=pair[1]+': '+p.defenders_near_ball_10m+
+            ' defensores visibles a 10 m del balón (indicador, no presión confirmada).';
+          box.appendChild(pressure);
+        }
+      });
+      if(!valid){
+        var p=document.createElement('p');p.className='mv-muted';
+        p.textContent='Cobertura insuficiente: no se infieren formaciones ni alturas de bloque.';
+        box.appendChild(p);
+      }
+    }
+    function updateTacticalDashboard(){
+      var idx=currentSampleIdx(video.currentTime||0);
+      if(idx!==radarLastIdx){
+        radarLastIdx=idx;
+        renderLiveRadar(idx);
+      }
+      var sec=Math.floor(video.currentTime||0);
+      if(sec!==radarLastSecond){
+        renderPossessionPanel(false);
+        renderTacticalContext();
+      }
+    }
+    $('mvPossTeam').addEventListener('change',function(){renderPossessionPanel(true);});
     function drawTracking(){
       var W = trackCanvas.width, H = trackCanvas.height;
       tctx.clearRect(0,0,W,H);
@@ -3572,6 +3711,7 @@
       updateSeekActive();
       updateTlPlayhead();
       updateLiveStats();
+      updateTacticalDashboard();
       requestAnimationFrame(loop);
     }
     syncContextUI();
