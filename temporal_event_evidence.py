@@ -72,7 +72,7 @@ def experimental_shot_sequences(samples, min_release_m=10.0):
                 continue
             if dt > 1.3:
                 break
-            if future and p[0]-future[-1][0] > .35:
+            if future and p[0]-future[-1][0] > .20:
                 break
             future.append(p)
         if len(future) < 3:
