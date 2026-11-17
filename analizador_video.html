@@ -1316,6 +1316,55 @@
       return out;
     }
 
+    /* La posición radar exige metadatos de homografía reciente del
+       backend. JSON viejos carecen de ellos y no pueden mostrarse como
+       calibración fiable. Un salto no humano del mismo ID es evidencia
+       adicional de una homografía inestable. */
+    function reliableRadarSnapshot(s, previous){
+      var empty={players:[],ball:null,verified:false,reason:'sin muestra'};
+      if(!s)return empty;
+      if(s.rk!==true){
+        empty.reason=s.rk===false?'homografía antigua o poco fiable':
+          'tracking anterior: reanalizar para validar coordenadas';
+        return empty;
+      }
+      var snapshot=radarSnapshot(s);
+      snapshot.verified=true;
+      snapshot.reason='ok';
+      if(previous && previous.rk===true && typeof s.t==='number'
+         && typeof previous.t==='number'){
+        var dt=s.t-previous.t;
+        if(dt>0.025 && dt<=0.5){
+          var old=radarSnapshot(previous);
+          var oldById=new Map();
+          old.players.forEach(function(p){
+            if(p.id!==null&&p.id!==undefined)oldById.set(String(p.id),p);
+          });
+          var matched=0, rejected=0;
+          snapshot.players=snapshot.players.filter(function(p){
+            var prev=oldById.get(String(p.id));
+            if(!prev)return true;
+            matched++;
+            var speed=Math.hypot(p.x-prev.x,p.y-prev.y)/dt;
+            if(speed>13){
+              rejected++;
+              return false;
+            }
+            return true;
+          });
+          // Si la mayoría de tracks simultáneos saltan, el error
+          // probablemente es de cámara, no de todos los jugadores.
+          if(matched>=3 && rejected/matched>=.5){
+            snapshot.players=[];
+            snapshot.ball=null;
+            snapshot.verified=false;
+            snapshot.reason='salto colectivo de calibración';
+          }
+        }
+      }
+      return snapshot;
+    }
+
     /* Indicadores descriptivos obtenidos del JSON. No interpolar ni
        extrapolar posiciones: cobertura NO equivale a precisión. */
     function measuredTrackingStats(samples, a, b){
@@ -2286,7 +2335,8 @@
       ctx.strokeRect(x0,y0+ph*(68-40.32)/(2*68),pw*16.5/105,ph*40.32/68);
       ctx.strokeRect(x0+pw*(105-16.5)/105,y0+ph*(68-40.32)/(2*68),pw*16.5/105,ph*40.32/68);
       var sample=(!state.trackMismatch && idx>=0) ? state.samples[idx] : null;
-      var snapshot=radarSnapshot(sample);
+      var previous=sample&&idx>0 ? state.samples[idx-1] : null;
+      var snapshot=reliableRadarSnapshot(sample,previous);
       function xx(n){return x0+n/105*pw;}
       function yy(n){return y0+n/68*ph;}
       var colors=teamColors();
@@ -2304,13 +2354,17 @@
       }
       var readable=sample&&snapshot.players.length>0;
       $('radarCoverage').textContent=!state.track?'Sin tracking':state.trackMismatch?'Vídeo no coincide':
-        !sample?'Sin muestra':readable?'Cobertura parcial':'Sin posiciones válidas';
+        !sample?'Sin muestra':!snapshot.verified?'No calibrado':
+        readable?'Cobertura parcial':'Sin jugadores calibrados';
       $('radarPlayers').textContent=snapshot.players.length+' jugadores visibles · '+(snapshot.ball?'balón':'sin balón calibrado');
       $('radarTime').textContent=sample?fmtMatch(sample.t):'—';
       var who=sample&&sample.o===0?teamNames().local:
         sample&&sample.o===1?teamNames().visitante:'En disputa / sin asignar';
       var zone=possessionThird(sample);
       $('radarInfo').textContent=!sample?'No se puede representar este instante.':
+        !snapshot.verified?
+        ('Radar sin posiciones: '+snapshot.reason+
+         '. El vídeo y los círculos de detección siguen disponibles.') :
         'Posesión estimada: '+who+' · '+(zone||'zona sin calibrar')+
         '. Radar parcial de '+snapshot.players.length+' jugadores visibles.';
     }
