@@ -3,6 +3,12 @@
 Herramienta para entrenadores: registro de eventos de partido, análisis de
 vídeo con YOLO y dashboard postpartido. Regional Preferente de Navarra.
 
+La actualización del backend (detección, ReID, seguimiento temporal,
+homografía, eventos experimentales y validación) está documentada en
+[BACKEND_IMPROVEMENTS.md](BACKEND_IMPROVEMENTS.md).
+El ajuste fino de YOLO requiere las imágenes originales del dataset;
+los pesos de producción no se sustituyen sin evaluación.
+
 ## Ejecutar la aplicación
 
 En Windows, instala las dependencias de Python y ejecuta la app base
