@@ -375,6 +375,7 @@
       .mv-tactical-insights{display:flex;flex-direction:column;gap:6px;margin-top:8px}
       .mv-tactical-item{display:flex;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid #293d56;border-radius:8px;color:#c9d9ed;font-size:11px}
       .mv-tactical-item b{color:#fff;white-space:nowrap}
+      .mv-internal-file-control{display:none!important}
     </style>
   </head>
   <body>
@@ -390,13 +391,13 @@
           <input type="file" id="videoFile" class="srfile" accept="video/*" />
           <div class="fname" id="videoName">Ningún archivo seleccionado</div>
         </div>
-        <div class="loader" id="trackLoader" hidden>
+        <div class="loader mv-internal-file-control" id="trackLoader" hidden>
           <label>2 · Tracking (JSON)</label>
           <button type="button" class="filebtn" id="trackPick">Seleccionar JSON…</button>
           <input type="file" id="trackFile" class="srfile" accept=".json,application/json" />
           <div class="fname" id="trackName">Ningún archivo seleccionado</div>
         </div>
-        <div class="loader" id="trackFallbackWrap" hidden>
+        <div class="loader mv-internal-file-control" id="trackFallbackWrap" hidden>
           <label>&nbsp;</label>
           <a href="#" id="trackFallback" class="fallback-link">Cargar tracking JSON</a>
           <div class="fname">Solo si el tracking no viene cargado</div>
@@ -1228,13 +1229,15 @@
       if (!s) return out;
       (s.pp||[]).forEach(function(p){
         if (!Array.isArray(p)||p.length<3) return;
-        var x=Number(p[0]), y=Number(p[1]), team=Number(p[2]);
+        if (typeof p[0]!=='number'||typeof p[1]!=='number') return;
+        var x=p[0], y=p[1], team=Number(p[2]);
         if (!isFinite(x)||!isFinite(y)||x<0||x>105||y<0||y>68) return;
         if ([0,1,2,3].indexOf(team)<0) return;
         out.players.push({x:x,y:y,code:team,id:p.length>3?p[3]:null});
       });
-      if (Array.isArray(s.bp)&&s.bp.length>=2){
-        var bx=Number(s.bp[0]),by=Number(s.bp[1]);
+      if (Array.isArray(s.bp)&&s.bp.length>=2 &&
+          typeof s.bp[0]==='number' && typeof s.bp[1]==='number'){
+        var bx=s.bp[0],by=s.bp[1];
         if (isFinite(bx)&&isFinite(by)&&bx>=0&&bx<=105&&by>=0&&by<=68)
           out.ball={x:bx,y:by,estimated:s.bf==='kalman'};
       }
@@ -2135,9 +2138,12 @@
         !sample?'Sin muestra':readable?'Cobertura parcial':'Sin posiciones válidas';
       $('radarPlayers').textContent=snapshot.players.length+' jugadores visibles · '+(snapshot.ball?'balón':'sin balón calibrado');
       $('radarTime').textContent=sample?fmtMatch(sample.t):'—';
+      var who=sample&&sample.o===0?teamNames().local:
+        sample&&sample.o===1?teamNames().visitante:'En disputa / sin asignar';
+      var zone=possessionThird(sample);
       $('radarInfo').textContent=!sample?'No se puede representar este instante.':
-        'Radar parcial basado en '+snapshot.players.length+
-        ' posiciones conocidas; no se reconstruyen jugadores fuera de cámara.';
+        'Posesión estimada: '+who+' · '+(zone||'zona sin calibrar')+
+        '. Radar parcial de '+snapshot.players.length+' jugadores visibles.';
     }
     /* Una posesión finaliza en pérdida, disputa o hueco del detector.
        Mostrar siempre las limitaciones y evitar atribuir una acción. */
@@ -2154,7 +2160,7 @@
       var total=subset.reduce(function(sum,p){return sum+p.duration_s;},0);
       $('mvPossCount').textContent=subset.length||'0';
       $('mvPossAvg').textContent=subset.length?((total/subset.length).toFixed(1)+' s'):'—';
-      $('mvPossNow').textContent=current?current.duration_s.toFixed(1)+' s':'—';
+      $('mvPossNow').textContent=current?Math.max(0,Math.min(current.duration_s,t-current.start_s)).toFixed(1)+' s':'—';
       box.replaceChildren();
       var period=Math.max(0,Math.floor((t-kickoff())/300));
       var first=kickoff()+period*300,last=first+300;
