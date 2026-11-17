@@ -87,6 +87,7 @@ from player_tracking import (PlayerIDTracker, estimate_camera_transform,
 from player_metrics import compute_player_metrics
 from tactical_metrics import compute_tactical_metrics
 from quality_metrics import assess_tracking_quality
+from pitch_filter import field_mask_from_frame, filter_pitch_people
 
 # ---------------------------------------------------------------------------
 # Constantes / defaults (todos configurables por parámetro)
@@ -1552,17 +1553,19 @@ def _track_video(
                     and t_video - mapper.ultima_t <= PITCH_H_MAX_AGE_S
                     and mapper.calidad in ("alta", "media")
                 )
+                # Campo visual: segmentar una vez por muestra a resolución
+                # reducida. El balón NO se filtra para conservar saques.
+                field_mask = field_mask_from_frame(frame) if pitch_only else None
                 if pitch_only:
-                    filtradas = []
-                    for det in detecciones:
-                        x0, _y0, x1, y1 = det["caja"]
-                        posicion = (mapper.to_pitch((x0 + x1) / 2.0, float(y1))
-                                    if pitch_ok_ahora else None)
-                        if (posicion is not None
-                                and 0.0 <= posicion[0] <= PITCH_LENGTH_M
-                                and 0.0 <= posicion[1] <= PITCH_WIDTH_M):
-                            filtradas.append(det)
-                    detecciones = filtradas
+                    detecciones, field_filter = filter_pitch_people(
+                        detecciones, mapper, pitch_ok_ahora, field_mask)
+                else:
+                    field_filter = {
+                        "detected": len(detecciones),
+                        "accepted": len(detecciones),
+                        "rejected": 0, "unverified": 0,
+                        "homography_active": False, "mask_active": False,
+                    }
                 # Usar apariencia antes de asociar: evita intercambiar IDs
                 # cuando dos jugadores están próximos o se cruzan.
                 for det in detecciones:
@@ -1620,7 +1623,8 @@ def _track_video(
                                  "people": personas, "ball": balon,
                                  "pitch_ok": pitch_ok,
                                  "pitch_calidad": mapper.calidad if pitch_ok
-                                 else "ninguna"})
+                                 else "ninguna",
+                                 "field_filter": field_filter})
             frame_idx += 1
     finally:
         cap.release()
