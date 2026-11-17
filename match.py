@@ -387,6 +387,7 @@ def _puntos_mapa_calor(tracking, sujeto, t_ini_video, t_fin_video):
     tc = tracking.get("team_code") or {}
     codigos = {"local": {tc.get("local", 0), tc.get("gk_local", 2)},
                "visitante": {tc.get("visitante", 1), tc.get("gk_visitante", 3)}}.get(sujeto)
+    track_id = int(sujeto.split(":", 1)[1]) if sujeto.startswith("jugador:") else None
     usa_campo = any(("pp" in s or "bp" in s) for s in muestras[:200])
     xs, ys = [], []
     for s in muestras:
@@ -400,7 +401,10 @@ def _puntos_mapa_calor(tracking, sujeto, t_ini_video, t_fin_video):
                     xs.append(float(bp[0])); ys.append(float(bp[1]))
             else:
                 for pt in s.get("pp") or []:
-                    if len(pt) >= 3 and pt[2] in codigos:
+                    if ((track_id is not None and len(pt) >= 4
+                         and pt[3] == track_id)
+                            or (track_id is None and codigos is not None
+                                and len(pt) >= 3 and pt[2] in codigos)):
                         xs.append(float(pt[0])); ys.append(float(pt[1]))
         else:
             if sujeto == "balon":
@@ -409,7 +413,10 @@ def _puntos_mapa_calor(tracking, sujeto, t_ini_video, t_fin_video):
                     xs.append(float(b[0])); ys.append(float(b[1]))
             else:
                 for per in s.get("p") or []:
-                    if len(per) >= 5 and per[4] in codigos:
+                    if ((track_id is not None and len(per) >= 6
+                         and per[5] == track_id)
+                            or (track_id is None and codigos is not None
+                                and len(per) >= 5 and per[4] in codigos)):
                         xs.append(float(per[0])); ys.append(float(per[1]))
     return xs, ys, usa_campo
 
@@ -449,6 +456,16 @@ def generar_figura_mapa_calor(tracking, sujeto, tramo):
     if sujeto == "balon":
         titulo = "Balón"
         color_hex = "#FFD21F"
+    elif sujeto.startswith("jugador:"):
+        track_id = int(sujeto.split(":", 1)[1])
+        titulo = f"Jugador (ID {track_id})"
+        perfil = next((p for p in
+                       (tracking.get("player_stats") or {}).get("players", [])
+                       if p.get("track_id") == track_id), {})
+        equipo = perfil.get("team", "local")
+        color_hex = colors.get(
+            "visitante" if equipo in ("visitante", "gk_visitante") else "local",
+            "#1E88E5")
     elif sujeto == "local":
         titulo = teams.get("local", "Local")
         color_hex = colors.get("local", "#1E88E5")
@@ -1430,6 +1447,17 @@ elif st.session_state.pagina == "video":
             ["Primeros 10 minutos (prueba)", "Partido completo"],
             key="video_gen_alcance",
         )
+    # La cola de un solo worker evita bloquear Streamlit durante YOLO.
+    # Desactivarla mantiene el análisis sincrónico anterior.
+    bg_video = st.checkbox(
+        "Procesar vídeo en segundo plano", value=True, key="video_background",
+        help="La interfaz puede seguir funcionando mientras YOLO analiza. "
+             "El trabajo se pierde si se reinicia el servidor.")
+    if bg_video and not hasattr(st, "fragment"):
+        st.info("Esta versión de Streamlit no admite actualización automática "
+                "del progreso. Se usará el modo clásico.")
+        bg_video = False
+
     # ¿Ya existe tracking para este vídeo? (mismo stem, en la carpeta de
     # la app, junto al vídeo o en su carpeta de clips).
     tracking_gen = None
@@ -1444,17 +1472,27 @@ elif st.session_state.pagina == "video":
                 tracking_gen = cand
                 break
     forzar_gen = st.session_state.pop("video_forzar", False)
+    # Si el JSON aparece antes de finalizar informes, continuar mostrando
+    # el trabajo de fondo en lugar de dar el análisis por completado.
+    pendiente_bg = False
+    if bg_video and st.session_state.get("video_bg_job"):
+        from video_jobs import get_video_job
+        estado_bg = get_video_job(st.session_state.video_bg_job)
+        firma_bg = st.session_state.get("video_bg_signature")
+        pendiente_bg = bool(
+            firma_bg and firma_bg[0] == ruta_gen
+            and estado_bg and estado_bg["state"] in ("queued", "running"))
     ya_cargado_gen = bool(ruta_gen) and st.session_state.get("video_analizado_path") == ruta_gen
     fallo_gen = bool(ruta_gen) and st.session_state.get("video_fallo_path") == ruta_gen
     if ruta_gen and not os.path.isfile(ruta_gen):
         st.warning("⚠️ Esa ruta de vídeo no existe en este equipo. Revisa la ruta.")
-    elif ruta_gen and tracking_gen is not None and not forzar_gen and not ya_cargado_gen:
+    elif ruta_gen and tracking_gen is not None and not forzar_gen and not ya_cargado_gen and not pendiente_bg:
         # Tracking ya generado: cargarlo sin re-analizar.
         st.session_state.video_analizado_path = ruta_gen
         st.session_state.pop("video_fallo_path", None)
         st.session_state["tracking_del_video"] = str(tracking_gen)
         st.success(f"✅ Tracking ya generado para este vídeo ({tracking_gen.name}). Cargado en la pantalla manual.")
-    elif ruta_gen and (tracking_gen is None or forzar_gen) and not ya_cargado_gen and not fallo_gen:
+    elif ruta_gen and (tracking_gen is None or forzar_gen or pendiente_bg) and not ya_cargado_gen and not fallo_gen:
         # No hay tracking: lanzar el análisis automáticamente.
         if not VIDEO_DISPONIBLE:
             st.error(f"⚠️ El análisis no está disponible en este equipo: {VIDEO_ERROR}. "
@@ -1468,57 +1506,133 @@ elif st.session_state.pagina == "video":
                 st.session_state.video_fallo_path = ruta_gen
                 kickoff_gen = None
             if kickoff_gen is not None:
-                barra_gen = st.progress(0.0)
-                estado_gen = st.empty()
-                def _progreso_gen(mensaje, fraccion):
-                    barra_gen.progress(min(1.0, max(0.0, float(fraccion))))
-                    estado_gen.write(mensaje)
-                try:
-                    informe_gen = analyze_video_full(
-                        Path(ruta_gen),
-                        color_local=dp["color_local"],
-                        color_visitante=dp["color_visitante"],
-                        color_gk_local=dp.get("color_portero_local", "#FFEB3B"),
-                        color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
-                        color_arbitro=dp.get("color_arbitro", "#000000"),
-                        team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
-                        sample_fps=10,  # 10 fps también en partido completo: a 5 fps el balón rápido se pierde entre muestras
-                        min_confidence=0.65, yolo_model="modelo_propio.pt",
-                        max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
-                        kickoff_offset=kickoff_gen,
-                        camera_mode="seguimiento",
-                        formation_local=dp.get("form_local", ""),
-                        formation_visitante=dp.get("form_visitante", ""),
-                        pitch_model=None,
-                        progress=_progreso_gen,
-                        device="cpu",
+                if bg_video:
+                    from video_jobs import submit_video_job, get_video_job
+                    # No compartir estados entre sesiones ni crear jobs
+                    # nuevos en cada rerun de Streamlit.
+                    signature = (
+                        ruta_gen, kickoff_gen, alcance_gen,
+                        dp["eq_local"], dp["eq_visitante"],
+                        dp["color_local"], dp["color_visitante"],
+                        dp.get("color_portero_local", "#FFEB3B"),
+                        dp.get("color_portero_visitante", "#FF9800"),
+                        dp.get("color_arbitro", "#000000"),
                     )
-                    # Copiar el tracking JSON a la carpeta de la app para
-                    # que la pantalla manual lo encuentre en próximas sesiones.
-                    ruta_tracking_gen = informe_gen.get("tracking_json")
-                    if ruta_tracking_gen and os.path.isfile(ruta_tracking_gen):
-                        destino_gen = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
-                        if Path(ruta_tracking_gen).resolve() != destino_gen.resolve():
-                            shutil.copy(ruta_tracking_gen, destino_gen)
-                        tracking_gen = destino_gen
-                    st.session_state.video_analizado_path = ruta_gen
-                    st.session_state.pop("video_fallo_path", None)
-                    if tracking_gen is not None:
-                        st.session_state["tracking_del_video"] = str(tracking_gen)
-                    estado_gen.write("✅ Análisis completado: tracking generado de este vídeo.")
-                    st.rerun()
-                except VideoProcessingError as err:
-                    st.error(str(err))
-                    st.session_state.video_fallo_path = ruta_gen
-                except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
-                    st.error(f"Error inesperado durante el análisis: {err}")
-                    st.session_state.video_fallo_path = ruta_gen
+                    if st.session_state.get("video_bg_signature") != signature:
+                        parametros = {
+                            "video_path": Path(ruta_gen),
+                            "color_local": dp["color_local"],
+                            "color_visitante": dp["color_visitante"],
+                            "color_gk_local": dp.get("color_portero_local", "#FFEB3B"),
+                            "color_gk_visitante": dp.get("color_portero_visitante", "#FF9800"),
+                            "color_arbitro": dp.get("color_arbitro", "#000000"),
+                            "team_local": dp["eq_local"],
+                            "team_visitante": dp["eq_visitante"],
+                            "sample_fps": 10,
+                            "min_confidence": 0.65,
+                            "yolo_model": "modelo_propio.pt",
+                            "max_minutes": 10.0 if alcance_gen.startswith("Primeros") else None,
+                            "kickoff_offset": kickoff_gen,
+                            "camera_mode": "seguimiento",
+                            "formation_local": dp.get("form_local", ""),
+                            "formation_visitante": dp.get("form_visitante", ""),
+                            "pitch_model": None,
+                            "device": "cpu",
+                        }
+                        st.session_state.video_bg_job = submit_video_job(
+                            analyze_video_full, parametros)
+                        st.session_state.video_bg_signature = signature
+
+                    @st.fragment(run_every=3)
+                    def mostrar_trabajo_video():
+                        job = get_video_job(st.session_state.video_bg_job)
+                        if job is None:
+                            st.error("El trabajo ya no existe; reinicia el análisis.")
+                            st.session_state.video_fallo_path = ruta_gen
+                            st.rerun()
+                            return
+                        st.progress(job.get("progress") or 0.0)
+                        st.caption(job.get("message") or "Esperando...")
+                        if job["state"] == "queued":
+                            st.info("Vídeo en cola: ya hay un análisis en curso.")
+                        if job["state"] == "failed":
+                            st.error("Falló el análisis: " + str(job.get("error")))
+                            st.session_state.video_fallo_path = ruta_gen
+                            st.rerun()
+                        elif job["state"] == "completed":
+                            try:
+                                resultado = job.get("result") or {}
+                                tracking_resultado = resultado.get("tracking_json")
+                                if not tracking_resultado or not os.path.isfile(tracking_resultado):
+                                    raise VideoProcessingError(
+                                        "No se generó el archivo de tracking.")
+                                destino = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
+                                if Path(tracking_resultado).resolve() != destino.resolve():
+                                    shutil.copy(tracking_resultado, destino)
+                                st.session_state["tracking_del_video"] = str(destino)
+                                st.session_state.video_analizado_path = ruta_gen
+                                st.session_state.pop("video_fallo_path", None)
+                                st.success("Análisis terminado; tracking listo.")
+                            except Exception as error:
+                                st.error(f"No se pudo preparar el tracking: {error}")
+                                st.session_state.video_fallo_path = ruta_gen
+                            st.rerun()
+
+                    mostrar_trabajo_video()
+                else:
+                    barra_gen = st.progress(0.0)
+                    estado_gen = st.empty()
+                    def _progreso_gen(mensaje, fraccion):
+                        barra_gen.progress(min(1.0, max(0.0, float(fraccion))))
+                        estado_gen.write(mensaje)
+                    try:
+                        informe_gen = analyze_video_full(
+                            Path(ruta_gen),
+                            color_local=dp["color_local"],
+                            color_visitante=dp["color_visitante"],
+                            color_gk_local=dp.get("color_portero_local", "#FFEB3B"),
+                            color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
+                            color_arbitro=dp.get("color_arbitro", "#000000"),
+                            team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
+                            sample_fps=10,  # 10 fps también en partido completo: a 5 fps el balón rápido se pierde entre muestras
+                            min_confidence=0.65, yolo_model="modelo_propio.pt",
+                            max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
+                            kickoff_offset=kickoff_gen,
+                            camera_mode="seguimiento",
+                            formation_local=dp.get("form_local", ""),
+                            formation_visitante=dp.get("form_visitante", ""),
+                            pitch_model=None,
+                            progress=_progreso_gen,
+                            device="cpu",
+                        )
+                        # Copiar el tracking JSON a la carpeta de la app para
+                        # que la pantalla manual lo encuentre en próximas sesiones.
+                        ruta_tracking_gen = informe_gen.get("tracking_json")
+                        if ruta_tracking_gen and os.path.isfile(ruta_tracking_gen):
+                            destino_gen = carpeta_app / f"{Path(ruta_gen).stem}_tracking.json"
+                            if Path(ruta_tracking_gen).resolve() != destino_gen.resolve():
+                                shutil.copy(ruta_tracking_gen, destino_gen)
+                            tracking_gen = destino_gen
+                        st.session_state.video_analizado_path = ruta_gen
+                        st.session_state.pop("video_fallo_path", None)
+                        if tracking_gen is not None:
+                            st.session_state["tracking_del_video"] = str(tracking_gen)
+                        estado_gen.write("✅ Análisis completado: tracking generado de este vídeo.")
+                        st.rerun()
+                    except VideoProcessingError as err:
+                        st.error(str(err))
+                        st.session_state.video_fallo_path = ruta_gen
+                    except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
+                        st.error(f"Error inesperado durante el análisis: {err}")
+                        st.session_state.video_fallo_path = ruta_gen
     # Fallback: re-analizar aunque ya exista tracking o haya fallado antes.
     if ruta_gen and (ya_cargado_gen or fallo_gen):
         if st.button("🔄 Re-analizar vídeo", key="video_gen_reanalizar"):
             st.session_state.pop("video_analizado_path", None)
             st.session_state.pop("video_fallo_path", None)
             st.session_state.video_forzar = True
+            st.session_state.pop("video_bg_signature", None)
+            st.session_state.pop("video_bg_job", None)
             st.rerun()
 
     # --- Análisis manual del vídeo ---
@@ -1610,6 +1724,26 @@ elif st.session_state.pagina == "video":
             except (ValueError, OSError) as err:
                 st.warning(f"⚠️ No se pudo cargar {tracking_elegido.name}: {err}. "
                            "La pantalla cargará sin tracking.")
+        if isinstance(datos_tracking, dict):
+            calidad_tracking = datos_tracking.get("quality") or {}
+            if calidad_tracking:
+                with st.expander("Calidad y cobertura del tracking", expanded=False):
+                    q1, q2, q3, q4 = st.columns(4)
+                    q1.metric("Muestras", calidad_tracking.get("total_samples", 0))
+                    q2.metric("Balón YOLO (%)", calidad_tracking.get("ball_yolo_pct", 0))
+                    q3.metric("Campo válido (%)", calidad_tracking.get("pitch_coverage_pct", 0))
+                    q4.metric("Equipo desconocido (%)", calidad_tracking.get("unknown_team_pct", 0))
+                    st.caption(
+                        f"IDs distintos: {calidad_tracking.get('unique_track_ids', 0)} · "
+                        f"Personas por muestra: {calidad_tracking.get('avg_people_visible', 0)} · "
+                        f"Balón estimado (%): {calidad_tracking.get('ball_predicted_pct', 0)} · "
+                        f"Homografía por calidad: {calidad_tracking.get('pitch_quality_frames', {})}"
+                    )
+                    for aviso in calidad_tracking.get("warnings") or []:
+                        st.warning(aviso)
+                    st.caption(
+                        "Estos porcentajes indican disponibilidad de datos, no "
+                        "precisión del detector ni continuidad garantizada de los IDs.")
         # Compacidad táctica (idea VEO): si el tracking trae las
         # estadísticas, enseñar la forma de cada equipo por periodo.
         compacidad = {}
@@ -1636,12 +1770,130 @@ elif st.session_state.pagina == "video":
                            "menos área = equipo más compacto. Anchura y "
                            "profundidad en metros.")
                 st.dataframe(filas_comp, use_container_width=True, hide_index=True)
+        # Geometría táctica ampliada calculada solo con jugadores visibles.
+        tactico = (datos_tracking.get("tactical_analysis") or {}
+                   if isinstance(datos_tracking, dict) else {})
+        periodos_tacticos = tactico.get("periods") or []
+        if periodos_tacticos:
+            filas_tacticas = []
+            nombres_equipo = datos_tracking.get("teams") or {}
+            for periodo in periodos_tacticos:
+                inicio = int(periodo.get("period_start_s", 0) // 60)
+                fin = int(periodo.get("period_end_s", 0) // 60)
+                cobertura = periodo.get("coverage") or {}
+                forma = periodo.get("teams") or {}
+                cambios = periodo.get("possession_recoveries_proxy") or {}
+                for lado in ("local", "visitante"):
+                    perfil = forma.get(lado) or {}
+                    filas_tacticas.append({
+                        "Tramo": f"{inicio}-{fin}'",
+                        "Equipo": nombres_equipo.get(lado, lado),
+                        "Muestras útiles": perfil.get("usable_frames", 0),
+                        "Muestras ambos equipos": cobertura.get("both_teams", 0),
+                        "Jugadores visibles": perfil.get("visible_players"),
+                        "Anchura visible (m)": perfil.get("width_m"),
+                        "Profundidad visible (m)": perfil.get("depth_m"),
+                        "Área visible (m²)": perfil.get("area_m2"),
+                        "Compañero más cercano (m)": perfil.get("nearest_teammate_m"),
+                        "Línea defensiva aprox. (m)": perfil.get("defensive_line_m"),
+                        "Defensores cerca del balón": perfil.get("defenders_near_ball_10m"),
+                        "Cambios de posesión (proxy)": cambios.get(lado, 0),
+                    })
+            with st.expander("Análisis táctico por tramos (geometría visible)",
+                             expanded=False):
+                st.caption(
+                    "La cámara puede mostrar solo una parte del campo. "
+                    "Anchura, profundidad y compactación corresponden al "
+                    "grupo de jugadores visibles, no necesariamente a los 11. "
+                    "La línea defensiva requiere ver al portero. "
+                    "Presión y recuperaciones son indicadores aproximados.")
+                st.dataframe(filas_tacticas, use_container_width=True,
+                             hide_index=True)
         components.html(html_pantalla, height=1100, scrolling=True)
     else:
         st.warning("⚠️ No se encontró analizador_video.html junto a match.py; "
                    "la pantalla de análisis manual no se puede mostrar.")
 
-    # --- 7b. MAPAS DE CALOR ---
+    # --- 7b. ESTADÍSTICAS INDIVIDUALES (solo tracks, no dorsales) ---
+    st.divider()
+    st.markdown("#### Estadísticas individuales por jugador")
+    if tracking_elegido is not None:
+        try:
+            datos_ind = cargar_tracking_json(
+                str(tracking_elegido), tracking_elegido.stat().st_mtime)
+        except (OSError, ValueError) as error:
+            datos_ind = {}
+            st.warning(f"No se pudieron cargar las métricas: {error}")
+        perfilado = datos_ind.get("player_stats") or {}
+        jugadores_ind = perfilado.get("players") or []
+        if jugadores_ind:
+            st.caption(
+                "Los IDs identifican trayectorias, no dorsales verificados. "
+                "Distancias, velocidades, sprints y aceleraciones son estimaciones "
+                "calculadas solo con posiciones válidas de campo, no datos GPS. "
+                "El tiempo visible no equivale a minutos disputados.")
+            opciones_equipo = ["Todos", "local", "visitante", "desconocido"]
+            filtro_equipo = st.selectbox(
+                "Equipo para estadísticas", opciones_equipo, key="individual_team")
+            def equipo_individual(equipo):
+                if equipo == "gk_local":
+                    return "local"
+                if equipo == "gk_visitante":
+                    return "visitante"
+                return equipo
+            filtrados = [p for p in jugadores_ind
+                         if filtro_equipo == "Todos"
+                         or equipo_individual(p.get("team")) == filtro_equipo]
+            filas = [{
+                "ID": p.get("track_id"),
+                "Equipo": p.get("team"),
+                "Visible (s)": p.get("visible_s"),
+                "Campo válido (%)": p.get("field_coverage_pct"),
+                "Distancia estimada (m)": p.get("distance_m"),
+                "Vel. media (km/h)": p.get("avg_speed_kmh"),
+                "Vel. máxima (km/h)": p.get("max_speed_kmh"),
+                "Aceleraciones": p.get("accelerations"),
+                "Frenadas": p.get("decelerations"),
+                "Sprints": p.get("sprints"),
+                "Cerca del balón (s)": p.get("ball_proximity_s"),
+            } for p in filtrados]
+            if filas:
+                df_ind = pd.DataFrame(filas)
+                st.dataframe(df_ind, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Exportar tabla individual (CSV)",
+                    data=df_ind.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="estadisticas_individuales.csv",
+                    mime="text/csv", key="individual_export_csv")
+                id_elegido = st.selectbox(
+                    "ID para mapa de calor individual",
+                    [p["track_id"] for p in filtrados], key="individual_track")
+                perfil = next(p for p in filtrados if p["track_id"] == id_elegido)
+                st.caption(
+                    f"Posición media (m): {perfil.get('mean_position_m')} · "
+                    f"Tiempo con movimiento medible (s): "
+                    f"{perfil.get('field_measured_s')} · "
+                    f"Calidad de campo: {perfil.get('pitch_quality', {})}")
+                duracion = float(datos_ind.get("match_duration_s") or 0)
+                if duracion > 0:
+                    figura, nota = generar_figura_mapa_calor(
+                        datos_ind, f"jugador:{id_elegido}",
+                        ("Partido completo", 0.0, duracion))
+                    if figura is not None:
+                        st.pyplot(figura, use_container_width=True)
+                        st.caption(nota)
+                        plt.close(figura)
+                    else:
+                        st.info(nota)
+            else:
+                st.info("No hay trayectorias del equipo seleccionado.")
+        else:
+            st.info("Este tracking aún no incluye métricas individuales. "
+                    "Regenera el análisis con la versión nueva.")
+    else:
+        st.info("Carga un tracking para mostrar estadísticas por jugador.")
+
+    # --- 7c. MAPAS DE CALOR ---
     st.divider()
     st.markdown("#### 🔥 Mapas de calor")
     if tracking_elegido is None:
@@ -1685,6 +1937,47 @@ elif st.session_state.pagina == "video":
                 st.pyplot(fig_hm, use_container_width=True)
                 st.caption(nota_hm)
                 plt.close(fig_hm)
+
+    # --- 7d. INFORMES AUTOMÁTICOS ---
+    st.divider()
+    st.markdown("#### Informes postpartido (PDF, Excel y CSV)")
+    st.caption(
+        "Se generan a partir del tracking ya analizado. No se inventan "
+        "goles, pases ni tiros: solo se incluyen eventos etiquetados.")
+    if tracking_elegido is None:
+        st.info("Carga un tracking para generar el informe del partido.")
+    else:
+        if st.button("Generar o actualizar informes", key="report_generate"):
+            try:
+                from match_reports import generate_match_reports
+                rutas_reportes = generate_match_reports(tracking_elegido)
+                st.success("Informes generados correctamente.")
+            except Exception as error:
+                st.error(f"No se pudieron generar los informes: {error}")
+        base_reportes = tracking_elegido.with_suffix("")
+        descargas = [
+            ("PDF del partido", "_informe.pdf", "application/pdf", "pdf"),
+            ("Excel de estadísticas", "_estadisticas.xlsx",
+             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
+            ("CSV jugadores", "_jugadores.csv", "text/csv", "csv"),
+            ("CSV táctico", "_tactica.csv", "text/csv", "csv"),
+        ]
+        rutas_existentes = [
+            (titulo, Path(str(base_reportes) + sufijo), mime, extension)
+            for titulo, sufijo, mime, extension in descargas
+            if Path(str(base_reportes) + sufijo).is_file()
+        ]
+        if rutas_existentes:
+            columnas_descarga = st.columns(len(rutas_existentes))
+            for columna, (titulo, ruta, mime, extension) in zip(
+                    columnas_descarga, rutas_existentes):
+                with columna:
+                    st.download_button(
+                        titulo, data=ruta.read_bytes(),
+                        file_name=ruta.name, mime=mime,
+                        key=f"report_download_{extension}_{ruta.stem}")
+        else:
+            st.info("Todavía no hay informes generados para este tracking.")
 
     # --- 7c. BIBLIOTECA DE PARTIDOS ---
     st.divider()
