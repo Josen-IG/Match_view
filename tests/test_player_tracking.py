@@ -91,6 +91,22 @@ class TrackingTests(unittest.TestCase):
         self.assertAlmostEqual(transform[2], 21 * 100 / 400, delta=0.5)
         self.assertAlmostEqual(transform[5], -8 * 100 / 240, delta=0.5)
 
+    def test_export_preserves_yolo_detection_confidence(self):
+        from video_track import export_tracking_json
+        sample = {"t_video": 2.0, "people": [{
+            "x": 40, "y": 50, "w": 3, "h": 8,
+            "team": "visitante", "track_id": 2,
+            "detection_confidence": 0.9375,
+        }], "ball": None, "possession_suave": "desconocido"}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "tracking.json"
+            export_tracking_json([sample], {}, None, path)
+            exported = json.loads(path.read_text(encoding="utf-8"))
+        player = exported["samples"][0]["p"][0]
+        self.assertEqual(2, player[5])
+        self.assertAlmostEqual(0.938, player[6], places=3)
+        self.assertEqual(7, len(player))
+
     def test_export_preserves_legacy_fields_and_adds_pitch_id(self):
         from video_track import export_tracking_json
         sample = {"t_video": 5.0, "people": [
@@ -102,6 +118,7 @@ class TrackingTests(unittest.TestCase):
             export_tracking_json([sample], {}, None, path)
             exported = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(7, exported["samples"][0]["p"][0][5])
+        self.assertIsNone(exported["samples"][0]["p"][0][6])
         self.assertEqual([40.0, 31.0, 0, 7], exported["samples"][0]["pp"][0])
         self.assertEqual(1, exported["version"])
         self.assertEqual(7, exported["player_stats"]["players"][0]["track_id"])

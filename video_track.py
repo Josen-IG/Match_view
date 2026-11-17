@@ -1602,6 +1602,7 @@ def _track_video(
                         "py": float(y1),
                         "pitch_x": None, "pitch_y": None,
                         "team": "desconocido",
+                        "detection_confidence": max(0.0, min(1.0, float(det["conf"]))),
                         "color_rgb": _hsv_a_hex(det["hsv"]),
                     })
                     equipo_det = det["team_hint"]
@@ -2921,6 +2922,8 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                 round(float(p.get("w", 0.0)), 1), round(float(p.get("h", 0.0)), 1),
                 TRACKING_TEAM_CODE.get(p.get("team"), 5),
                 int(p.get("track_id", -1)),
+                (round(float(p["detection_confidence"]), 3)
+                 if p.get("detection_confidence") is not None else None),
             ])
         # Coordenadas de campo (mapas de calor, idea VEO): el balón y los
         # jugadores llevan además su posición en metros de campo (105x68).

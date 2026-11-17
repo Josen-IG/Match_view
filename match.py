@@ -858,10 +858,9 @@ def _muestra_cercana(muestras, tiempos, t_frame):
 
 
 def _dibujar_overlay_cv2(frame, tracking, muestras, tiempos, t_frame, ancho, alto):
-    """Overlay como la pantalla manual: cajas con el color del equipo
-    (porteros con la caja rellena), balón con círculo + triángulo y
-    trayectoria del balón de los últimos 3 s. p = [x, y, w, h, code,
-    track_id] con x,y = centro (0-100)."""
+    """Anillos a los pies, confianza YOLO y trayectoria del balón.
+    p = [x, y, w, h, code, track_id, confianza?]. La confianza
+    mide detección, no continuidad de identidad ni calibración."""
     muestra = _muestra_cercana(muestras, tiempos, t_frame)
     if muestra is None:
         return
@@ -890,26 +889,41 @@ def _dibujar_overlay_cv2(frame, tracking, muestras, tiempos, t_frame, ancho, alt
             alfa = 0.85 * (1 - j / len(pts))
             color = (int(255 * alfa), int(139 * alfa), int(61 * alfa))
             cv2.line(frame, pts[j], pts[j + 1], color, grosor)
-    # Jugadores.
+    # Jugadores: anillos finos bajo los pies, sin ocultar el cuerpo.
     for per in muestra.get("p") or []:
         if len(per) < 5:
             continue
-        x, y, w, h, code = (float(v) for v in per[:5])
+        try:
+            x, y, w, h, code = (float(v) for v in per[:5])
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) for v in (x, y, w, h, code)):
+            continue
         col = _hex_a_bgr(mapa_color.get(int(code), "#888888"))
-        x1 = int((x - w / 2) / 100 * ancho)
-        y1 = int((y - h / 2) / 100 * alto)
-        x2 = int((x + w / 2) / 100 * ancho)
-        y2 = int((y + h / 2) / 100 * alto)
-        cx, cy = int(x / 100 * ancho), int(y / 100 * alto)
-        if int(code) in codigos_portero:
-            relleno = frame.copy()
-            cv2.rectangle(relleno, (x1, y1), (x2, y2), col, -1)
-            cv2.addWeighted(relleno, 0.45, frame, 0.55, 0, frame)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), grosor)
-        else:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), col, grosor)
-        tri = np.array([[cx - 6, y1 - 4], [cx + 6, y1 - 4], [cx, y1 + 8]], dtype=np.int32)
-        cv2.fillPoly(frame, [tri], col)
+        cx = int(x / 100 * ancho)
+        cy = int((y + h / 2) / 100 * alto) - 2
+        radius_x = max(7, min(24, int(w / 100 * ancho * .63)))
+        radius_y = max(4, min(10, int(radius_x * .36)))
+        cy = max(radius_y, min(alto - radius_y, cy))
+        cv2.ellipse(frame, (cx, cy), (radius_x, radius_y),
+                    0, 0, 360, col,
+                    4 if int(code) in codigos_portero else 3,
+                    cv2.LINE_AA)
+        # El porcentaje viene del score YOLO del propio fotograma.
+        # Sin score (JSON heredado), no se inventa fiabilidad.
+        confidence = None
+        if len(per) > 6 and per[6] is not None:
+            try:
+                confidence = float(per[6])
+            except (ValueError, TypeError):
+                pass
+        if confidence is not None and math.isfinite(confidence):
+            label = f"{round(max(0.0, min(1.0, confidence)) * 100)}%"
+            pos = (cx - 15, max(12, cy - max(16, int(h / 100 * alto * .55))))
+            cv2.putText(frame, label, pos, cv2.FONT_HERSHEY_SIMPLEX,
+                        .42, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, label, pos, cv2.FONT_HERSHEY_SIMPLEX,
+                        .42, (255, 255, 255), 1, cv2.LINE_AA)
     # Balón: círculo + triángulo amarillo (como la pantalla manual).
     b = muestra.get("b")
     if b:
@@ -1428,7 +1442,7 @@ elif st.session_state.pagina == "video":
         "También puedes generar el tracking con el notebook de Colab (GPU) "
         "y poner el JSON en la carpeta."
     )
-    c_gen1, c_gen2, c_gen3 = st.columns([3, 1, 1.4])
+    c_gen1, c_gen2, c_gen3, c_gen4 = st.columns([3, 1, 1.4, 1])
     with c_gen1:
         ruta_gen = st.text_input(
             "Ruta local del vídeo",
@@ -1455,6 +1469,12 @@ elif st.session_state.pagina == "video":
             ["Primeros 10 minutos (prueba)", "Partido completo"],
             key="video_gen_alcance",
         )
+    with c_gen4:
+        sample_fps_gen = st.selectbox(
+            "FPS del análisis", [10, 5], index=0,
+            key="video_gen_sample_fps",
+            help="10 FPS conserva mejor los fotogramas con balón. "
+                 "5 FPS reduce la carga de CPU.")
     # La cola de un solo worker evita bloquear Streamlit durante YOLO.
     # Desactivarla mantiene el análisis sincrónico anterior.
     bg_video = st.checkbox(
@@ -1497,9 +1517,15 @@ elif st.session_state.pagina == "video":
                            "no incluye espectadores, entrenadores ni zona técnica.")
             except Exception as error:
                 st.error(f"No se pudo previsualizar el campo: {error}")
+    trabajo_actual = st.session_state.get("video_bg_job")
+    ocupado = False
+    if trabajo_actual:
+        from video_jobs import get_video_job
+        snapshot = get_video_job(trabajo_actual)
+        ocupado = bool(snapshot and snapshot["state"] in ("queued", "running"))
     iniciar_analisis = st.button(
         "Analizar vídeo con YOLO", key="video_launch_analysis",
-        disabled=not (ruta_gen and os.path.isfile(ruta_gen)),
+        disabled=not (ruta_gen and os.path.isfile(ruta_gen)) or ocupado,
         help="Inicia el tracking con la configuración actual. Usa primero "
              "los 10 minutos de prueba para revisar el filtrado del campo.")
 
@@ -1541,7 +1567,13 @@ elif st.session_state.pagina == "video":
         st.session_state.pop("video_analizado_path", None)
         if st.session_state.get("tracking_del_video"):
             st.session_state.pop("tracking_del_video", None)
-    forzar_gen = st.session_state.pop("video_forzar", False)
+    if iniciar_analisis:
+        # Reprocesar incluso si ya existe un JSON antiguo o un resultado
+        # en caché. No reutilizar el ID de un trabajo ya completado.
+        for key in ("video_analizado_path", "video_fallo_path",
+                    "video_bg_signature", "video_bg_job", "tracking_del_video"):
+            st.session_state.pop(key, None)
+    forzar_gen = st.session_state.pop("video_forzar", False) or iniciar_analisis
     # Si el JSON aparece antes de finalizar informes, continuar mostrando
     # el trabajo de fondo en lugar de dar el análisis por completado.
     pendiente_bg = False
@@ -1572,7 +1604,7 @@ elif st.session_state.pagina == "video":
             st.session_state.video_fallo_path = ruta_gen
         else:
             try:
-                kickoff_gen = parse_mmss(st.session_state.video_gen_kickoff)
+                kickoff_gen = parse_mmss(st.session_state.video_gen_kickoff or "00:00")
             except (ValueError, TypeError):
                 st.error("El saque inicial debe ser MM:SS, por ejemplo 17:06.")
                 st.session_state.video_fallo_path = ruta_gen
@@ -1583,7 +1615,7 @@ elif st.session_state.pagina == "video":
                     # No compartir estados entre sesiones ni crear jobs
                     # nuevos en cada rerun de Streamlit.
                     signature = (
-                        ruta_gen, kickoff_gen, alcance_gen,
+                        ruta_gen, kickoff_gen, alcance_gen, sample_fps_gen,
                         dp["eq_local"], dp["eq_visitante"],
                         dp["color_local"], dp["color_visitante"],
                         dp.get("color_portero_local", "#FFEB3B"),
@@ -1600,7 +1632,7 @@ elif st.session_state.pagina == "video":
                             "color_arbitro": dp.get("color_arbitro", "#000000"),
                             "team_local": dp["eq_local"],
                             "team_visitante": dp["eq_visitante"],
-                            "sample_fps": 10,
+                            "sample_fps": sample_fps_gen,
                             "min_confidence": 0.65,
                             "yolo_model": "modelo_propio.pt",
                             "max_minutes": 10.0 if alcance_gen.startswith("Primeros") else None,
@@ -1666,7 +1698,7 @@ elif st.session_state.pagina == "video":
                             color_gk_visitante=dp.get("color_portero_visitante", "#FF9800"),
                             color_arbitro=dp.get("color_arbitro", "#000000"),
                             team_local=dp["eq_local"], team_visitante=dp["eq_visitante"],
-                            sample_fps=10,  # 10 fps también en partido completo: a 5 fps el balón rápido se pierde entre muestras
+                            sample_fps=sample_fps_gen,
                             min_confidence=0.65, yolo_model="modelo_propio.pt",
                             max_minutes=10.0 if alcance_gen.startswith("Primeros") else None,
                             kickoff_offset=kickoff_gen,
@@ -1775,8 +1807,36 @@ elif st.session_state.pagina == "video":
         st.info("✅ Tracking cargado. Ahora selecciona el vídeo dentro de la "
                 "pantalla manual (botón «Seleccionar vídeo…») para verlo con "
                 "el tracking encima.")
+    if tracking_elegido is not None:
+        try:
+            cabecera = read_tracking_header(tracking_elegido)
+            calidad = cabecera.get("quality") or {}
+        except (OSError, ValueError, TypeError):
+            calidad = {}
+        if calidad:
+            filtro = calidad.get("field_filter") or {}
+            with st.expander("Diagnóstico: personas dentro/fuera del campo", expanded=False):
+                q1, q2, q3, q4 = st.columns(4)
+                q1.metric("Personas detectadas", filtro.get("detected", 0))
+                q2.metric("Aceptadas", filtro.get("accepted", 0))
+                q3.metric("Descartadas", filtro.get("rejected", 0))
+                q4.metric("Sin verificar", filtro.get("unverified", 0))
+                st.caption(
+                    f"Fotogramas con máscara de césped: "
+                    f"{calidad.get('field_mask_coverage_pct', 0)} % · "
+                    f"Descartes del filtro: "
+                    f"{calidad.get('field_filter_rejection_pct', 0)} %. "
+                    "Son indicadores de cobertura, no precisión contrastada.")
+                for aviso in calidad.get("warnings", []):
+                    st.warning(aviso)
+
+    mostrar_editor = st.checkbox(
+        "Abrir el analizador manual con vídeo y seguimiento",
+        value=False, key="video_show_manual_editor",
+        help="Carga el tracking completo en el navegador solo al abrirlo. "
+             "Desactivado para mejorar el tiempo de inicio y consumo de memoria.")
     ruta_pantalla = carpeta_app / "analizador_video.html"
-    if ruta_pantalla.is_file():
+    if ruta_pantalla.is_file() and mostrar_editor:
         html_pantalla = ruta_pantalla.read_text(encoding="utf-8")
         datos_tracking = None
         if tracking_elegido is not None:
@@ -1889,9 +1949,12 @@ elif st.session_state.pagina == "video":
                 st.dataframe(filas_tacticas, use_container_width=True,
                              hide_index=True)
         components.html(html_pantalla, height=1100, scrolling=True)
+    elif ruta_pantalla.is_file():
+        st.info("El analizador manual está cerrado para ahorrar memoria. "
+                "Activa la casilla anterior para cargar el vídeo con overlays.")
     else:
-        st.warning("⚠️ No se encontró analizador_video.html junto a match.py; "
-                   "la pantalla de análisis manual no se puede mostrar.")
+        st.warning("No se encontró analizador_video.html junto a match.py; "
+                   "la pantalla manual no se puede mostrar.")
 
     # --- 7b. ESTADÍSTICAS INDIVIDUALES (solo tracks, no dorsales) ---
     st.divider()
@@ -2107,8 +2170,8 @@ elif st.session_state.pagina == "video":
     # --- 7d. EXPORTAR CLIPS COMO VÍDEO ---
     st.divider()
     st.markdown("#### 🎬 Exportar clips como vídeo")
-    st.caption("Renderiza un corte corto con el overlay del tracking "
-               "(cajas, balón y trayectoria) y descárgalo como .mp4.")
+    st.caption("Renderiza un corte corto con anillos bajo los jugadores, "
+               "confianza de detección, balón y trayectoria.")
     ruta_clip = st.text_input(
         "Vídeo",
         value=st.session_state.get("video_gen_path", ""),
