@@ -31,8 +31,9 @@ Diseño (respuestas del usuario, 2026-11-11):
   definidas en este módulo (las usa el remix por tramos de
   chunked_full.py), pero ``analyze_video``/``analyze_video_full`` ya
   no las llaman.
-* PC: Windows, Ryzen 7 serie 7000, CPU (sin GPU). YOLO11s por defecto,
-  imgsz 640, muestreo ~10 fps, ``device="cpu"``. Un partido de 90 min tarda
+* PC: Windows, Ryzen 7 serie 7000, CPU (sin GPU). Modelo propio
+  (YOLO11n, ``modelo_propio.pt``) por defecto, imgsz 1280 en análisis,
+  muestreo ~10 fps, ``device="cpu"``. Un partido de 90 min tarda
   más que en tiempo real en CPU: probar primero con 10 minutos.
 
 Tracking:
@@ -4147,7 +4148,7 @@ def analyze_video(
     post_roll: int = DEFAULT_POST_ROLL,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     yolo_model: str = DEFAULT_YOLO_MODEL,
-    imgsz: int = 960,
+    imgsz: int = 1280,
     flip_x: bool = False,
     flip_y: bool = False,
     max_minutes: float | None = None,
@@ -4171,9 +4172,10 @@ def analyze_video(
     conservan por compatibilidad pero ya no se usan (no hay candidatos
     ni cortes que generar).
 
-    Por defecto imgsz=960 y conf=0.10: en vídeo VEO el balón es diminuto y
-    a 640/conf 0.25 solo aparece en ~2% de muestras (a 960/0.10, ~20%).
-    Cuesta ~1,7x más tiempo que 640; en CPU lenta bajar sample_fps a 5.
+    Por defecto imgsz=1280 y conf=0.10: en vídeo VEO el balón es diminuto y
+    a 640/conf 0.25 solo aparece en ~2% de muestras (a 960/0.10, ~20%;
+    a 1280, ~50% en el clip Cirbonero-Milagres 6-10 min, validado
+    2026-11-16, sin más tiempo que a 960). En CPU lenta bajar sample_fps a 5.
 
     pitch_model: ruta al modelo de keypoints del campo (pitch_keypoints.pt).
     None = usar el archivo junto a este módulo si existe; "" = sin mapa.
@@ -4204,7 +4206,7 @@ def analyze_video_full(
     post_roll: int = DEFAULT_POST_ROLL,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     yolo_model: str = DEFAULT_YOLO_MODEL,
-    imgsz: int = 960,
+    imgsz: int = 1280,
     flip_x: bool = False,
     flip_y: bool = False,
     max_minutes: float | None = None,
@@ -4233,7 +4235,7 @@ def analyze_video_full(
     "tracking_json": ... (ruta del tracking JSON para la pantalla de
     análisis manual, o None si no se pudo escribir)}
 
-    Por defecto imgsz=960 y conf=0.10 (ver analyze_video).
+    Por defecto imgsz=1280 y conf=0.10 (ver analyze_video).
 
     debug_muestras_path: si se pasa, guarda las muestras procesadas
     (pickle) ahí para diagnosticar sin volver a trackear el vídeo.
@@ -4281,8 +4283,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
     parser.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     parser.add_argument("--yolo-model", default=DEFAULT_YOLO_MODEL)
-    parser.add_argument("--imgsz", type=int, default=960,
-                        help="Resolución de inferencia (960 por defecto; "
+    parser.add_argument("--imgsz", type=int, default=1280,
+                        help="Resolución de inferencia (1280 por defecto; "
                              "640 es más rápido pero ve peor el balón)")
     parser.add_argument("--conf", type=float, default=0.10,
                         help="Confianza mínima de YOLO (0,10 por defecto; "
