@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import json
+import io
 import pandas as pd
 from datetime import datetime, date
 import shutil
@@ -354,11 +355,21 @@ def _mmss(segundos):
     return f"{segundos // 60:02d}:{segundos % 60:02d}"
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=2)
 def cargar_tracking_json(ruta_str, mtime):
     """Lee un tracking JSON (cacheado; se invalida si cambia el archivo)."""
     with open(ruta_str, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _mostrar_figura_streamlit(fig):
+    """Render PNG pequeño y no mantener copias grandes de Matplotlib."""
+    buffer = io.BytesIO()
+    try:
+        fig.savefig(buffer, format="png", dpi=80, bbox_inches="tight")
+        st.image(buffer.getvalue(), use_container_width=True)
+    finally:
+        buffer.close()
 
 
 def tramos_partido(match_duration_s):
@@ -1341,7 +1352,7 @@ elif st.session_state.pagina == "final":
         if fig_tiros is None:
             st.info(f"🎯 Mapa de tiros: {nota_tiros}")
         else:
-            st.pyplot(fig_tiros, use_container_width=True)
+            _mostrar_figura_streamlit(fig_tiros)
             st.caption(nota_tiros)
             plt.close(fig_tiros)
 
@@ -1351,7 +1362,7 @@ elif st.session_state.pagina == "final":
         if fig_zonas is None:
             st.info(f"📍 Actividad por zonas: {nota_zonas}")
         else:
-            st.pyplot(fig_zonas, use_container_width=True)
+            _mostrar_figura_streamlit(fig_zonas)
             st.caption(nota_zonas)
             plt.close(fig_zonas)
 
@@ -1359,7 +1370,7 @@ elif st.session_state.pagina == "final":
         if fig_red is None:
             st.info(f"🔗 Red de pases: {nota_red}")
         else:
-            st.pyplot(fig_red, use_container_width=True)
+            _mostrar_figura_streamlit(fig_red)
             st.caption(nota_red)
             plt.close(fig_red)
 
@@ -1729,13 +1740,15 @@ elif st.session_state.pagina == "video":
         datos_tracking = None
         if tracking_elegido is not None:
             try:
-                datos_tracking = json.loads(tracking_elegido.read_text(encoding="utf-8"))
+                datos_tracking = cargar_tracking_json(
+                    str(tracking_elegido), tracking_elegido.stat().st_mtime)
                 # Inyectar antes del script principal. Se escapa "<" para
                 # que ningún texto del JSON pueda cerrar el <script>. Si el
                 # vídeo se sirve por HTTP (url_video), se pasa también su
                 # URL y su nombre para que la pantalla lo cargue solo.
                 inj = ("<script>window.TRACKING_DATA = "
-                       + json.dumps(datos_tracking, ensure_ascii=False).replace("<", "\\u003c")
+                       + json.dumps(datos_tracking, ensure_ascii=False,
+                                    separators=(",", ":")).replace("<", "\\u003c")
                        + "; window.TRACKING_FILE_NAME = "
                        + json.dumps(tracking_elegido.name, ensure_ascii=False)
                        + ";")
@@ -1906,7 +1919,7 @@ elif st.session_state.pagina == "video":
                         ("Partido completo", 0.0, duracion))
                     if figura is not None:
                         try:
-                            st.pyplot(figura, use_container_width=True, dpi=65)
+                            _mostrar_figura_streamlit(figura)
                             st.caption(nota)
                         finally:
                             plt.close(figura)
@@ -1962,7 +1975,7 @@ elif st.session_state.pagina == "video":
                 st.warning(f"⚠️ {nota_hm}")
             else:
                 try:
-                    st.pyplot(fig_hm, use_container_width=True, dpi=65)
+                    _mostrar_figura_streamlit(fig_hm)
                     st.caption(nota_hm)
                 finally:
                     plt.close(fig_hm)
