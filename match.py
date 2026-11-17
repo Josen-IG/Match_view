@@ -15,6 +15,7 @@ import re
 import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from html import escape as escape_html
 from tracking_catalog import read_tracking_header, inspect_tracking, deduplicate_library
 from heatmap_utils import build_heatmap_histogram
 
@@ -317,6 +318,83 @@ if not st.session_state.authenticated:
         else:
             st.error("Llave incorrecta")
     st.stop()
+
+# --- Diseño visual: navegación única, componentes compactos ---
+st.markdown("""
+<style>
+:root { color-scheme: dark; }
+[data-testid="stAppViewContainer"] {
+    background: #0B1220;
+    color: #E5EAF2;
+}
+[data-testid="stHeader"] { background: rgba(11,18,32,.94); }
+.block-container { max-width: 1560px; padding-top: 1.1rem; padding-bottom: 2.2rem; }
+[data-testid="stMainBlockContainer"] h1,
+[data-testid="stMainBlockContainer"] h2,
+[data-testid="stMainBlockContainer"] h3 { letter-spacing: -.035em; }
+[data-testid="stMainBlockContainer"] h4,
+[data-testid="stMainBlockContainer"] h5 { color: #DAE4F3; }
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 13px;
+}
+div[data-testid="stMetric"] {
+    background: #131F31; border: 1px solid #233650;
+    border-radius: 12px; padding: 12px 16px;
+}
+[data-testid="stMetricLabel"] { color: #AFC1D6; }
+[data-testid="stMetricValue"] { color: #F3F7FC; font-weight: 700; }
+div[data-testid="stDataFrame"], div[data-testid="stTable"] {
+    border-radius: 10px; overflow: hidden;
+}
+div[data-testid="stExpander"] {
+    background: #121C2B; border: 1px solid #26354C;
+    border-radius: 12px;
+}
+div.stButton > button { border-radius: 10px; font-weight: 600; }
+div.stButton > button[kind="primary"] { background: #2869DF; border-color: #2869DF; }
+div[data-testid="stAlert"] { border-radius: 10px; }
+hr { border-color: #243145; }
+.mv-head {
+    display:flex; align-items:center; justify-content:space-between;
+    flex-wrap:wrap; gap:12px; margin-bottom:10px;
+}
+.mv-logo { font-weight:800; letter-spacing:.11em; color:#F4F7FB; font-size:1.15rem; }
+.mv-logo i { color:#4E92FF; font-style:normal; }
+.mv-sub { color:#93A7C0; font-size:.81rem; margin-top:2px; }
+.mv-match { color:#BCCCE0; font-size:.88rem; }
+@media (max-width: 760px) {
+  .block-container { padding-left:.8rem; padding-right:.8rem; }
+  .mv-match { display:none; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+_match_header = st.session_state.datos_partido
+st.markdown(
+    '<div class="mv-head"><div><div class="mv-logo">MATCH <i>VIEW</i></div>'
+    '<div class="mv-sub">Football Intelligence · análisis local</div></div>'
+    '<div class="mv-match">'
+    + escape_html(str(_match_header["eq_local"])) + ' &nbsp; vs &nbsp; '
+    + escape_html(str(_match_header["eq_visitante"])) + '</div></div>',
+    unsafe_allow_html=True,
+)
+_nav_options = [
+    ("alineaciones", "Configurar"),
+    ("partido", "Partido"),
+    ("video", "Vídeo"),
+    ("final", "Resultados"),
+]
+_nav_columns = st.columns(len(_nav_options), gap="small")
+for _col, (_nav_page, _nav_label) in zip(_nav_columns, _nav_options):
+    with _col:
+        if st.button(
+            _nav_label, key=f"mv_navigation_{_nav_page}",
+            type="primary" if st.session_state.pagina == _nav_page else "secondary",
+            use_container_width=True,
+        ):
+            if st.session_state.pagina != _nav_page:
+                st.session_state.pagina = _nav_page
+                st.rerun()
 
 FORMACIONES_COORDS = {
     "1-4-4-2": [(8,50), (22,18), (22,38), (22,62), (22,82), (36,18), (36,38), (36,62), (36,82), (46,35), (46,65)],
@@ -1413,19 +1491,8 @@ elif st.session_state.pagina == "video":
     dp = st.session_state.datos_partido
     carpeta_app = Path(__file__).resolve().parent
 
-    col_v1, col_v2, col_v3 = st.columns([1, 1.2, 3])
-    with col_v1:
-        if st.button("⬅️ Partido", use_container_width=True):
-            st.session_state.pagina = "partido"
-            st.rerun()
-    with col_v2:
-        if st.button("📊 Final / CSV", use_container_width=True):
-            st.session_state.pagina = "final"
-            st.rerun()
-    with col_v3:
-        st.markdown(f"### 🎥 Análisis de Vídeo: {dp['eq_local']} vs {dp['eq_visitante']}")
-
-    st.divider()
+    st.markdown("### Análisis de vídeo")
+    st.caption("Selecciona el vídeo, revisa el campo y analiza el partido.")
 
     # --- Generar tracking al proporcionar el vídeo (automático) ---
     # Al pegar la ruta del vídeo, la app lanza el análisis YOLO en ese
@@ -1434,15 +1501,8 @@ elif st.session_state.pagina == "video":
     # Si el vídeo ya tiene su tracking (mismo stem), se carga directamente
     # sin re-analizar. El botón de re-analizar es solo un fallback.
     st.markdown("##### 🎥 Vídeo del partido")
-    st.caption(
-        "Selecciona el vídeo, revisa los límites del campo y pulsa Analizar. "
-        "El análisis comienza en el saque inicial: lo anterior "
-        "(calentamiento) no se analiza y no ensucia las estadísticas. "
-        "Si el vídeo ya tiene su tracking, se carga directamente. "
-        "También puedes generar el tracking con el notebook de Colab (GPU) "
-        "y poner el JSON en la carpeta."
-    )
-    c_gen1, c_gen2, c_gen3, c_gen4 = st.columns([3, 1, 1.4, 1])
+    st.caption("Los datos del seguimiento se generan y cargan automáticamente.")
+    c_gen1, c_gen2, c_gen3 = st.columns([3, 1, 1.4])
     with c_gen1:
         ruta_gen = st.text_input(
             "Ruta local del vídeo",
@@ -1469,18 +1529,15 @@ elif st.session_state.pagina == "video":
             ["Primeros 10 minutos (prueba)", "Partido completo"],
             key="video_gen_alcance",
         )
-    with c_gen4:
+    with st.expander("Ajustes avanzados de procesamiento", expanded=False):
         sample_fps_gen = st.selectbox(
             "FPS del análisis", [10, 5], index=0,
             key="video_gen_sample_fps",
-            help="10 FPS conserva mejor los fotogramas con balón. "
-                 "5 FPS reduce la carga de CPU.")
-    # La cola de un solo worker evita bloquear Streamlit durante YOLO.
-    # Desactivarla mantiene el análisis sincrónico anterior.
-    bg_video = st.checkbox(
-        "Procesar vídeo en segundo plano", value=True, key="video_background",
-        help="La interfaz puede seguir funcionando mientras YOLO analiza. "
-             "El trabajo se pierde si se reinicia el servidor.")
+            help="10 FPS conserva mejor el balón; 5 FPS reduce carga de CPU.")
+        bg_video = st.checkbox(
+            "Procesar en segundo plano", value=True,
+            key="video_background",
+            help="Un trabajo a la vez. El progreso se pierde si se reinicia Streamlit.")
     if bg_video and not hasattr(st, "fragment"):
         st.info("Esta versión de Streamlit no admite actualización automática "
                 "del progreso. Se usará el modo clásico.")
