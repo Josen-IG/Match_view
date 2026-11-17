@@ -32,24 +32,96 @@ antes de arrancar Streamlit.
 
 La pantalla de Vídeo analiza el partido con YOLO11 (`video_track.py`):
 detección y seguimiento propio de personas y balón, clasificación de
-equipos por color de camiseta (heredado de Alineaciones), homografía
-para posiciones reales en metros y radar con los jugadores. Genera los
-cortes como botones con un resumen breve; el guardado en eventos es
-manual, nunca automático.
+equipos por color de camiseta (definidos en Alineaciones), homografía
+para posiciones estimadas en metros y radar con los jugadores. Los eventos
+(goles, pases, tiros, etc.) se marcan **manualmente**: el análisis de
+vídeo no genera candidatos ni cortes automáticos de eventos.
 
 - El modelo de keypoints del campo (`pitch_keypoints.pt`, 85 MB) tiene
   que estar junto a `video_track.py`. Sin él no hay mapa ni radar.
   Enlace de descarga en `README_VIDEO.md`.
-- Los pesos YOLO (`yolo11s.pt`) están en el repositorio.
+- El análisis usa por defecto el modelo personalizado
+  `modelo_propio.pt`; puede indicarse otro peso YOLO.
 - Requiere `ffmpeg` y `ffprobe` en `PATH`. Los clips se guardan en
   `video_clips/` junto al vídeo.
-- El análisis completo de un partido (105 min) tarda ~3-4 h en CPU a
-  5 fps; en un Ryzen 7 se puede subir a 10 fps. Ver `README_VIDEO.md`
-  para el detalle de las reglas y las versiones.
+- En CPU el análisis de un partido completo puede tardar varias horas,
+  según el equipo, vídeo y FPS. Empieza con 10 minutos de prueba; en la
+  pantalla se puede usar una cola de análisis en segundo plano (un trabajo
+  a la vez) con progreso. El trabajo se pierde si se reinicia el servidor.
+  Ver `README_VIDEO.md` para el detalle del detector y los parámetros.
 
 Groq se eliminó: la clasificación es solo con YOLO y las reglas de
 `video_track.py`. `video_ai.py` (flujo antiguo con Groq) y `prueba.py`
 (prototipo) se mantienen en el repo por referencia, no son la app base.
+
+## Tracking, métricas e informes (rama de desarrollo)
+
+El análisis de fútbol incorpora módulos reutilizables:
+
+| Archivo | Responsabilidad |
+| --- | --- |
+| `video_track.py` | Detección YOLO, balón, homografía, posesión y exportación |
+| `player_tracking.py` | Asociación de IDs, compensación pan/zoom y reidentificación conservadora |
+| `player_metrics.py` | Distancia, velocidad, aceleraciones, sprints y zonas por ID |
+| `tactical_metrics.py` | Geometría visible, presión aproximada, ocupación y periodos |
+| `quality_metrics.py` | Cobertura del tracking, avisos de calidad e inconsistencias |
+| `match_reports.py` | Informes PDF, Excel y CSV exportables desde JSON |
+| `video_jobs.py` | Cola local de vídeo en segundo plano y progreso por trabajo |
+| `match.py` | Interfaz Streamlit: filtros, mapas, reportes, descargas |
+
+Cada archivo se mantiene una sola vez. Los módulos de análisis se pueden
+importar para pruebas sin abrir Streamlit.
+
+### Estadísticas por jugador
+
+Se muestran por `track_id`, **no por dorsal verificado**. Los cálculos de
+distancia y velocidad necesitan homografía; si no hay posiciones válidas, las
+métricas se dejan sin dato. Los saltos de velocidad poco creíbles se ignoran.
+El tiempo visible no equivale necesariamente a minutos jugados.
+
+Las métricas tácticas describen los jugadores **visibles en cámara**. Con una
+cámara que sigue el balón no se puede asegurar una formación completa ni
+medir con exactitud la presión del equipo. Las recuperaciones de posesión
+son cambios estimados, no eventos etiquetados. Para evaluar la continuidad
+de identidad de los IDs hacen falta vídeos con anotaciones humanas.
+
+### Archivos generados
+
+El tracking se guarda como `<video>_tracking.json`, conservando el campo
+`p` del formato anterior; `pp` incorpora opcionalmente un cuarto elemento,
+el ID de track. Se incluyen además `player_stats`, `tactical_analysis`
+y `quality`. Los datos antiguos se pueden seguir abriendo; para obtener las
+métricas nuevas hay que regenerar el tracking.
+
+El informe genera, junto al JSON:
+
+- `<video>_tracking_informe.pdf`: resumen postpartido, tablas y mapas.
+- `<video>_tracking_estadisticas.xlsx`: resumen, jugadores, táctica y eventos.
+- `<video>_tracking_jugadores.csv` y `<video>_tracking_tactica.csv`.
+
+También se pueden regenerar o descargar desde la pantalla de Vídeo.
+El PDF y el Excel requieren `reportlab` y `XlsxWriter`, incluidos en
+`requirements.txt`.
+
+### Ejecutar las pruebas
+
+```powershell
+py -m pip install -r requirements.txt
+py -m unittest discover -s tests -v
+py -m streamlit run match.py
+```
+
+GitHub Actions ejecuta las pruebas en cada commit de la rama y en las
+propuestas de integración hacia `main`.
+
+### Validación recomendada antes de integrar en `main`
+
+Probar primero 10 minutos de un vídeo VEO real con ambos equipos y
+porteros visibles en distintos tramos. Comprobar continuidad de IDs en
+cruces, oclusiones y desplazamientos de cámara; cobertura del campo,
+métricas individuales, posesión, mapas, calidad e informes. Comparar con
+la versión original del mismo vídeo. Las pruebas automatizadas incluyen
+simulaciones, **no certifican precisión en un partido real**.
 
 ## Datos
 
