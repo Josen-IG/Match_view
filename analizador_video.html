@@ -581,7 +581,7 @@
         </section>
         <section class="ai-review" id="aiReview" aria-label="Jugadas sugeridas por IA">
           <div class="ai-review-head">
-            <div><h2>Jugadas sugeridas</h2><p>El modelo propone momentos para revisar. No confirma goles, tiros ni córneres.</p></div>
+            <div><h2>Jugadas sugeridas</h2><p>Solo se muestran eventos con evidencia verificable. Las antiguas sugerencias geométricas se han retirado.</p></div>
             <span class="ai-count" id="aiCount">0 sugerencias</span>
           </div>
           <div class="ai-legend"><span class="ai-key shot">●</span>Tiro posible <span class="ai-key corner">●</span>Córner posible <span class="ai-key goal">●</span>Gol posible</div>
@@ -1642,7 +1642,7 @@
       if (!items.length){
         var empty = document.createElement('p'); empty.className = 'ai-empty';
         empty.textContent = state.track ?
-          'No hay candidatos con evidencia suficiente. El detector necesita balón con coordenadas de campo fiables; no inventa eventos.' :
+          'No hay tiros, córneres ni goles verificados automáticamente. Se han retirado las sugerencias geométricas que confundían pases o despejes con disparos.' :
           'Analiza un vídeo para obtener sugerencias automáticas.';
         box.appendChild(empty); return;
       }
@@ -1770,7 +1770,8 @@
       state.events = Array.isArray(data.events) ? data.events.slice().sort(function(a,b){ return a.seconds-b.seconds; }) : [];
       state.suggestedEvents = Array.isArray(data.suggested_events) ?
         data.suggested_events.filter(function(ev){
-          return ev && ['shot','corner','goal'].indexOf(ev.type) >= 0 &&
+          return ev && ev.source !== 'ball_pitch_heuristic' &&
+            ['shot','corner','goal'].indexOf(ev.type) >= 0 &&
             typeof ev.t === 'number' && isFinite(ev.t) &&
             typeof ev.start_s === 'number' && typeof ev.end_s === 'number' &&
             ev.end_s > ev.start_s;
