@@ -318,6 +318,38 @@
         .layout { grid-template-columns:54px minmax(0,1fr); }
         .side { grid-column:1/-1; }
       }
+
+      /* Línea de tiempo centrada en jugadas candidatas, no en edición. */
+      .tl-name.track { height:34px; color:#d9e7f8; }
+      .tl-lane[data-lane="tracking"] { height:34px; overflow:visible; }
+      .tl-track-bar { background:rgba(52,127,243,.1); border-color:rgba(52,127,243,.32); color:#9bb8dc; }
+      .tl-ai-event { position:absolute; top:5px; width:14px; height:22px;
+        transform:translateX(-50%); border:0; border-radius:6px;
+        cursor:pointer; z-index:3; box-shadow:0 0 0 2px #111b2a;
+        color:#101724; font-size:9px; font-weight:800; padding:0; min-height:0; }
+      .tl-ai-event.shot { background:#f1bb52; }
+      .tl-ai-event.corner { background:#64cfa9; }
+      .tl-ai-event.goal { background:#f17b81; }
+      .tl-ai-event.confirmed { outline:2px solid #fff; }
+      .tl-ai-event:hover { filter:brightness(1.2); transform:translateX(-50%) scale(1.15); }
+      .ai-review { margin-top:10px; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+      .ai-review-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+      .ai-review h2 { font-size:14px; color:#eff5ff; }
+      .ai-review p { margin:3px 0 0; color:var(--mut); font-size:12px; }
+      .ai-count { border:1px solid var(--line2); border-radius:20px; padding:4px 9px; color:#c6d8ef; font-size:11px; white-space:nowrap; }
+      .ai-legend { display:flex; align-items:center; flex-wrap:wrap; gap:5px 8px; color:#a9bdd7; font-size:11px; margin:9px 0; }
+      .ai-key { font-size:12px; } .ai-key.shot { color:#f1bb52; } .ai-key.corner{ color:#64cfa9; } .ai-key.goal{ color:#f17b81; }
+      .ai-events-list { max-height:230px; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(285px,1fr)); gap:7px; }
+      .ai-item { padding:9px; border:1px solid var(--line2); background:#172439; border-radius:10px; min-width:0; }
+      .ai-item.confirmed { border-color:#539f83; }
+      .ai-item.rejected { opacity:.58; }
+      .ai-item .ai-top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+      .ai-item .ai-title { font-size:12px; font-weight:700; color:#f2f6fb; }
+      .ai-item .ai-time { color:#93a9c5; font-size:11px; white-space:nowrap; }
+      .ai-item .ai-reason { font-size:11px; color:#9caec5; margin:5px 0 8px; }
+      .ai-item .ai-actions { display:flex; gap:6px; flex-wrap:wrap; }
+      .ai-item .ai-actions button { min-height:29px; padding:4px 8px; font-size:11px; }
+      .ai-empty { grid-column:1/-1; padding:8px; color:var(--mut); }
     </style>
   </head>
   <body>
@@ -477,11 +509,7 @@
             <div class="tl-names" aria-hidden="true">
               <div class="tl-name ruler">Tiempo</div>
               <div class="tl-name seek">Buscar</div>
-              <div class="tl-name track">Tracking IA</div>
-              <div class="tl-name annos">Señalizaciones</div>
-              <div class="tl-name fx">Efectos</div>
-              <div class="tl-name cuts">Cortes</div>
-              <div class="tl-name events" id="tlNameEvents">Eventos</div>
+              <div class="tl-name track">Jugadas IA</div>
             </div>
             <div class="tl-lanes" id="tlLanes">
               <div class="tl-scroll" id="tlScroll">
@@ -491,14 +519,18 @@
                   <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Barra de búsqueda" />
                 </div>
                 <div class="tl-lane" data-lane="tracking" id="laneTracking"></div>
-                <div class="tl-lane" data-lane="annos" id="laneAnnos"></div>
-                <div class="tl-lane" data-lane="fx" id="laneFx"></div>
-                <div class="tl-lane" data-lane="cuts" id="laneCuts"></div>
-                <div class="tl-lane" data-lane="events" id="laneEvents"></div>
                 <div class="tl-playhead" id="tlPlayhead" style="display:none"></div>
               </div>
             </div>
           </div>
+        </section>
+        <section class="ai-review" id="aiReview" aria-label="Jugadas sugeridas por IA">
+          <div class="ai-review-head">
+            <div><h2>Jugadas sugeridas</h2><p>El modelo propone momentos para revisar. No confirma goles, tiros ni córneres.</p></div>
+            <span class="ai-count" id="aiCount">0 sugerencias</span>
+          </div>
+          <div class="ai-legend"><span class="ai-key shot">●</span>Tiro posible <span class="ai-key corner">●</span>Córner posible <span class="ai-key goal">●</span>Gol posible</div>
+          <div class="ai-events-list" id="aiEventsList" aria-live="polite"><p class="ai-empty">Analiza un vídeo para ver posibles jugadas.</p></div>
         </section>
 
         <section class="analytics-wrap" id="analyticsWrap" hidden aria-label="Analytics">
