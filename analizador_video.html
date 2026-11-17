@@ -1369,6 +1369,117 @@
       reader.readAsText(f);
     });
 
+    /* Las sugerencias se generan al procesar el vídeo en Python, sin
+       cargar JSON manualmente. Las revisiones se guardan en este navegador
+       por vídeo y rango; nunca se consideran etiquetas verificadas por IA. */
+    function suggestionStorageKey(){
+      if (!state.track) return null;
+      var first = state.samples.length ? state.samples[0].t : 0;
+      return 'matchview:review:v1:' +
+        String(state.track.video_filename || state.videoName || '') + ':' +
+        state.samples.length + ':' + Math.round(first*10);
+    }
+    function restoreSuggestedReviews(){
+      var key = suggestionStorageKey(); if (!key) return;
+      try {
+        var saved = JSON.parse(localStorage.getItem(key) || '{}');
+        state.suggestedEvents.forEach(function(ev){
+          var status = saved[ev.id];
+          if (status === 'confirmed' || status === 'rejected') ev.status = status;
+        });
+        var clips = JSON.parse(localStorage.getItem(key + ':clips') || '[]');
+        if (Array.isArray(clips)) clips.forEach(function(clip){
+          if (!clip || !isFinite(clip.start_s) || !isFinite(clip.end_s)) return;
+          if (!state.cuts.some(function(old){ return old.start_s === clip.start_s && old.label === clip.label; })){
+            state.cuts.push({start_s:+clip.start_s, end_s:+clip.end_s, label:String(clip.label || 'Corte IA')});
+          }
+        });
+        state.cuts.sort(function(a,b){return a.start_s-b.start_s;});
+      } catch(_err){ /* iframe sin almacenamiento: revisión de sesión */ }
+    }
+    function persistSuggestionReviews(){
+      var key = suggestionStorageKey(); if (!key) return;
+      try {
+        var reviews = {};
+        state.suggestedEvents.forEach(function(ev){ if (ev.status !== 'suggested') reviews[ev.id] = ev.status; });
+        localStorage.setItem(key, JSON.stringify(reviews));
+      } catch(_err){ /* almacenamiento opcional */ }
+    }
+    function candidateName(ev){
+      return ev.type === 'goal' ? 'Posible gol' :
+        ev.type === 'corner' ? 'Posible córner' : 'Posible tiro';
+    }
+    function seekPointsWithSuggestions(){
+      var pts = collectSeekPoints(state.annotations, state.cuts, state.events, kickoff());
+      state.suggestedEvents.forEach(function(ev){
+        if (ev.status === 'rejected') return;
+        pts.push({ t:ev.t, kind:'ai', label:candidateName(ev),
+                   key:'ai:'+ev.id, end_s:ev.end_s });
+      });
+      pts.sort(function(a,b){return a.t-b.t;});
+      return pts;
+    }
+    function renderSuggestedMoments(){
+      var box = $('aiEventsList'); if (!box) return;
+      box.replaceChildren();
+      var items = state.suggestedEvents || [];
+      var count = $('aiCount');
+      if (count) count.textContent = items.length + (items.length === 1 ? ' sugerencia' : ' sugerencias');
+      if (!items.length){
+        var empty = document.createElement('p'); empty.className = 'ai-empty';
+        empty.textContent = state.track ?
+          'No hay candidatos con evidencia suficiente. El detector necesita balón con coordenadas de campo fiables; no inventa eventos.' :
+          'Analiza un vídeo para obtener sugerencias automáticas.';
+        box.appendChild(empty); return;
+      }
+      items.forEach(function(ev){
+        var item = document.createElement('div'); item.className = 'ai-item ' + ev.status;
+        var top = document.createElement('div'); top.className = 'ai-top';
+        var title = document.createElement('span'); title.className = 'ai-title';
+        title.textContent = candidateName(ev) + (ev.status === 'confirmed' ? ' · Revisado' : ev.status === 'rejected' ? ' · Descartado' : '');
+        var time = document.createElement('span'); time.className = 'ai-time'; time.textContent = fmtMatch(ev.t);
+        top.appendChild(title); top.appendChild(time); item.appendChild(top);
+        var reason = document.createElement('p'); reason.className = 'ai-reason';
+        reason.textContent = String(ev.reason || 'Revisa el vídeo para confirmar esta jugada.');
+        item.appendChild(reason);
+        var actions = document.createElement('div'); actions.className = 'ai-actions';
+        function action(label, onClick){
+          var btn = document.createElement('button'); btn.type = 'button';
+          btn.textContent = label; btn.addEventListener('click', onClick); actions.appendChild(btn);
+        }
+        action('▶ Ver', function(){cancelPlayAll(); jumpTo(ev.start_s); if (state.videoLoaded) video.play();});
+        action('Guardar corte', function(){
+          var label = candidateName(ev) + ' · revisar';
+          var already = state.cuts.some(function(cut){
+            return Math.abs(cut.start_s-ev.start_s)<.05 && cut.label === label;
+          });
+          if (!already){
+            state.cuts.push({start_s:ev.start_s,end_s:ev.end_s,label:label});
+            state.cuts.sort(function(a,b){return a.start_s-b.start_s;});
+            var key = suggestionStorageKey();
+            if (key){
+              try {
+                var clips = JSON.parse(localStorage.getItem(key+':clips')||'[]');
+                clips.push({start_s:ev.start_s,end_s:ev.end_s,label:label});
+                localStorage.setItem(key+':clips',JSON.stringify(clips.slice(-120)));
+              } catch(_err){}
+            }
+          }
+          renderCuts(); renderTimeline(); updateStatus(); showMsg('Corte sugerido guardado.');
+        });
+        if (ev.status !== 'confirmed') action('Confirmar', function(){
+          ev.status='confirmed';persistSuggestionReviews();renderSuggestedMoments();renderTimeline();
+        });
+        if (ev.status !== 'rejected') action('Descartar', function(){
+          ev.status='rejected';persistSuggestionReviews();renderSuggestedMoments();renderTimeline();
+        });
+        if (ev.status !== 'suggested') action('Restablecer', function(){
+          ev.status='suggested';persistSuggestionReviews();renderSuggestedMoments();renderTimeline();
+        });
+        item.appendChild(actions); box.appendChild(item);
+      });
+    }
+
     function loadTracking(data, label){
       if (!data || !Array.isArray(data.samples)) { showMsg('Ese JSON no contiene el array «samples» del tracking.'); return; }
       state.track = data;
@@ -1520,10 +1631,10 @@
     $('prevEventBtn').addEventListener('click', function(){ jumpToEvent(-1); });
     $('nextEventBtn').addEventListener('click', function(){ jumpToEvent(1); });
     function jumpToEvent(dir){
-      var pts = collectSeekPoints(state.annotations, state.cuts, state.events, kickoff());
+      var pts = seekPointsWithSuggestions();
       var t = video.currentTime || 0;
       var p = dir < 0 ? prevEventPoint(pts, t) : nextEventPoint(pts, t);
-      if (!p){ showMsg(dir < 0 ? 'No hay más señalizaciones ni cortes antes de este momento.' : 'No hay más señalizaciones ni cortes después de este momento.'); return; }
+      if (!p){ showMsg('No hay más jugadas marcadas en esa dirección.'); return; }
       cancelPlayAll();
       jumpTo(p.t); video.play();
     }
@@ -1572,14 +1683,14 @@
       var a = 0, span = total;
       if (r){ a = r.a; span = r.b - r.a; }
       if (!span) return;
-      var pts = collectSeekPoints(state.annotations, state.cuts, state.events, kickoff());
+      var pts = seekPointsWithSuggestions();
       state._seekPoints = pts;
       pts.forEach(function(p){
         var m = document.createElement('div');
         m.className = 'marker ' + p.kind;
         m.style.left = seekPointPct(p.t, a, a + span) + '%';
         m.dataset.key = p.key;
-        m.title = (p.kind === 'anno' ? 'Señalización' : p.kind === 'cut' ? 'Corte' : 'Evento') + ' · ' + p.label + ' · Partido ' + fmtMatch(p.t);
+        m.title = (p.kind === 'ai' ? 'Candidato IA' : p.kind === 'anno' ? 'Señalización' : p.kind === 'cut' ? 'Corte' : 'Evento') + ' · ' + p.label + ' · Partido ' + fmtMatch(p.t);
         m.addEventListener('click', function(ev){
           ev.stopPropagation();
           cancelPlayAll();
@@ -1622,8 +1733,26 @@
           var bar = document.createElement('div'); bar.className = 'tl-track-bar';
           bar.textContent = 'Tracking IA · ' + state.samples.length.toLocaleString('es-ES') + ' muestras';
           lt.appendChild(bar);
+          var dom = tlDomain();
+          if (dom && dom.b > dom.a){
+            state.suggestedEvents.forEach(function(ev){
+              if (ev.status === 'rejected' || ev.t < dom.a || ev.t > dom.b) return;
+              var marker = document.createElement('button');
+              marker.type = 'button';
+              marker.className = 'tl-ai-event ' + ev.type + (ev.status === 'confirmed' ? ' confirmed' : '');
+              marker.style.left = seekPointPct(ev.t, dom.a, dom.b) + '%';
+              marker.textContent = ev.type === 'goal' ? 'G' : ev.type === 'corner' ? 'C' : 'T';
+              marker.title = candidateName(ev) + ' · ' + fmtMatch(ev.t) + ' · Pulsa para revisar';
+              marker.addEventListener('pointerdown', function(e){e.stopPropagation();});
+              marker.addEventListener('click', function(e){
+                e.stopPropagation(); cancelPlayAll(); jumpTo(ev.start_s);
+                if (state.videoLoaded) video.play();
+              });
+              lt.appendChild(marker);
+            });
+          }
         } else {
-          lt.innerHTML = '<span class="tl-empty">Sin tracking</span>';
+          lt.innerHTML = '<span class="tl-empty">Analiza un vídeo para obtener jugadas sugeridas</span>';
         }
       }
       renderTlRuler();
