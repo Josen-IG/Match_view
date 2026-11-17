@@ -82,6 +82,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Optional
 
+from player_tracking import (PlayerIDTracker, estimate_camera_transform,
+                             flip_camera_transform)
+
 # ---------------------------------------------------------------------------
 # Constantes / defaults (todos configurables por parámetro)
 # ---------------------------------------------------------------------------
@@ -1408,8 +1411,10 @@ def _track_video(
     # entre muestras (0,1 s) rompe sus predicciones de Kalman y sus
     # umbrales (new_track 0,25) se tragan el balón; con predict() el balón
     # aparece en ~20% de muestras y las personas en ~18 por fotograma.
-    tracks_activos: dict[int, dict] = {}
-    siguiente_id = 0
+    id_tracker = PlayerIDTracker(sample_fps=fps_real / paso,
+                                 match_radius=TRACK_MATCH_RADIUS)
+    camera_gray = None
+    camera_previous_boxes = []
     # Predictor del balón para elegir entre candidatas (posición + velocidad
     # de velocidad constante, como el Kalman del post-proceso).
     balon_pred: dict | None = None
@@ -1430,6 +1435,19 @@ def _track_video(
                     progress(f"YOLO siguiendo el vídeo: {format_mmss(t)} de partido.",
                              0.05 + 0.35 * min(1.0, procesados / total_a_procesar))
                 alto, ancho = frame.shape[:2]
+                # Estimar pan/zoom con rasgos de fondo en imagen reducida.
+                cam_w = min(480, ancho)
+                cam_h = max(1, int(round(alto * cam_w / ancho)))
+                gray_now = cv2.cvtColor(
+                    cv2.resize(frame, (cam_w, cam_h)), cv2.COLOR_BGR2GRAY)
+                try:
+                    camera_affine = estimate_camera_transform(
+                        camera_gray, gray_now, camera_previous_boxes)
+                except cv2.error:
+                    camera_affine = None
+                camera_gray = gray_now
+                camera_affine = flip_camera_transform(
+                    camera_affine, flip_x=flip_x, flip_y=flip_y)
                 try:
                     resultados = detector.predict(
                         frame, classes=[0, 1], imgsz=imgsz, verbose=False,
@@ -1442,6 +1460,7 @@ def _track_video(
                 personas: list[dict] = []
                 balon: dict | None = None
                 candidatos_balon: list[dict] = []
+                detecciones: list[dict] = []
                 if resultados and len(resultados) > 0:
                     res = resultados[0]
                     if res.boxes is not None and res.boxes.cls is not None:
@@ -1450,7 +1469,6 @@ def _track_video(
                         confs = (res.boxes.conf.cpu().tolist()
                                  if res.boxes.conf is not None
                                  else [0.0] * len(clases))
-                        detecciones = []
                         for clase, caja, conf_det in zip(clases, cajas, confs):
                             clase = int(clase)
                             x0, y0, x1, y1 = [float(v) for v in caja]
@@ -1498,77 +1516,42 @@ def _track_video(
                             else:
                                 balon = max(candidatos_balon,
                                             key=lambda c: c["conf"])
-                        # Asociación global: cada pareja detección-track compite por
-                        # distancia predicha, evitando que una detección de alta
-                        # confianza se apropie del ID de otra persona más cercana.
-                        # La predicción usa velocidad suavizada en coordenadas
-                        # de imagen; se limita para no extrapolar saltos enormes.
-                        parejas = []
-                        for indice, det in enumerate(detecciones):
-                            for tid, tr in tracks_activos.items():
-                                gap = procesados - tr["ultimo"]
-                                if gap < 1 or gap > TRACK_MAX_GAP_SAMPLES:
-                                    continue
-                                if abs(det["h"] - tr["h"]) > 0.5 * max(det["h"], tr["h"], 1.0):
-                                    continue
-                                dt = min(gap, 3)
-                                px = tr["x"] + max(-4.0, min(4.0, tr.get("vx", 0.0) * dt))
-                                py = tr["y"] + max(-4.0, min(4.0, tr.get("vy", 0.0) * dt))
-                                distancia = math.hypot(det["cx"] - px, det["cy"] - py)
-                                # La tolerancia crece ligeramente durante oclusiones.
-                                radio = TRACK_MATCH_RADIUS * (1.0 + 0.08 * min(gap - 1, 5))
-                                if distancia <= radio:
-                                    parejas.append((distancia / radio, distancia, indice, tid))
-                        parejas.sort()
-                        asignados: dict[int, int] = {}
-                        usados: set[int] = set()
-                        for _, _, indice, tid in parejas:
-                            if indice not in asignados and tid not in usados:
-                                asignados[indice] = tid
-                                usados.add(tid)
-                        for indice, det in enumerate(detecciones):
-                            mejor_id = asignados.get(indice)
-                            if mejor_id is None:
-                                mejor_id = siguiente_id
-                                siguiente_id += 1
-                                vx = vy = 0.0
-                            else:
-                                anterior = tracks_activos[mejor_id]
-                                gap = max(1, procesados - anterior["ultimo"])
-                                vx_nueva = (det["cx"] - anterior["x"]) / gap
-                                vy_nueva = (det["cy"] - anterior["y"]) / gap
-                                # Reducir ruido de detección y cambios bruscos.
-                                vx = 0.5 * anterior.get("vx", 0.0) + 0.5 * vx_nueva
-                                vy = 0.5 * anterior.get("vy", 0.0) + 0.5 * vy_nueva
-                            tracks_activos[mejor_id] = {
-                                "x": det["cx"], "y": det["cy"],
-                                "h": det["h"], "ultimo": procesados,
-                                "vx": vx, "vy": vy,
-                            }
-                            personas.append({
-                                "track_id": mejor_id,
-                                "x": det["cx"], "y": det["cy"],
-                                "w": det["w"], "h": det["h"],
-                                "px": (det["caja"][0] + det["caja"][2]) / 2.0,
-                                "py": float(det["caja"][3]),
-                                "pitch_x": None, "pitch_y": None,
-                                "team": "desconocido",
-                            })
-                            x0, y0, x1, y1 = det["caja"]
-                            hsv = _color_torso(frame, x0, y0, x1, y1)
-                            personas[-1]["color_rgb"] = _hsv_a_hex(hsv)
-                            equipo_det = _clasificar_color(
-                                hsv, ref_local, ref_visitante,
-                                ref_gk_local, ref_gk_visitante, ref_arbitro)
-                            votos_color[mejor_id][equipo_det] += 1
-                            altura_px = float(y1 - y0)
-                            vista = mejor_vista.get(mejor_id)
-                            if vista is None or altura_px > vista[0]:
-                                mejor_vista[mejor_id] = (altura_px, equipo_det)
-                        # Limpiar tracks que llevan demasiado sin verse.
-                        for tid in [t for t, tr in tracks_activos.items()
-                                    if procesados - tr["ultimo"] > TRACK_MAX_GAP_SAMPLES]:
-                            del tracks_activos[tid]
+                # Usar apariencia antes de asociar: evita intercambiar IDs
+                # cuando dos jugadores están próximos o se cruzan.
+                for det in detecciones:
+                    x0, y0, x1, y1 = det["caja"]
+                    hsv = _color_torso(frame, x0, y0, x1, y1)
+                    det["hsv"] = hsv
+                    det["team_hint"] = _clasificar_color(
+                        hsv, ref_local, ref_visitante, ref_gk_local,
+                        ref_gk_visitante, ref_arbitro)
+                # Actualizar también en muestras sin detecciones.
+                track_ids = id_tracker.update(
+                    detecciones, procesados, camera_transform=camera_affine)
+                for det, tid in zip(detecciones, track_ids):
+                    x0, y0, x1, y1 = det["caja"]
+                    personas.append({
+                        "track_id": tid,
+                        "x": det["cx"], "y": det["cy"],
+                        "w": det["w"], "h": det["h"],
+                        "px": (x0 + x1) / 2.0,
+                        "py": float(y1),
+                        "pitch_x": None, "pitch_y": None,
+                        "team": "desconocido",
+                        "color_rgb": _hsv_a_hex(det["hsv"]),
+                    })
+                    equipo_det = det["team_hint"]
+                    votos_color[tid][equipo_det] += 1
+                    altura_px = float(y1 - y0)
+                    vista = mejor_vista.get(tid)
+                    if vista is None or altura_px > vista[0]:
+                        mejor_vista[tid] = (altura_px, equipo_det)
+                camera_previous_boxes = [
+                    (x0 * cam_w / ancho, y0 * cam_h / alto,
+                     x1 * cam_w / ancho, y1 * cam_h / alto)
+                    for det in detecciones
+                    for x0, y0, x1, y1 in [det["caja"]]
+                ]
                 # Keyframe del campo: recalibrar la homografía con los
                 # keypoints visibles en este fotograma (0,20 s a 320 px).
                 if (modelo_campo is not None
@@ -2902,6 +2885,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                     round(float(p["pitch_x"]), 1),
                     round(float(p["pitch_y"]), 1),
                     TRACKING_TEAM_CODE.get(p.get("team"), 5),
+                    int(p.get("track_id", -1)),
                 ])
         muestra_json = {
             "t": round(float(m["t_video"]), 2),
