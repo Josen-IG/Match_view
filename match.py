@@ -16,6 +16,7 @@ import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tracking_catalog import read_tracking_header, inspect_tracking, deduplicate_library
+from heatmap_utils import build_heatmap_histogram
 
 # OpenCV solo se necesita para exportar clips con overlay; si no está,
 # la exportación usa ffmpeg por CLI (corte sin overlay) o avisa.
@@ -459,9 +460,9 @@ def generar_figura_mapa_calor(tracking, sujeto, tramo):
         return None, "matplotlib no está disponible en este equipo."
     kickoff = float(tracking.get("kickoff_s") or 0)
     _, ini_p, fin_p = tramo
-    xs, ys, usa_campo = _puntos_mapa_calor(
+    hist, usa_campo, puntos = build_heatmap_histogram(
         tracking, sujeto, kickoff + ini_p, kickoff + fin_p)
-    if not xs:
+    if not puntos:
         return None, "Sin detecciones en ese tramo para lo seleccionado."
     teams = tracking.get("teams") or {}
     colors = tracking.get("colors") or {}
@@ -488,8 +489,6 @@ def generar_figura_mapa_calor(tracking, sujeto, tramo):
     # Crear una única figura por mapa; Pitch.draw ya crea la suya.
     fig = None
     if usa_campo:
-        hist, _, _ = np.histogram2d(xs, ys, bins=[35, 23],
-                                    range=[[0, 105], [0, 68]])
         if MPLSOCER_DISPONIBLE:
             pitch = Pitch(pitch_type="custom", pitch_length=105, pitch_width=68,
                           pitch_color="white", line_color="#333333", linewidth=1.5)
@@ -507,8 +506,6 @@ def generar_figura_mapa_calor(tracking, sujeto, tramo):
         fig.colorbar(im, ax=ax, shrink=0.8, label="Nº de detecciones")
         nota = "Coordenadas de campo (105×68 m)."
     else:
-        hist, _, _ = np.histogram2d(xs, ys, bins=[50, 28],
-                                    range=[[0, 100], [0, 100]])
         fig, ax = plt.subplots(figsize=(8, 5.2), dpi=65)
         ax.set_xlim(0, 100)
         ax.set_ylim(100, 0)
