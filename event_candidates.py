@@ -20,7 +20,7 @@ def _valid_point(sample):
         return None
     if not all(math.isfinite(n) for n in (t, x, y)):
         return None
-    if sample.get("bf", "yolo") != "yolo":
+    if sample.get("bf") != "yolo":
         return None
     # Tolerar 2 m más allá de línea de gol para sugerir posible cruce.
     if not (-2 <= x <= 107 and -2 <= y <= 70):
