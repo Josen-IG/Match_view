@@ -602,7 +602,7 @@
             <div><strong id="mvMeasuredSamples">—</strong><span>Muestras analizadas</span></div>
             <div><strong id="mvMeasuredBall">—</strong><span>Balón visto por YOLO</span></div>
             <div><strong id="mvMeasuredPitch">—</strong><span>Balón calibrado al campo</span></div>
-            <div><strong id="mvMeasuredPlayers">—</strong><span>Jugadores visibles por muestra</span></div>
+            <div><strong id="mvMeasuredPlayers">—</strong><span>Personas detectadas / muestra</span></div>
           </div>
           <div class="mv-measured-grid">
             <canvas id="mvMeasuredField" width="630" height="408" role="img"
@@ -1316,6 +1316,37 @@
       return out;
     }
 
+    /* Indicadores descriptivos obtenidos del JSON. No interpolar ni
+       extrapolar posiciones: cobertura NO equivale a precisión. */
+    function measuredTrackingStats(samples, a, b){
+      var n=0, directBall=0, validBall=0, people=0;
+      var zones=[0,0,0,0,0,0,0,0,0];
+      var byTeam={local:0,visitante:0};
+      (samples||[]).forEach(function(s){
+        if (!s || typeof s.t!=='number'||!isFinite(s.t)||s.t<a||s.t>=b)return;
+        n++;
+        if (s.bf==='yolo' && Array.isArray(s.b)) directBall++;
+        if (Array.isArray(s.bp) && typeof s.bp[0]==='number' &&
+            typeof s.bp[1]==='number' && isFinite(s.bp[0]) &&
+            isFinite(s.bp[1]) && s.bp[0]>=0 && s.bp[0]<=105 &&
+            s.bp[1]>=0 && s.bp[1]<=68) validBall++;
+        people+=Array.isArray(s.p)?s.p.length:0;
+        (s.pp||[]).forEach(function(p){
+          if (!Array.isArray(p)||typeof p[0]!=='number'||
+              typeof p[1]!=='number'||!isFinite(p[0])||!isFinite(p[1])||
+              p[0]<0||p[0]>105||p[1]<0||p[1]>68) return;
+          if ([0,1,2,3].indexOf(p[2])<0) return;
+          var col=Math.min(2,Math.floor(p[0]/35));
+          var row=Math.min(2,Math.floor(p[1]/(68/3)));
+          zones[row*3+col]++;
+          if (p[2]===0||p[2]===2)byTeam.local++;
+          else byTeam.visitante++;
+        });
+      });
+      return {samples:n,ballYolo:directBall,ballPitch:validBall,
+        peopleMean:n?people/n:0,zones:zones,byTeam:byTeam,
+        positions:zones.reduce(function(sum,v){return sum+v;},0)};
+    }
     /* MV-PURE-LOGIC-END */
     </script>
 
@@ -1663,6 +1694,69 @@
       });
     }
 
+    function buildMeasuredPeriods(){
+      var select=$('mvMeasuredPeriod');if(!select)return;
+      select.replaceChildren();
+      function option(value,label){
+        var el=document.createElement('option');el.value=value;
+        el.textContent=label;select.appendChild(el);
+      }
+      option('all','Todo el análisis');
+      var samples=state.samples||[];
+      if(!samples.length)return;
+      var start=Math.max(0,Math.floor((samples[0].t-kickoff())/300));
+      var end=Math.floor((samples[samples.length-1].t-kickoff())/300);
+      for(var j=start;j<=end;j++)option(String(j),(j*5)+'–'+((j+1)*5)+"'");
+    }
+    function renderMeasuredAnalytics(){
+      var cv=$('mvMeasuredField'),select=$('mvMeasuredPeriod');
+      if(!cv||!select)return;
+      var period=select.value;
+      var a=period==='all'?-Infinity:kickoff()+Number(period)*300;
+      var b=period==='all'?Infinity:a+300;
+      var stats=state.trackMismatch?
+        measuredTrackingStats([],a,b):
+        measuredTrackingStats(state.samples,a,b);
+      function pct(x){return stats.samples?(100*x/stats.samples).toFixed(1)+' %':'—';}
+      $('mvMeasuredSamples').textContent=stats.samples.toLocaleString('es-ES');
+      $('mvMeasuredBall').textContent=pct(stats.ballYolo);
+      $('mvMeasuredPitch').textContent=pct(stats.ballPitch);
+      $('mvMeasuredPlayers').textContent=stats.samples?
+        stats.peopleMean.toFixed(1):'—';
+      var ctx=cv.getContext('2d'),w=cv.width,h=cv.height;
+      ctx.clearRect(0,0,w,h);
+      ctx.fillStyle='#194836';ctx.fillRect(0,0,w,h);
+      ctx.lineWidth=2;ctx.strokeStyle='rgba(229,255,238,.78)';
+      ctx.strokeRect(2,2,w-4,h-4);
+      ctx.beginPath();ctx.moveTo(w/2,0);ctx.lineTo(w/2,h);ctx.stroke();
+      ctx.beginPath();ctx.ellipse(w/2,h/2,h*9.15/68,h*9.15/68,0,0,Math.PI*2);ctx.stroke();
+      ctx.strokeRect(2, (h-40.32/68*h)/2, w*16.5/105,h*40.32/68);
+      ctx.strokeRect(w*(105-16.5)/105,(h-40.32/68*h)/2,w*16.5/105,h*40.32/68);
+      var max=Math.max(1,...stats.zones);
+      stats.zones.forEach(function(value,i){
+        var r=Math.floor(i/3), col=i%3;
+        ctx.fillStyle='rgba(80,163,255,'+(value?(.08+.46*value/max):0)+')';
+        ctx.fillRect(col*w/3,r*h/3,w/3,h/3);
+      });
+      var zonesBox=$('mvMeasuredZones');zonesBox.replaceChildren();
+      var summary=[
+        ['Posiciones sobre el campo',stats.positions],
+        ['Observaciones locales',stats.byTeam.local],
+        ['Observaciones visitantes',stats.byTeam.visitante],
+      ];
+      summary.forEach(function(pair){
+        var row=document.createElement('div');row.className='mv-measured-zone';
+        var label=document.createElement('span');label.textContent=pair[0];
+        var value=document.createElement('b');value.textContent=pair[1].toLocaleString('es-ES');
+        row.appendChild(label);row.appendChild(value);zonesBox.appendChild(row);
+      });
+      if(!stats.positions){
+        var note=document.createElement('p');note.textContent=
+          'Sin coordenadas de campo suficientes para el mapa territorial.';
+        zonesBox.appendChild(note);
+      }
+    }
+    $('mvMeasuredPeriod').addEventListener('change',renderMeasuredAnalytics);
     function loadTracking(data, label){
       if (!data || !Array.isArray(data.samples)) { showMsg('Ese JSON no contiene el array «samples» del tracking.'); return; }
       state.track = data;
@@ -1694,6 +1788,8 @@
       buildMarkers();
       renderTimeline();
       renderSuggestedMoments();
+      buildMeasuredPeriods();
+      renderMeasuredAnalytics();
       renderPossessionPanel(true);
       renderEventList();
       renderFullSummary();
