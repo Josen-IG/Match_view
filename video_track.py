@@ -1424,6 +1424,13 @@ def _track_video(
     total_a_procesar = max(1, int(duracion_partido * fps_real) // paso)
     try:
         while True:
+            # No convertir a BGR los fotogramas que no se analizan.
+            # grab() avanza el vídeo sin pasar por retrieve() en OpenCV.
+            if frame_idx % paso:
+                if not cap.grab():
+                    break
+                frame_idx += 1
+                continue
             ok, frame = cap.read()
             if not ok:
                 break
@@ -2933,8 +2940,15 @@ def export_tracking_json(muestras: list[dict], informe: dict,
     }
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, ensure_ascii=False),
-                           encoding="utf-8")
+    # Escritura compacta + reemplazo atómico: evita duplicar en RAM
+    # todo el JSON y no deja un tracking truncado si falla el proceso.
+    provisional = output_path.with_suffix(output_path.suffix + ".tmp")
+    try:
+        with provisional.open("w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, separators=(",", ":"))
+        provisional.replace(output_path)
+    finally:
+        provisional.unlink(missing_ok=True)
     return str(output_path)
 
 
