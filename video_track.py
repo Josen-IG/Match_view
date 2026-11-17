@@ -4126,6 +4126,15 @@ def _analizar_impl(
         )
     except Exception:
         tracking_path = None
+    # Generar informes reutilizando el JSON: si fallan no se pierde el
+    # tracking ya procesado. El error queda visible en el resultado.
+    informes_auto = {}
+    if tracking_path:
+        try:
+            from match_reports import generate_match_reports
+            informes_auto = generate_match_reports(tracking_path)
+        except Exception as error:
+            informes_auto = {"report_error": str(error)}
     update("Análisis completado: tracking generado.", 1.0)
     return {
         **informe_base,
@@ -4133,6 +4142,7 @@ def _analizar_impl(
         "pases": pases,
         "secuencias": secuencias,
         **rutas_informe,
+        **informes_auto,
         "tracking_json": tracking_path,
     }
 
