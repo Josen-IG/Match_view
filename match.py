@@ -1421,8 +1421,8 @@ elif st.session_state.pagina == "video":
     # sin re-analizar. El botón de re-analizar es solo un fallback.
     st.markdown("##### 🎥 Vídeo del partido")
     st.caption(
-        "Pega la ruta del vídeo y el tracking se genera solo (YOLO, en "
-        "local), empezando en el saque inicial: lo anterior "
+        "Selecciona el vídeo, revisa los límites del campo y pulsa Analizar. "
+        "El análisis comienza en el saque inicial: lo anterior "
         "(calentamiento) no se analiza y no ensucia las estadísticas. "
         "Si el vídeo ya tiene su tracking, se carga directamente. "
         "También puedes generar el tracking con el notebook de Colab (GPU) "
@@ -1465,6 +1465,43 @@ elif st.session_state.pagina == "video":
         st.info("Esta versión de Streamlit no admite actualización automática "
                 "del progreso. Se usará el modo clásico.")
         bg_video = False
+
+    # Previsualizar sin lanzar YOLO: comprobar que la máscara excluye
+    # graderío y personal fuera de las líneas antes de analizar horas.
+    if ruta_gen and os.path.isfile(ruta_gen):
+        if st.button("Previsualizar límites del campo", key="video_preview_field"):
+            try:
+                from pitch_filter import render_pitch_preview
+                if not CV2_DISPONIBLE:
+                    raise RuntimeError("OpenCV no está disponible.")
+                tiempo_inicio = parse_mmss(
+                    st.session_state.video_gen_kickoff or "00:00")
+                video_pre = cv2.VideoCapture(ruta_gen)
+                try:
+                    if not video_pre.isOpened():
+                        raise RuntimeError("No se pudo abrir el vídeo.")
+                    video_pre.set(cv2.CAP_PROP_POS_MSEC, tiempo_inicio * 1000)
+                    ok_pre, frame_pre = video_pre.read()
+                finally:
+                    video_pre.release()
+                if not ok_pre:
+                    raise RuntimeError("No se pudo obtener el fotograma del saque inicial.")
+                preview, campo_detectado, mensaje_campo = render_pitch_preview(frame_pre)
+                st.image(preview, caption="Línea verde: contorno del césped detectado.",
+                         use_container_width=True)
+                if campo_detectado:
+                    st.success(mensaje_campo)
+                else:
+                    st.warning(mensaje_campo)
+                st.caption("Esta vista no ejecuta YOLO. Comprueba que el contorno "
+                           "no incluye espectadores, entrenadores ni zona técnica.")
+            except Exception as error:
+                st.error(f"No se pudo previsualizar el campo: {error}")
+    iniciar_analisis = st.button(
+        "Analizar vídeo con YOLO", key="video_launch_analysis",
+        disabled=not (ruta_gen and os.path.isfile(ruta_gen)),
+        help="Inicia el tracking con la configuración actual. Usa primero "
+             "los 10 minutos de prueba para revisar el filtrado del campo.")
 
     # ¿Ya existe tracking para este vídeo? (mismo stem, en la carpeta de
     # la app, junto al vídeo o en su carpeta de clips).
@@ -1525,7 +1562,9 @@ elif st.session_state.pagina == "video":
         st.session_state.pop("video_fallo_path", None)
         st.session_state["tracking_del_video"] = str(tracking_gen)
         st.success(f"✅ Tracking ya generado para este vídeo ({tracking_gen.name}). Cargado en la pantalla manual.")
-    elif ruta_gen and (tracking_gen is None or forzar_gen or pendiente_bg) and not ya_cargado_gen and not fallo_gen:
+    elif (ruta_gen and (tracking_gen is None or forzar_gen or pendiente_bg)
+          and not ya_cargado_gen and not fallo_gen
+          and (iniciar_analisis or forzar_gen or pendiente_bg)):
         # No hay tracking: lanzar el análisis automáticamente.
         if not VIDEO_DISPONIBLE:
             st.error(f"⚠️ El análisis no está disponible en este equipo: {VIDEO_ERROR}. "
@@ -1658,6 +1697,11 @@ elif st.session_state.pagina == "video":
                     except Exception as err:  # noqa: BLE001 - mostrar cualquier fallo
                         st.error(f"Error inesperado durante el análisis: {err}")
                         st.session_state.video_fallo_path = ruta_gen
+    if (ruta_gen and tracking_gen is None and not pendiente_bg
+            and not fallo_gen and not iniciar_analisis and not forzar_gen):
+        st.info("Vídeo listo. Revisa los límites del campo y pulsa "
+                "«Analizar vídeo con YOLO» para iniciar el procesamiento.")
+
     # Fallback: re-analizar aunque ya exista tracking o haya fallado antes.
     if ruta_gen and (ya_cargado_gen or fallo_gen):
         if st.button("🔄 Re-analizar vídeo", key="video_gen_reanalizar"):
