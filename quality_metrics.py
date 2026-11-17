@@ -23,7 +23,9 @@ def assess_tracking_quality(samples, max_people_per_team=16):
     los informes. Acepta listas vacías y tracking sin homografía.
     """
     total = 0
-    n_ball_yolo = n_ball_pred = n_pitch = 0
+    n_ball_yolo = n_ball_pred = n_ball_interpolated = n_pitch = 0
+    uncertainty_sum = uncertainty_n = age_sum = 0
+    hidden_predictions = 0
     people_sum = total_people = n_unknown = 0
     duplicate_frames = nonmonotonic = invalid_coords = 0
     pitch_quality = Counter()
@@ -47,12 +49,22 @@ def assess_tracking_quality(samples, max_people_per_team=16):
             nonmonotonic += 1
 
         ball = sample.get("ball")
-        if isinstance(ball, dict) and ball.get("fuente", "yolo") == "yolo":
+        ball_smoothed = sample.get("ball_s") or {}
+        accepted = sample.get("ball_yolo_accepted", isinstance(ball, dict))
+        source = ball_smoothed.get("fuente")
+        if accepted and isinstance(ball, dict):
             n_ball_yolo += 1
-        elif (isinstance(ball, dict) and ball.get("fuente") == "kalman") or (
-            isinstance(sample.get("ball_s"), dict)
-            and sample["ball_s"].get("fuente") == "kalman"):
+        elif source == "kalman":
             n_ball_pred += 1
+        elif source == "interpolado":
+            n_ball_interpolated += 1
+        if source in ("kalman", "interpolado"):
+            if _finite(ball_smoothed.get("sigma")):
+                uncertainty_sum += max(0.0, float(ball_smoothed["sigma"]))
+                uncertainty_n += 1
+            if _finite(ball_smoothed.get("missing_s")):
+                age_sum += max(0.0, float(ball_smoothed["missing_s"]))
+        hidden_predictions += len(sample.get("predicted_people") or [])
 
         if sample.get("pitch_ok"):
             n_pitch += 1
@@ -119,6 +131,13 @@ def assess_tracking_quality(samples, max_people_per_team=16):
         "avg_people_visible": round(people_sum / total, 1) if total else 0.0,
         "ball_yolo_pct": pct(n_ball_yolo, total),
         "ball_predicted_pct": pct(n_ball_pred, total),
+        "ball_interpolated_pct": pct(n_ball_interpolated, total),
+        "ball_prediction_uncertainty_u_mean": (
+            round(uncertainty_sum / uncertainty_n, 2) if uncertainty_n else None),
+        "ball_prediction_missing_s_mean": (
+            round(age_sum / (n_ball_pred + n_ball_interpolated), 2)
+            if n_ball_pred + n_ball_interpolated else None),
+        "hidden_player_hypotheses": hidden_predictions,
         "pitch_coverage_pct": pct(n_pitch, total),
         "pitch_quality_frames": dict(pitch_quality),
         "field_filter": dict(field_filter),
