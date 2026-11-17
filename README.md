@@ -98,6 +98,33 @@ coordenadas válidas pueden generar sugerencias en memoria.
 validadas con partidos completos etiquetados. La perspectiva y los
 movimientos de cámara pueden generar falsos positivos y omisiones.
 
+### Radar táctico sincronizado y posesiones
+
+El visor de **Vídeo** muestra un radar 2D junto al reproductor. Las posiciones
+se dibujan únicamente a partir de las coordenadas métricas `pp` (jugadores)
+y `bp` (balón) generadas mediante homografía. Se actualiza al avanzar,
+pausar o buscar un instante. Cuando faltan datos, el radar indica cobertura
+parcial o ausencia de posiciones en vez de reconstruir jugadores ocultos.
+
+La tarjeta **Posesiones** ofrece cantidad y duración media de los tramos con
+control estimado, además de una lista filtrable por equipo y por el tramo
+actual de cinco minutos. Se separan posesiones por cambio de equipo,
+disputa o hueco temporal; solo se visualizan segmentos observados
+suficientemente largos. Al pulsar una posesión, el vídeo salta a su inicio.
+Las zonas se muestran como *tercio izquierdo, central o derecho* y únicamente
+cuando el balón tiene coordenadas de campo válidas. No se infiere
+automáticamente qué equipo está atacando a qué portería.
+
+El panel **Contexto táctico** aprovecha `tactical_analysis` para mostrar
+anchura, profundidad, jugadores visibles y proximidad de defensores al balón
+por periodos de cinco minutos. Exige varias muestras con cobertura útil;
+si no existen, indica información insuficiente. No afirma formaciones ni
+alturas de bloque cuando no puede verificarlas.
+
+El visor y `match.py` cargan el tracking almacenado automáticamente, sin
+que sea necesario subir archivos JSON. La línea de tiempo IA y la revisión
+de jugadas sugeridas se conservan.
+
 ### Estadísticas por jugador
 
 Se muestran por `track_id`, **no por dorsal verificado**. Los cálculos de
