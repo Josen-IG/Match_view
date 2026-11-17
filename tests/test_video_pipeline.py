@@ -86,9 +86,9 @@ class VideoPipelineTests(unittest.TestCase):
                     conf=_CpuTensor([.98, .98]),
                 ))]
         cap = _FakeCapture()
-        with patch.dict(sys.modules, {"ultralytics": types.SimpleNamespace(YOLO=Detector)}), \\
-             patch("cv2.VideoCapture", return_value=cap), \\
-             patch.object(video_track, "video_duration", return_value=1.0), \\
+        with patch.dict(sys.modules, {"ultralytics": types.SimpleNamespace(YOLO=Detector)}), \
+             patch("cv2.VideoCapture", return_value=cap), \
+             patch.object(video_track, "video_duration", return_value=1.0), \
              patch.object(video_track, "PitchMapper", FakeMapper):
             samples, _, teams = video_track._track_video(
                 "simulado.mp4", "modelo_propio.pt", sample_fps=10,
@@ -101,8 +101,8 @@ class VideoPipelineTests(unittest.TestCase):
     def test_without_field_calibration_strict_mode_skips_people(self):
         import video_track
         cap = _FakeCapture()
-        with patch.dict(sys.modules, {"ultralytics": types.SimpleNamespace(YOLO=_FakeYOLO)}), \\
-             patch("cv2.VideoCapture", return_value=cap), \\
+        with patch.dict(sys.modules, {"ultralytics": types.SimpleNamespace(YOLO=_FakeYOLO)}), \
+             patch("cv2.VideoCapture", return_value=cap), \
              patch.object(video_track, "video_duration", return_value=1.0):
             samples, _, _ = video_track._track_video(
                 "simulado.mp4", "modelo_propio.pt", sample_fps=10,
