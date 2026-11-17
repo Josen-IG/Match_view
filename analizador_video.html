@@ -452,11 +452,6 @@
         </div>
       </aside>
       <div>
-        <div class="view-tabs" role="tablist" aria-label="Vista principal">
-          <button type="button" class="view-tab active" id="tabVideo" role="tab" aria-selected="true">📹 Vídeo</button>
-          <button type="button" class="view-tab" id="tabBoard" role="tab" aria-selected="false">⚽ Pizarra táctica</button>
-          <button type="button" class="view-tab" id="tabAnalytics" role="tab" aria-selected="false">📊 Analytics</button>
-        </div>
         <section class="stage-wrap" id="stageWrap">
           <div class="stage" id="stage">
             <div id="stageInner">
@@ -3392,38 +3387,14 @@
       }, 'image/png');
     });
 
-    /* Pestañas Vídeo / Pizarra / Analytics: la pizarra y el Analytics
-       sustituyen al escenario, a los controles y a la línea de tiempo;
-       al abrirlos se pausa el vídeo. */
-    function setView(view){
-      var isBoard = view === 'board';
-      var isAnalytics = view === 'analytics';
-      $('stageWrap').hidden = isBoard || isAnalytics;
-      $('videoControls').hidden = isBoard || isAnalytics;
-      $('timeline').hidden = isBoard || isAnalytics;
-      $('toolRail').hidden = isBoard || isAnalytics;
-      document.querySelector('.layout').classList.toggle('board-view', isBoard || isAnalytics);
-      $('boardWrap').hidden = !isBoard;
-      $('analyticsWrap').hidden = !isAnalytics;
-      $('tabVideo').classList.toggle('active', !isBoard && !isAnalytics);
-      $('tabBoard').classList.toggle('active', isBoard);
-      $('tabAnalytics').classList.toggle('active', isAnalytics);
-      $('tabVideo').setAttribute('aria-selected', String(!isBoard && !isAnalytics));
-      $('tabBoard').setAttribute('aria-selected', String(isBoard));
-      $('tabAnalytics').setAttribute('aria-selected', String(isAnalytics));
-      if (isBoard){
-        video.pause();
-        drawBoard();
-      } else if (isAnalytics){
-        video.pause();
-        renderAnalytics();
-      } else {
-        sizeCanvases();
-      }
-    }
-    $('tabVideo').addEventListener('click', function(){ setView('video'); });
-    $('tabBoard').addEventListener('click', function(){ setView('board'); });
-    $('tabAnalytics').addEventListener('click', function(){ setView('analytics'); });
+    /* El reproductor es la única vista. Se conservan los métodos de
+       análisis y pizarra para usos internos, pero no ocupan la UI. */
+    $('stageWrap').hidden = false;
+    $('videoControls').hidden = false;
+    $('timeline').hidden = false;
+    $('toolRail').hidden = false;
+    $('boardWrap').hidden = true;
+    $('analyticsWrap').hidden = true;
 
     /* ================= Analytics ================= */
     /* Todo se calcula en JS desde el tracking cargado (muestras y
