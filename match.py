@@ -1472,17 +1472,27 @@ elif st.session_state.pagina == "video":
                 tracking_gen = cand
                 break
     forzar_gen = st.session_state.pop("video_forzar", False)
+    # Si el JSON aparece antes de finalizar informes, continuar mostrando
+    # el trabajo de fondo en lugar de dar el análisis por completado.
+    pendiente_bg = False
+    if bg_video and st.session_state.get("video_bg_job"):
+        from video_jobs import get_video_job
+        estado_bg = get_video_job(st.session_state.video_bg_job)
+        firma_bg = st.session_state.get("video_bg_signature")
+        pendiente_bg = bool(
+            firma_bg and firma_bg[0] == ruta_gen
+            and estado_bg and estado_bg["state"] in ("queued", "running"))
     ya_cargado_gen = bool(ruta_gen) and st.session_state.get("video_analizado_path") == ruta_gen
     fallo_gen = bool(ruta_gen) and st.session_state.get("video_fallo_path") == ruta_gen
     if ruta_gen and not os.path.isfile(ruta_gen):
         st.warning("⚠️ Esa ruta de vídeo no existe en este equipo. Revisa la ruta.")
-    elif ruta_gen and tracking_gen is not None and not forzar_gen and not ya_cargado_gen:
+    elif ruta_gen and tracking_gen is not None and not forzar_gen and not ya_cargado_gen and not pendiente_bg:
         # Tracking ya generado: cargarlo sin re-analizar.
         st.session_state.video_analizado_path = ruta_gen
         st.session_state.pop("video_fallo_path", None)
         st.session_state["tracking_del_video"] = str(tracking_gen)
         st.success(f"✅ Tracking ya generado para este vídeo ({tracking_gen.name}). Cargado en la pantalla manual.")
-    elif ruta_gen and (tracking_gen is None or forzar_gen) and not ya_cargado_gen and not fallo_gen:
+    elif ruta_gen and (tracking_gen is None or forzar_gen or pendiente_bg) and not ya_cargado_gen and not fallo_gen:
         # No hay tracking: lanzar el análisis automáticamente.
         if not VIDEO_DISPONIBLE:
             st.error(f"⚠️ El análisis no está disponible en este equipo: {VIDEO_ERROR}. "
@@ -1621,6 +1631,8 @@ elif st.session_state.pagina == "video":
             st.session_state.pop("video_analizado_path", None)
             st.session_state.pop("video_fallo_path", None)
             st.session_state.video_forzar = True
+            st.session_state.pop("video_bg_signature", None)
+            st.session_state.pop("video_bg_job", None)
             st.rerun()
 
     # --- Análisis manual del vídeo ---
