@@ -473,35 +473,37 @@ def generar_figura_mapa_calor(tracking, sujeto, tramo):
         titulo = teams.get("visitante", "Visitante")
         color_hex = colors.get("visitante", "#E53935")
     cmap = _cmap_equipo(color_hex)
-    fig = plt.figure(figsize=(10, 6.8))
+    # Crear una única figura por mapa; Pitch.draw ya crea la suya.
+    fig = None
     if usa_campo:
         hist, _, _ = np.histogram2d(xs, ys, bins=[35, 23],
                                     range=[[0, 105], [0, 68]])
         if MPLSOCER_DISPONIBLE:
             pitch = Pitch(pitch_type="custom", pitch_length=105, pitch_width=68,
                           pitch_color="white", line_color="#333333", linewidth=1.5)
-            fig, ax = pitch.draw(figsize=(10, 6.8))
+            fig, ax = pitch.draw(figsize=(8, 5.2))
+            fig.set_dpi(65)
         else:
-            ax = fig.add_subplot(111)
+            fig, ax = plt.subplots(figsize=(8, 5.2), dpi=65)
             ax.set_xlim(0, 105)
             ax.set_ylim(0, 68)
             ax.set_aspect("equal")
             _dibujar_campo_mano(ax)
         im = ax.imshow(hist.T, extent=(0, 105, 0, 68), origin="lower",
-                       cmap=cmap, alpha=0.85, aspect="auto", interpolation="bilinear")
+                       cmap=cmap, alpha=0.85, aspect="auto", interpolation="nearest")
         ax.set_title(f"Mapa de calor — {titulo} ({tramo[0]})", fontsize=13)
         fig.colorbar(im, ax=ax, shrink=0.8, label="Nº de detecciones")
         nota = "Coordenadas de campo (105×68 m)."
     else:
         hist, _, _ = np.histogram2d(xs, ys, bins=[50, 28],
                                     range=[[0, 100], [0, 100]])
-        ax = fig.add_subplot(111)
+        fig, ax = plt.subplots(figsize=(8, 5.2), dpi=65)
         ax.set_xlim(0, 100)
         ax.set_ylim(100, 0)
         ax.set_aspect("equal")
         ax.add_patch(plt.Rectangle((0, 0), 100, 100, fill=False, lw=1.5, ec="#333333"))
         im = ax.imshow(hist.T, extent=(0, 100, 0, 100), origin="upper",
-                       cmap=cmap, alpha=0.85, aspect="auto", interpolation="bilinear")
+                       cmap=cmap, alpha=0.85, aspect="auto", interpolation="nearest")
         ax.set_title(f"Mapa de calor — {titulo} ({tramo[0]})", fontsize=13)
         ax.set_xticks([]); ax.set_yticks([])
         fig.colorbar(im, ax=ax, shrink=0.8, label="Nº de detecciones")
@@ -1880,9 +1882,11 @@ elif st.session_state.pagina == "video":
                         datos_ind, f"jugador:{id_elegido}",
                         ("Partido completo", 0.0, duracion))
                     if figura is not None:
-                        st.pyplot(figura, use_container_width=True)
-                        st.caption(nota)
-                        plt.close(figura)
+                        try:
+                            st.pyplot(figura, use_container_width=True, dpi=65)
+                            st.caption(nota)
+                        finally:
+                            plt.close(figura)
                     else:
                         st.info(nota)
             else:
@@ -1934,9 +1938,11 @@ elif st.session_state.pagina == "video":
             if fig_hm is None:
                 st.warning(f"⚠️ {nota_hm}")
             else:
-                st.pyplot(fig_hm, use_container_width=True)
-                st.caption(nota_hm)
-                plt.close(fig_hm)
+                try:
+                    st.pyplot(fig_hm, use_container_width=True, dpi=65)
+                    st.caption(nota_hm)
+                finally:
+                    plt.close(fig_hm)
 
     # --- 7d. INFORMES AUTOMÁTICOS ---
     st.divider()
