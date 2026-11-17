@@ -128,8 +128,20 @@ def evaluate_tracking(ground_truth, exported, time_tolerance=.12,
 def evaluate_events(ground_truth, exported, tolerance_s=2.0):
     true = [e for e in ground_truth.get("events", [])
             if e.get("type") and isinstance(e.get("t"), (int, float))]
-    predicted = [e for e in exported.get("events", [])
-                 if e.get("type") and isinstance(e.get("t"), (int, float))]
+    # Confirmed legacy Match_view events use 'event' and 'seconds'
+    # relative to the kickoff. Experimental hypotheses are deliberately
+    # excluded from this validation.
+    kickoff = float(exported.get("kickoff_s") or 0.)
+    predicted = []
+    for event in exported.get("events", []):
+        kind = event.get("type") or event.get("event")
+        moment = event.get("t")
+        if not isinstance(moment, (int, float)):
+            seconds = event.get("seconds")
+            moment = (kickoff + seconds
+                      if isinstance(seconds, (int, float)) else None)
+        if kind and isinstance(moment, (int, float)):
+            predicted.append({"type": kind, "t": moment})
     output = {}
     for kind in sorted({e["type"] for e in true + predicted}):
         truth_times = [[float(x["t"]), False] for x in true if x["type"] == kind]
