@@ -2987,6 +2987,7 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         "player_stats": player_stats,
         "tactical_analysis": tactical_stats,
         "quality": quality_stats,
+        "samples_count": len(samples),
         "samples": samples,
     }
     output_path = Path(output_path)
