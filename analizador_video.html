@@ -410,7 +410,9 @@
       .mv-measured-zone{border-bottom:1px solid #2b3b50;padding:7px 0;display:flex;justify-content:space-between;gap:10px}
       .mv-measured-zone b{color:#e7f1ff}
       @media(max-width:760px){.mv-measured-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.mv-measured-grid{grid-template-columns:1fr}}
-    </style>
+    /* The main analysis view ends with observed tracking analytics. */
+    .mv-measured-analysis ~ section { display: none !important; }
+  </style>
   </head>
   <body>
     <header>
@@ -560,6 +562,8 @@
 
         <section class="timeline" id="timeline" aria-label="Línea de tiempo">
           <div class="tl-head"><h2>Línea de tiempo</h2><div class="tl-head-right"><span class="tl-zoom"><label for="tlZoom">Zoom</label><input type="range" id="tlZoom" min="1" max="8" step="0.5" value="1" /><span id="tlZoomVal">1×</span></span><span class="tl-range" id="tlRange">—</span></div></div>
+          <div class="ai-review-head"><span class="ai-count" id="aiCount">0 sugerencias</span></div>
+          <div class="ai-legend"><span class="ai-key shot">●</span>Tiro posible <span class="ai-key corner">●</span>Córner posible <span class="ai-key goal">●</span>Gol posible</div>
           <div class="tl-grid">
             <div class="tl-names" aria-hidden="true">
               <div class="tl-name ruler">Tiempo</div>
@@ -578,16 +582,12 @@
               </div>
             </div>
           </div>
+          <details class="ai-review" id="aiReview" aria-label="Revisión de jugadas IA">
+            <summary>Revisar jugadas sugeridas</summary>
+            <p>Revisa cada fragmento antes de confirmarlo.</p>
+            <div class="ai-events-list" id="aiEventsList" aria-live="polite"></div>
+          </details>
         </section>
-        <section class="ai-review" id="aiReview" aria-label="Jugadas sugeridas por IA">
-          <div class="ai-review-head">
-            <div><h2>Jugadas sugeridas</h2><p>Propuestas del modelo de acciones. Revisa cada fragmento antes de confirmarlo; no se suman automáticamente a las estadísticas.</p></div>
-            <span class="ai-count" id="aiCount">0 sugerencias</span>
-          </div>
-          <div class="ai-legend"><span class="ai-key shot">●</span>Tiro posible <span class="ai-key corner">●</span>Córner posible <span class="ai-key goal">●</span>Gol posible</div>
-          <div class="ai-events-list" id="aiEventsList" aria-live="polite"><p class="ai-empty">Analiza un vídeo para ver posibles jugadas.</p></div>
-        </section>
-
         <section class="ai-review" id="gsrReview" hidden aria-label="Identidades propuestas por SoccerNet">
           <div class="ai-review-head"><div><h2>Identidades SoccerNet</h2>
           <p>Identidades y dorsales propuestos. Izquierda/derecha no significa local/visitante. Los IDs originales se conservan.</p></div></div>
@@ -2132,6 +2132,7 @@
               marker.addEventListener('pointerdown', function(e){e.stopPropagation();});
               marker.addEventListener('click', function(e){
                 e.stopPropagation(); cancelPlayAll(); jumpTo(ev.start_s);
+                var review = $('aiReview'); if (review) review.open = true;
                 if (state.videoLoaded) video.play();
               });
               lt.appendChild(marker);
