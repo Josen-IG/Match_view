@@ -22,13 +22,15 @@ python -m pip install -r requirements.txt
 python -m streamlit run match.py
 ```
 
-El formulario tiene casillas independientes. Todas las nuevas opciones están
-desactivadas por defecto; el detector base conserva sus pesos.
+El formulario usa modo automático, sin casillas. El detector base conserva sus
+pesos y se añaden componentes según disponibilidad. Los fallos opcionales se
+registran y el análisis continúa con los restantes. No es una selección por
+porcentajes de acierto: todavía faltan datos etiquetados de evaluación.
 
 - YOLOv9 recupera el balón cuando no hay candidatos del detector base.
 - RF-DETR entra si los anteriores siguen sin candidatos. Requiere instalar
   `requirements-rfdetr.txt` como se explica en RFDETR_SOCCERNET_INTEGRATION.md.
-- «Calibrar el campo con YOLO Football Pitch Detection» descarga el modelo de
+- El modo automático intenta cargar YOLO Football Pitch Detection, el modelo de
   32 puntos (unos 140 MB). También admite el archivo
   `yolo-football-pitch-detection.pt` junto a `match.py`. La topología de este
   checkpoint es distinta de la del anterior modelo Soccana de 29 puntos.
@@ -51,7 +53,7 @@ $env:MATCHVIEW_OSL_PYTHON = "$PWD\.model-envs\actions\Scripts\python.exe"
 python -m streamlit run match.py
 ```
 
-Activa «Proponer jugadas con OpenSportsLab». El intérprete configurado y sus
+El modo automático detecta este entorno y usa OpenSportsLab si está preparado. El intérprete configurado y sus
 dependencias se verifican antes de comenzar el tracking. Puedes usar otro
 entorno apuntando MATCHVIEW_OSL_PYTHON a su ejecutable Python 3.12 o superior.
 
@@ -93,7 +95,7 @@ En Linux, los ejecutables quedan en `.model-envs/gamestate/bin/python` y
 terminal desde la que arranques Streamlit. Los entornos deben estar en la
 misma máquina que la aplicación; este conector no envía vídeos a otra VM.
 
-Activa «Añadir identificación con SoccerNet Game State». Se ejecuta el pipeline
+El modo automático detecta este entorno y usa SoccerNet Game State si está preparado. Se ejecuta el pipeline
 oficial con `dataset=video`, sin evaluación contra etiquetas y sin generar
 otro vídeo de visualización. El proyecto descargará los checkpoints que le
 falten. El estado generado se convierte a JSON dentro de ese mismo entorno;
@@ -113,7 +115,8 @@ Ejemplo (sustituye la ruta por un vídeo existente; configura primero entornos):
 python video_track.py "C:\Videos\mi_video.mp4" --pitch-model hf32 --actions --gamestate --max-minutes 1
 ```
 
-Prueba cada opción por separado sobre el mismo fragmento antes de combinarlas.
+La CLI conserva opciones manuales para diagnóstico; añade `--auto-models` para
+usar la misma política automática que la aplicación.
 No se reentrena ningún modelo. La inferencia adicional puede tardar bastante
 más que el detector base, especialmente en CPU.
 
@@ -142,3 +145,18 @@ Fuentes y revisiones:
   revisión `b2fe8f16a35336d93b1b0eabe1741bbbbc36cd68`.
 - Game State: https://github.com/SoccerNet/sn-gamestate,
   revisión `1c958345067218297d221e45e1a6405f975f83e0`, licencia GPL-3.0.
+
+## Inicio del análisis
+
+«Iniciar análisis en» indica un tiempo del archivo original: `15` o `15:00`
+empieza a los 900 segundos; `15:30` a los 930. «10 minutos desde el inicio
+indicado» analiza [inicio, inicio + 600 s), limitado por la duración del vídeo.
+«Hasta el final del vídeo» analiza desde ese punto hasta el final. No se
+modifica el vídeo original. Se verifica el salto por fotogramas y, cuando el
+lector no lo aplica, se reabre el vídeo y se omiten los fotogramas anteriores.
+Las marcas de tiempo exportadas conservan su posición absoluta en el original.
+
+El resultado incluye `model_status`, `analysis_start_s` y `analysis_end_s`.
+Los componentes omitidos se muestran al finalizar y quedan registrados en el
+tracking JSON. Un componente instalado pero cuyos pesos fallen no se anuncia
+como activo. El modelo principal sigue siendo imprescindible.

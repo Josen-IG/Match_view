@@ -422,10 +422,19 @@ def export_radar_video(
 def parse_mmss(texto: str) -> float:
     """'MM:SS' o 'MM' a segundos. Lanza ValueError si el formato no vale."""
     texto = (texto or "").strip()
+    texto = texto.replace(",", ".")
     if ":" in texto:
-        minutos, segundos = texto.split(":", 1)
-        return float(minutos) * 60.0 + float(segundos)
-    return float(texto) * 60.0
+        if not re.fullmatch(r"\d+:\d{1,2}(?:\.\d+)?", texto):
+            raise ValueError("Usa minutos o MM:SS.")
+        minutos, segundos = texto.split(":")
+        if float(segundos) >= 60:
+            raise ValueError("Los segundos deben ser menores de 60.")
+        result = float(minutos) * 60.0 + float(segundos)
+    else:
+        result = float(texto) * 60.0
+    if not math.isfinite(result) or result < 0:
+        raise ValueError("El inicio debe ser un tiempo finito no negativo.")
+    return result
 
 
 def format_mmss(seconds: float) -> str:
@@ -1372,6 +1381,29 @@ def _corregir_eje_x_campo(muestras: list[dict]) -> int:
 # ---------------------------------------------------------------------------
 # Tracking continuo
 # ---------------------------------------------------------------------------
+def _seek_analysis_start(cap, video_path, start_seconds, fps):
+    """Seek by frame and verify; if unsupported, reopen and skip exact frames."""
+    import cv2
+    target = max(0, int(math.ceil(start_seconds * fps - 1e-8)))
+    if target == 0:
+        return cap, 0
+    cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+    actual = cap.get(cv2.CAP_PROP_POS_FRAMES)
+    if actual is not None and math.isfinite(actual) and abs(actual-target) < .25:
+        return cap, target
+    # Never assign requested timestamps to frames that were read from 00:00.
+    cap.release()
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        cap.release()
+        raise VideoProcessingError("No se pudo reabrir el vídeo para aplicar el inicio.")
+    for _ in range(target):
+        if not cap.grab():
+            cap.release()
+            raise VideoProcessingError("El vídeo terminó antes del inicio solicitado.")
+    return cap, target
+
+
 def _track_video(
     video_path: Path | str,
     yolo_model: str,
@@ -1397,6 +1429,7 @@ def _track_video(
     rfdetr_model: str | None = None,
     rfdetr_conf: float = 0.4,
     pitch_only: bool = True,
+    auto_status: dict | None = None,
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
 
@@ -1417,12 +1450,13 @@ def _track_video(
     import numpy as np
     import cv2
     from ultralytics import YOLO
+    from auto_models import record_status
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise VideoProcessingError(f"No se pudo abrir el vídeo: {video_path}")
     fps_real = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    if fps_real <= 0:
+    if not math.isfinite(fps_real) or fps_real <= 0:
         fps_real = 30.0
     total_duration = video_duration(video_path)
     if end_seconds is None:
@@ -1440,6 +1474,8 @@ def _track_video(
 
     try:
         detector = YOLO(yolo_model)
+        if auto_status is not None:
+            record_status(auto_status, "base", "active", "Detector principal cargado.")
     except Exception as error:
         cap.release()
         raise VideoProcessingError(f"No se pudo cargar YOLO ({yolo_model}): {error}") from error
@@ -1449,11 +1485,13 @@ def _track_video(
         try:
             from ball_detector import SoccerBallDetector
             specialist = SoccerBallDetector(ball_model, ball_conf, device, imgsz)
+            if auto_status is not None:
+                record_status(auto_status, "yolov9", "active", "Cargado como detector de respaldo.")
         except Exception as error:
-            cap.release()
-            raise VideoProcessingError(
-                f"No se pudo cargar el detector adicional del balón: {error}"
-            ) from error
+            if auto_status is None:
+                cap.release()
+                raise VideoProcessingError(f"No se pudo cargar el detector adicional del balón: {error}") from error
+            record_status(auto_status, "yolov9", "error", str(error), progress)
 
     reviewer = None
     if rfdetr_model:
@@ -1461,11 +1499,13 @@ def _track_video(
         try:
             from rfdetr_detector import SoccerNetDetector
             reviewer = SoccerNetDetector(rfdetr_model, rfdetr_conf, device)
+            if auto_status is not None:
+                record_status(auto_status, "rfdetr", "active", "Cargado como detector de respaldo.")
         except Exception as error:
-            cap.release()
-            raise VideoProcessingError(
-                f"No se pudo cargar RF-DETR SoccerNet: {error}"
-            ) from error
+            if auto_status is None:
+                cap.release()
+                raise VideoProcessingError(f"No se pudo cargar RF-DETR SoccerNet: {error}") from error
+            record_status(auto_status, "rfdetr", "error", str(error), progress)
 
     # Modelo de keypoints del campo (opcional): pitch_model con ruta lo
     # usa; None usa pitch_keypoints.pt junto a este módulo si existe;
@@ -1478,9 +1518,19 @@ def _track_video(
             progress("Cargando el modelo de 32 puntos del campo.", 0.04)
             modelo_campo = load_pitch_detector()
             mapper = PitchMapper(keypoint_map=pitch_points_32())
+            if auto_status is not None:
+                record_status(auto_status, "pitch32", "active", "Modelo de 32 puntos cargado.")
         except Exception as error:
-            cap.release()
-            raise VideoProcessingError(f"No se pudo cargar YOLO Football Pitch Detection: {error}") from error
+            if auto_status is None:
+                cap.release()
+                raise VideoProcessingError(f"No se pudo cargar YOLO Football Pitch Detection: {error}") from error
+            record_status(auto_status, "pitch32", "error", str(error), progress)
+            if (Path(__file__).resolve().parent / PITCH_KEYPOINT_MODEL_FILE).is_file():
+                modelo_campo = _cargar_modelo_campo()
+                mapper = PitchMapper()
+                pitch_model = None
+                if modelo_campo is not None:
+                    record_status(auto_status, "pitch_legacy", "active", "Se usa la calibración anterior.")
     elif pitch_model:
         modelo_campo = _cargar_modelo_campo(pitch_model)
     elif pitch_model is None and (Path(__file__).resolve().parent
@@ -1489,8 +1539,7 @@ def _track_video(
     ultimo_keyframe = -1e9
 
     # Saltar hasta el saque inicial
-    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, start_seconds) * 1000.0)
-    frame_idx = int(start_seconds * fps_real)
+    cap, frame_idx = _seek_analysis_start(cap, video_path, start_seconds, fps_real)
     muestras: list[dict] = []
     votos_color: dict[int, Counter] = defaultdict(Counter)
     # Mejor vista por track: (altura del bbox en px, equipo). Un jugador
@@ -1528,7 +1577,7 @@ def _track_video(
             if not ok:
                 break
             t_video = frame_idx / fps_real
-            if t_video > end_seconds:
+            if t_video >= end_seconds:
                 break
             t = t_video - start_seconds
             if frame_idx % paso == 0:
@@ -1609,9 +1658,10 @@ def _track_video(
                     try:
                         candidatos_balon = specialist.predict(frame, flip_x, flip_y)
                     except Exception as error:
-                        raise VideoProcessingError(
-                            f"Falló el detector adicional del balón: {error}"
-                        ) from error
+                        if auto_status is None:
+                            raise VideoProcessingError(f"Falló el detector adicional del balón: {error}") from error
+                        record_status(auto_status, "yolov9", "error", str(error), progress)
+                        specialist = None
                 # Second fallback: only review frames still missing a ball.
                 rf_review = None
                 if reviewer is not None and not candidatos_balon:
@@ -1621,9 +1671,10 @@ def _track_video(
                         candidatos_balon = rf_review["ball"]
                         review_people(detecciones, rf_review["people"])
                     except Exception as error:
-                        raise VideoProcessingError(
-                            f"Falló la revisión RF-DETR SoccerNet: {error}"
-                        ) from error
+                        if auto_status is None:
+                            raise VideoProcessingError(f"Falló la revisión RF-DETR SoccerNet: {error}") from error
+                        record_status(auto_status, "rfdetr", "error", str(error), progress)
+                        reviewer, rf_review = None, None
                 # Elegir el balón entre las candidatas. Por defecto
                 # (ball_sel=True) por compatibilidad con la trayectoria
                 # prevista (Kalman) + confianza + tamaño; con
@@ -1653,7 +1704,11 @@ def _track_video(
                                           t_video)
                     except Exception as error:
                         if pitch_model == "hf32":
-                            raise VideoProcessingError(f"Falló el modelo de 32 puntos del campo: {error}") from error
+                            if auto_status is None:
+                                raise VideoProcessingError(f"Falló el modelo de 32 puntos del campo: {error}") from error
+                            record_status(auto_status, "pitch32", "error", str(error), progress)
+                            modelo_campo = None
+                            mapper.H = None
                 # Filtrar ANTES de crear IDs: el punto de contacto con
                 # el césped son los pies (centro inferior de la caja).
                 # No ampliar los límites: entrenador y grada quedan fuera.
@@ -3196,6 +3251,9 @@ def export_tracking_json(muestras: list[dict], informe: dict,
         "events": informe.get("results", []),
         "suggested_events": suggested_events,
         "integrations": informe.get("integrations", {}),
+        "model_status": informe.get("model_status", {}),
+        "analysis_start_s": informe.get("analysis_start_s", informe.get("kickoff_offset_s", 0)),
+        "analysis_end_s": informe.get("analysis_end_s"),
         "gamestate": informe.get("gamestate"),
         "possession_by_period": informe.get("possession_by_period"),
         "stats": estadisticas,
@@ -4299,6 +4357,7 @@ def _analizar_impl(
     actions_enabled: bool = False,
     action_conf: float = 0.5,
     gamestate_enabled: bool = False,
+    auto_models: bool = False,
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -4309,7 +4368,7 @@ def _analizar_impl(
         raise ValueError("La confianza mínima debe estar entre 0 y 1.")
     if not 0.0 < conf <= 1.0:
         raise ValueError("La confianza de YOLO debe estar entre 0 y 1.")
-    if kickoff_offset < 0:
+    if not math.isfinite(kickoff_offset) or kickoff_offset < 0:
         raise ValueError("El saque inicial no puede ser negativo.")
     if camera_mode not in ("seguimiento", "fija_amplia"):
         raise ValueError("camera_mode debe ser 'seguimiento' o 'fija_amplia'.")
@@ -4321,7 +4380,15 @@ def _analizar_impl(
         )
     if not 0 < action_conf <= 1:
         raise ValueError("La confianza de acciones debe estar entre 0 y 1.")
-    if actions_enabled or gamestate_enabled:
+    model_status = {}
+    if max_minutes is not None and (not math.isfinite(max_minutes) or max_minutes <= 0):
+        raise ValueError("La duración del análisis debe ser positiva y finita.")
+    if auto_models:
+        from auto_models import automatic_plan
+        plan, model_status = automatic_plan(update)
+        ball_model, rfdetr_model, pitch_model = (plan[k] for k in ("ball_model", "rfdetr_model", "pitch_model"))
+        actions_enabled, gamestate_enabled = plan["actions_enabled"], plan["gamestate_enabled"]
+    if not auto_models and (actions_enabled or gamestate_enabled):
         from model_jobs import validate_model_environment
         if actions_enabled:
             validate_model_environment("actions")
@@ -4353,24 +4420,48 @@ def _analizar_impl(
         rfdetr_model=rfdetr_model, rfdetr_conf=rfdetr_conf,
         pitch_keyframe_seconds=pitch_keyframe_seconds,
         device=device,
+        auto_status=model_status if auto_models else None,
     )
     integration_dir = video_path.parent / f"{video_path.stem}_clips" / "model_outputs"
     suggested_actions = []
     gamestate_summary = None
     if gamestate_enabled:
-        from model_jobs import run_optional_model, attach_gamestate
-        update("Ejecutando SoccerNet Game State en su entorno independiente.", 0.41)
-        payload = run_optional_model("gamestate", video_path, kickoff_offset,
-                                     duracion_partido, integration_dir,
-                                     lambda message, _fraction: update(message, 0.42))
-        gamestate_summary = attach_gamestate(muestras, payload, kickoff_offset, flip_x, flip_y)
+        try:
+            from model_jobs import run_optional_model, attach_gamestate
+            update("Ejecutando SoccerNet Game State en su entorno independiente.", 0.41)
+            payload = run_optional_model("gamestate", video_path, kickoff_offset,
+                                         duracion_partido, integration_dir,
+                                         lambda message, _fraction: update(message, 0.42))
+            gamestate_summary = attach_gamestate(muestras, payload, kickoff_offset, flip_x, flip_y)
+        except Exception as error:
+            if not auto_models:
+                raise
+            for sample in muestras:
+                for person in sample.get("people", []):
+                    person.pop("gamestate", None)
+            from auto_models import record_status
+            record_status(model_status, "gamestate", "error", str(error), update)
+        else:
+            if auto_models:
+                from auto_models import record_status
+                record_status(model_status, "gamestate", "active", "Ejecutado correctamente.")
     if actions_enabled:
-        from model_jobs import run_optional_model, normalize_actions
-        update("Buscando acciones con OpenSportsLab.", 0.43)
-        payload = run_optional_model("actions", video_path, kickoff_offset,
-                                     duracion_partido, integration_dir,
-                                     lambda message, _fraction: update(message, 0.44))
-        suggested_actions = normalize_actions(payload, kickoff_offset, duracion_partido, action_conf)
+        try:
+            from model_jobs import run_optional_model, normalize_actions
+            update("Buscando acciones con OpenSportsLab.", 0.43)
+            payload = run_optional_model("actions", video_path, kickoff_offset,
+                                         duracion_partido, integration_dir,
+                                         lambda message, _fraction: update(message, 0.44))
+            suggested_actions = normalize_actions(payload, kickoff_offset, duracion_partido, action_conf)
+        except Exception as error:
+            if not auto_models:
+                raise
+            from auto_models import record_status
+            record_status(model_status, "actions", "error", str(error), update)
+        else:
+            if auto_models:
+                from auto_models import record_status
+                record_status(model_status, "actions", "active", "Ejecutado correctamente.")
     update("Compensando el movimiento de cámara y suavizando el balón.", 0.45)
     muestras = _suavizar_balon(muestras)
     # Filtro de Kalman (idea VEO): suaviza la trayectoria y predice el
@@ -4411,11 +4502,16 @@ def _analizar_impl(
     informe_base = {
         "results": resultados,
         "suggested_events": suggested_actions,
+        "model_status": model_status,
+        "analysis_start_s": kickoff_offset,
+        "analysis_end_s": fin,
         "gamestate": gamestate_summary,
         "integrations": {
-            "yolov9_ball": bool(ball_model), "rfdetr": bool(rfdetr_model),
-            "pitch_32": pitch_model == "hf32", "actions": actions_enabled,
-            "gamestate": gamestate_enabled,
+            "yolov9_ball": (model_status.get("yolov9", {}).get("state") == "active" if auto_models else bool(ball_model)),
+            "rfdetr": (model_status.get("rfdetr", {}).get("state") == "active" if auto_models else bool(rfdetr_model)),
+            "pitch_32": (model_status.get("pitch32", {}).get("state") == "active" if auto_models else pitch_model == "hf32"),
+            "actions": (model_status.get("actions", {}).get("state") == "active" if auto_models else actions_enabled),
+            "gamestate": (model_status.get("gamestate", {}).get("state") == "active" if auto_models else gamestate_enabled),
         },
         "possession_by_period": posesion_tramos,
         "kickoff_offset_s": kickoff_offset,
@@ -4505,6 +4601,7 @@ def analyze_video(
     actions_enabled: bool = False,
     action_conf: float = 0.5,
     gamestate_enabled: bool = False,
+    auto_models: bool = False,
 ) -> list[dict]:
     """Analiza un vídeo (solo tracking) y devuelve la lista de eventos.
 
@@ -4537,7 +4634,7 @@ def analyze_video(
         ball_model=ball_model, ball_conf=ball_conf,
         rfdetr_model=rfdetr_model, rfdetr_conf=rfdetr_conf,
         actions_enabled=actions_enabled, action_conf=action_conf,
-        gamestate_enabled=gamestate_enabled,
+        gamestate_enabled=gamestate_enabled, auto_models=auto_models,
     )["results"]
 
 
@@ -4577,6 +4674,7 @@ def analyze_video_full(
     actions_enabled: bool = False,
     action_conf: float = 0.5,
     gamestate_enabled: bool = False,
+    auto_models: bool = False,
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -4628,7 +4726,7 @@ def analyze_video_full(
         ball_model=ball_model, ball_conf=ball_conf,
         rfdetr_model=rfdetr_model, rfdetr_conf=rfdetr_conf,
         actions_enabled=actions_enabled, action_conf=action_conf,
-        gamestate_enabled=gamestate_enabled,
+        gamestate_enabled=gamestate_enabled, auto_models=auto_models,
     )
 
 
@@ -4657,6 +4755,7 @@ if __name__ == "__main__":
     parser.add_argument("--rfdetr-model", default=None,
                         help="SoccerNet .pth path, or hf for the pinned public checkpoint")
     parser.add_argument("--rfdetr-conf", type=float, default=0.4)
+    parser.add_argument("--auto-models", action="store_true")
     parser.add_argument("--actions", action="store_true")
     parser.add_argument("--action-conf", type=float, default=0.5)
     parser.add_argument("--gamestate", action="store_true")
@@ -4699,7 +4798,7 @@ if __name__ == "__main__":
         ball_model=args.ball_model, ball_conf=args.ball_conf, device=args.device,
         rfdetr_model=args.rfdetr_model, rfdetr_conf=args.rfdetr_conf,
         actions_enabled=args.actions, action_conf=args.action_conf,
-        gamestate_enabled=args.gamestate,
+        gamestate_enabled=args.gamestate, auto_models=args.auto_models,
         max_minutes=args.max_minutes,
         kickoff_offset=parse_mmss(args.kickoff), camera_mode=args.camera_mode,
         pitch_model="" if args.sin_mapa else args.pitch_model,

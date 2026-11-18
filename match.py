@@ -1522,6 +1522,7 @@ elif st.session_state.pagina == "video":
             if estado["state"] == "completed":
                 try:
                     resultado = estado.get("result") or {}
+                    st.session_state["mv_model_status"] = resultado.get("model_status", {})
                     generado = resultado.get("tracking_json")
                     if not generado or not os.path.isfile(generado):
                         raise ValueError("El análisis terminó sin generar tracking.")
@@ -1553,41 +1554,21 @@ elif st.session_state.pagina == "video":
                 )
             with c2:
                 saque_form = st.text_input(
-                    "Saque inicial (MM:SS)",
+                    "Iniciar análisis en (min o MM:SS)",
                     value=st.session_state.get("video_gen_kickoff", "00:00"),
-                    help="Se omite el vídeo anterior al saque. "
-                         "Este instante será el minuto 00:00 del partido.",
+                    help="Minuto del archivo de vídeo donde comienza el análisis. "
+                         "Ejemplo: 15 o 15:00 empieza en el minuto 15; 15:30 empieza en 15:30.",
                 )
             with c3:
                 alcance_form = st.selectbox(
                     "Alcance",
-                    ["Primeros 10 minutos (prueba)", "Partido completo"],
+                    ["10 minutos desde el inicio indicado", "Hasta el final del vídeo"],
                     index=0 if st.session_state.get("video_gen_alcance",
-                                  "Primeros 10 minutos (prueba)").startswith("Primeros")
+                                  "10 minutos desde el inicio indicado") in ("Primeros 10 minutos (prueba)", "10 minutos desde el inicio indicado")
                             else 1,
                 )
-            usar_balon_especialista = st.checkbox(
-                "Reforzar detección del balón con YOLOv9", value=False,
-                help="Se usa cuando el detector principal no encuentra balón. "
-                     "La primera ejecución descarga los pesos; aumenta el tiempo de análisis.",
-            )
-            usar_rfdetr = st.checkbox(
-                "Revisar detecciones con RF-DETR SoccerNet", value=False,
-                help="Revisa fotogramas sin balón tras los detectores anteriores. "
-                     "Descarga unos 1,6 GB la primera vez y aumenta el tiempo de análisis.",
-            )
-            usar_campo_32 = st.checkbox(
-                "Calibrar el campo con YOLO Football Pitch Detection", value=False,
-                help="Usa 32 puntos del terreno para calcular el radar. Requiere más tiempo de análisis.",
-            )
-            usar_acciones = st.checkbox(
-                "Proponer jugadas con OpenSportsLab", value=False,
-                help="Busca posibles pases, tiros, goles y otras acciones para revisar. Requiere el entorno de acciones.",
-            )
-            usar_gamestate = st.checkbox(
-                "Añadir identificación con SoccerNet Game State", value=False,
-                help="Añade dorsales e identidades propuestas. Requiere su entorno independiente configurado.",
-            )
+            st.caption("Modo automático: se utilizan los modelos disponibles y los respaldos "
+                       "necesarios. Los componentes no disponibles se indicarán al terminar.")
             iniciar = st.form_submit_button(
                 "Analizar vídeo", type="primary", use_container_width=False,
             )
@@ -1601,9 +1582,9 @@ elif st.session_state.pagina == "video":
                 try:
                     saque_segundos = parse_mmss(saque_form)
                     if saque_segundos is None or saque_segundos < 0:
-                        raise ValueError("Saque inicial inválido.")
+                        raise ValueError("Inicio del análisis inválido.")
                 except (ValueError, TypeError):
-                    st.error("Indica el saque inicial en formato MM:SS, por ejemplo 15:00.")
+                    st.error("Indica un minuto válido: 15, 15:00 o 15:30. No se admiten tiempos negativos.")
                 else:
                     st.session_state["video_gen_path"] = ruta_form
                     st.session_state["video_gen_kickoff"] = saque_form
@@ -1622,16 +1603,12 @@ elif st.session_state.pagina == "video":
                         "sample_fps": 10,
                         "min_confidence": 0.65,
                         "yolo_model": "modelo_propio.pt",
-                        "ball_model": "hf" if usar_balon_especialista else None,
-                        "rfdetr_model": "hf" if usar_rfdetr else None,
-                        "actions_enabled": usar_acciones,
-                        "gamestate_enabled": usar_gamestate,
-                        "max_minutes": 10.0 if alcance_form.startswith("Primeros") else None,
+                        "auto_models": True,
+                        "max_minutes": 10.0 if alcance_form.startswith(("Primeros", "10 minutos")) else None,
                         "kickoff_offset": saque_segundos,
                         "camera_mode": "seguimiento",
                         "formation_local": dp.get("form_local", ""),
                         "formation_visitante": dp.get("form_visitante", ""),
-                        "pitch_model": "hf32" if usar_campo_32 else None,
                         "device": "cpu",
                     }
                     if hasattr(st, "fragment"):
@@ -1649,6 +1626,7 @@ elif st.session_state.pagina == "video":
                             resultado = analyze_video_full(
                                 **parametros, progress=actualizar_progreso,
                             )
+                            st.session_state["mv_model_status"] = resultado.get("model_status", {})
                             generado = resultado.get("tracking_json")
                             if not generado or not os.path.isfile(generado):
                                 raise ValueError("No se generó el tracking.")
@@ -1673,6 +1651,23 @@ elif st.session_state.pagina == "video":
                 datos_tracking = cargar_tracking_json(
                     str(pista), pista.stat().st_mtime,
                 )
+                model_status = datos_tracking.get("model_status") or st.session_state.get("mv_model_status", {})
+                model_names = {"base": "modelo base", "yolov9": "YOLOv9", "rfdetr": "RF-DETR",
+                               "pitch32": "campo (32 puntos)", "pitch_legacy": "campo anterior",
+                               "actions": "OpenSportsLab", "gamestate": "SoccerNet Game State"}
+                active = [model_names.get(name, name) for name, item in model_status.items()
+                          if item.get("state") == "active"]
+                skipped = [model_names.get(name, name) for name, item in model_status.items()
+                           if item.get("state") in ("error", "unavailable")]
+                if active:
+                    st.caption("Componentes cargados: " + ", ".join(active))
+                if skipped:
+                    st.warning("Componentes omitidos: " + ", ".join(skipped) + ". El análisis usa los restantes.")
+                start_s = datos_tracking.get("analysis_start_s", datos_tracking.get("kickoff_s", 0))
+                end_s = datos_tracking.get("analysis_end_s")
+                if end_s is not None:
+                    st.caption(f"Intervalo analizado del vídeo: {int(start_s//60):02d}:{int(start_s%60):02d} "
+                               f"a {int(end_s//60):02d}:{int(end_s%60):02d}.")
                 if "suggested_events" not in datos_tracking:
                     from event_candidates import suggest_key_moments
                     datos_tracking = dict(datos_tracking)
