@@ -1675,10 +1675,12 @@
       } catch(_err){ /* almacenamiento opcional */ }
     }
     function candidateName(ev){
-      var names = {goal:'gol',shot:'tiro',corner:'córner',pass:'pase',drive:'conducción',
-        header:'cabeceo',high_pass:'pase alto',out:'balón fuera',cross:'centro',
-        throw_in:'saque de banda',block:'bloqueo',tackle:'entrada exitosa',free_kick:'tiro libre'};
-      return 'Posible ' + (names[ev.type] || 'acción');
+      var names = {goal:'Posible gol',shot:'Posible tiro',corner:'Posible córner',
+        pass:'Posible pase',drive:'Posible conducción',header:'Posible cabeceo',
+        high_pass:'Posible pase alto',out:'Posible balón fuera',cross:'Posible centro',
+        throw_in:'Posible saque de banda',block:'Posible bloqueo',
+        tackle:'Posible entrada exitosa',free_kick:'Posible tiro libre'};
+      return names[ev.type] || 'Posible acción';
     }
     function seekPointsWithSuggestions(){
       var pts = collectSeekPoints(state.annotations, state.cuts, state.events, kickoff());
