@@ -12,8 +12,16 @@ class SoccerBallDetector:
             raise ValueError("ball_conf must be in (0, 1].")
         from ultralytics import YOLO
         if weights == "hf":
-            from huggingface_hub import hf_hub_download
-            weights = hf_hub_download(BALL_REPO, "v9b_best.pt", revision=BALL_REVISION)
+            local_weights = Path(__file__).resolve().parent / "v9b_best.pt"
+            if local_weights.is_file():
+                weights = str(local_weights)
+            else:
+                from huggingface_hub import hf_hub_download
+                # Public checkpoint: ignore saved/environment credentials,
+                # which may be expired even though no login is required.
+                weights = hf_hub_download(
+                    BALL_REPO, "v9b_best.pt", revision=BALL_REVISION, token=False,
+                )
         elif not Path(weights).is_file():
             raise FileNotFoundError(f"Ball detector weights not found: {weights}")
         self.model = YOLO(str(weights))

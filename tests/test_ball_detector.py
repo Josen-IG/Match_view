@@ -22,6 +22,26 @@ class BallDetectorTests(unittest.TestCase):
         self.assertEqual((85, 80), (candidates[0]['x'], candidates[0]['y']))
         self.assertEqual((30, 30), (candidates[0]['px'], candidates[0]['py']))
 
+    def test_public_download_ignores_expired_credentials(self):
+        from ball_detector import BALL_REPO, BALL_REVISION
+        with patch.dict(sys.modules, {
+                "ultralytics": types.SimpleNamespace(YOLO=lambda _: types.SimpleNamespace(names={0: "ball"})),
+                "huggingface_hub": types.SimpleNamespace(hf_hub_download=__import__("unittest.mock").mock.Mock(return_value="cached.pt")),
+        }), patch("ball_detector.Path.is_file", return_value=False):
+            import huggingface_hub
+            SoccerBallDetector("hf")
+            huggingface_hub.hf_hub_download.assert_called_once_with(
+                BALL_REPO, "v9b_best.pt", revision=BALL_REVISION, token=False)
+
+    def test_local_weights_next_to_app_skip_download(self):
+        with patch.dict(sys.modules, {
+                "ultralytics": types.SimpleNamespace(YOLO=lambda _: types.SimpleNamespace(names={0: "ball"})),
+            "huggingface_hub": types.SimpleNamespace(hf_hub_download=__import__("unittest.mock").mock.Mock()),
+        }), patch("ball_detector.Path.is_file", return_value=True), \
+             patch("huggingface_hub.hf_hub_download") as download:
+            SoccerBallDetector("hf")
+            download.assert_not_called()
+
     def test_wrong_classes_fail_explicitly(self):
         with patch.dict(sys.modules, {"ultralytics": types.SimpleNamespace(
                 YOLO=lambda _: types.SimpleNamespace(names={0: "player"}))}), \

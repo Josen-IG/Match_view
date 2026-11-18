@@ -57,3 +57,10 @@ models disabled until this stage is evaluated.
 
 Upstream: https://huggingface.co/acatorcini/yolov9-soccer-ball
 Weights license stated by the author: AGPL-3.0.
+
+## Public download authentication
+
+Automatic loading first uses v9b_best.pt next to ball_detector.py if present.
+Otherwise it downloads the public checkpoint with token=False, ignoring saved
+or environment credentials (including expired tokens). No login is required.
+Two additional offline tests cover anonymous download and local-file reuse.
