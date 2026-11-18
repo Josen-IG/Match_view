@@ -160,3 +160,41 @@ El resultado incluye `model_status`, `analysis_start_s` y `analysis_end_s`.
 Los componentes omitidos se muestran al finalizar y quedan registrados en el
 tracking JSON. Un componente instalado pero cuyos pesos fallen no se anuncia
 como activo. El modelo principal sigue siendo imprescindible.
+
+
+
+## Buscar goles y acciones sin repetir el tracking
+
+Preparación inicial (Python 3.12 o superior; entorno aislado):
+
+```powershell
+python setup_model_envs.py actions
+```
+
+Match View detecta `.model-envs/actions` automáticamente; ya no hace falta
+exportar `MATCHVIEW_OSL_PYTHON` en cada terminal. La variable explícita sigue
+teniendo prioridad. La instalación requiere acceso a GitHub y descarga de
+paquetes; el primer uso descarga los pesos de Hugging Face.
+
+En un análisis ya guardado, abre **Buscar jugadas IA** y elige el tramo en
+segundos del vídeo original. Para comprobar una jugada alrededor de 23:00,
+puedes empezar con 1360–1400 segundos (22:40–23:20), ampliando el intervalo si
+el minuto indicado era aproximado o se refería al reloj del partido.
+También puede ejecutarse desde consola:
+
+```powershell
+python action_review.py --tracking video_tracking.json --video "C:\ruta\video.mp4" --start 1360 --end 1400
+```
+
+Se ejecuta el modelo sobre las imágenes del fragmento; no se inventa un gol
+por perder el balón ni se añaden etiquetas por el minuto indicado. Las
+propuestas aparecen en Jugadas IA, con tiempo absoluto, para revisión.
+El tracking, los eventos verificados y las estadísticas permanecen intactos.
+Al repetir, se sustituyen las propuestas sin revisar de ese modelo dentro del
+tramo; se conservan las de otros tramos y las revisadas guardadas en el JSON.
+Si falla el motor o el formato de salida, no se modifica el archivo original.
+
+Una prueba de normalización con predicciones simuladas verifica que un GOAL
+20 segundos después de 22:40 aparece en 23:00, incluso sin balón detectado.
+Esa prueba no demuestra que el modelo reconozca un gol en un vídeo real:
+la validación requiere ejecutar los pesos sobre goles y jugadas sin gol.

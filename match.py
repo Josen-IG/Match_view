@@ -1668,6 +1668,26 @@ elif st.session_state.pagina == "video":
                 if end_s is not None:
                     st.caption(f"Intervalo analizado del vídeo: {int(start_s//60):02d}:{int(start_s%60):02d} "
                                f"a {int(end_s//60):02d}:{int(end_s%60):02d}.")
+                with st.expander("Buscar jugadas IA", expanded=False):
+                    st.caption("Busca posibles goles y otras acciones sin repetir el seguimiento. Los tiempos corresponden al vídeo original.")
+                    scan_end = float(end_s) if end_s is not None else float(start_s) + float(datos_tracking.get("match_duration_s", 0))
+                    with st.form("mv_rescan_actions"):
+                        scan_start = st.number_input("Desde (segundos del vídeo)", min_value=float(start_s), max_value=scan_end, value=float(start_s), step=1.0)
+                        scan_stop = st.number_input("Hasta (segundos del vídeo)", min_value=float(start_s), max_value=scan_end, value=scan_end, step=1.0)
+                        scan_actions = st.form_submit_button("Buscar jugadas en este tramo")
+                    if scan_actions:
+                        try:
+                            from action_review import analyze_saved_actions
+                            with st.spinner("Buscando jugadas en el fragmento…"):
+                                proposals = analyze_saved_actions(pista, ruta_gen, scan_start, scan_stop)
+                            st.session_state["mv_actions_result"] = f"Búsqueda completada: {len(proposals)} propuestas en el tramo seleccionado."
+                            st.rerun()
+                        except Exception:
+                            import logging
+                            logging.getLogger(__name__).exception("Action rescan failed")
+                            st.error("No se pudo completar la búsqueda de jugadas. Comprueba la preparación del motor de acciones.")
+                    if st.session_state.get("mv_actions_result"):
+                        st.info(st.session_state.pop("mv_actions_result"))
                 if "suggested_events" not in datos_tracking:
                     from event_candidates import suggest_key_moments
                     datos_tracking = dict(datos_tracking)
