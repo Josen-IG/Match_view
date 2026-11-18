@@ -1711,7 +1711,7 @@
       if (!items.length){
         var empty = document.createElement('p'); empty.className = 'ai-empty';
         empty.textContent = state.track ?
-          'No hay propuestas de jugadas en este análisis. Activa OpenSportsLab al analizar el vídeo para buscar acciones; las propuestas requieren revisión.' :
+          'No hay propuestas de jugadas en este análisis.' :
           'Analiza un vídeo para obtener sugerencias automáticas.';
         box.appendChild(empty); return;
       }
@@ -2116,10 +2116,7 @@
       var dom = tlDomain();
       var lt = $('laneTracking'); if (lt){
         lt.innerHTML = '';
-        if (state.samples.length){
-          var bar = document.createElement('div'); bar.className = 'tl-track-bar';
-          bar.textContent = 'Tracking IA · ' + state.samples.length.toLocaleString('es-ES') + ' muestras';
-          lt.appendChild(bar);
+        if (state.suggestedEvents.some(function(ev){return ev.status !== 'rejected';})){
           var dom = tlDomain();
           if (dom && dom.b > dom.a){
             state.suggestedEvents.forEach(function(ev){
@@ -2128,7 +2125,9 @@
               marker.type = 'button';
               marker.className = 'tl-ai-event ' + ev.type + (ev.status === 'confirmed' ? ' confirmed' : '');
               marker.style.left = seekPointPct(ev.t, dom.a, dom.b) + '%';
-              marker.textContent = ev.type === 'goal' ? 'G' : ev.type === 'corner' ? 'C' : 'T';
+              var symbols = {goal:'G',shot:'T',corner:'C',pass:'P',drive:'D',header:'H',high_pass:'PA',out:'F',cross:'CE',throw_in:'B',block:'BL',tackle:'E',free_kick:'TL'};
+              marker.textContent = symbols[ev.type] || 'A';
+              marker.setAttribute('aria-label', candidateName(ev) + ' · ' + fmtMatch(ev.t));
               marker.title = candidateName(ev) + ' · ' + fmtMatch(ev.t) + ' · Pulsa para revisar';
               marker.addEventListener('pointerdown', function(e){e.stopPropagation();});
               marker.addEventListener('click', function(e){
@@ -2139,7 +2138,9 @@
             });
           }
         } else {
-          lt.innerHTML = '<span class="tl-empty">Analiza un vídeo para obtener jugadas sugeridas</span>';
+          var empty = document.createElement('span'); empty.className = 'tl-empty';
+          empty.textContent = state.track ? 'Sin jugadas propuestas en este análisis' : 'Analiza un vídeo para obtener jugadas sugeridas';
+          lt.appendChild(empty);
         }
       }
       renderTlRuler();

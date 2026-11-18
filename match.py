@@ -1663,8 +1663,6 @@ elif st.session_state.pagina == "video":
                            if item.get("state") in ("error", "unavailable")]
                 if active:
                     st.caption("Componentes cargados: " + ", ".join(active))
-                if skipped:
-                    st.warning("Componentes omitidos: " + ", ".join(skipped) + ". El análisis usa los restantes.")
                 start_s = datos_tracking.get("analysis_start_s", datos_tracking.get("kickoff_s", 0))
                 end_s = datos_tracking.get("analysis_end_s")
                 if end_s is not None:
