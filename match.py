@@ -1566,6 +1566,11 @@ elif st.session_state.pagina == "video":
                                   "Primeros 10 minutos (prueba)").startswith("Primeros")
                             else 1,
                 )
+            usar_balon_especialista = st.checkbox(
+                "Reforzar detección del balón con YOLOv9", value=False,
+                help="Se usa cuando el detector principal no encuentra balón. "
+                     "La primera ejecución descarga los pesos; aumenta el tiempo de análisis.",
+            )
             iniciar = st.form_submit_button(
                 "Analizar vídeo", type="primary", use_container_width=False,
             )
@@ -1600,6 +1605,7 @@ elif st.session_state.pagina == "video":
                         "sample_fps": 10,
                         "min_confidence": 0.65,
                         "yolo_model": "modelo_propio.pt",
+                        "ball_model": "hf" if usar_balon_especialista else None,
                         "max_minutes": 10.0 if alcance_form.startswith("Primeros") else None,
                         "kickoff_offset": saque_segundos,
                         "camera_mode": "seguimiento",
@@ -1679,3 +1685,4 @@ elif st.session_state.pagina == "video":
                           "tracking_del_video", "video_analizado_path"):
                 st.session_state.pop(clave, None)
             st.rerun()
+

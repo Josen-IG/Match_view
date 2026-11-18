@@ -10,3 +10,4 @@ ultralytics
 lap>=0.5.12
 reportlab>=4.2
 XlsxWriter>=3.2
+huggingface_hub>=0.27,<2
