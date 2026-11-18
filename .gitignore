@@ -3,3 +3,4 @@ __pycache__/
 *_clips/
 yolo11n.pt
 .streamlit/secrets.toml
+.model-envs/
