@@ -1389,6 +1389,8 @@ def _track_video(
     pitch_keyframe_seconds: float = PITCH_KEYFRAME_SECONDS,
     device: str = "cpu",
     ball_sel: bool = False,
+    ball_model: str | None = None,
+    ball_conf: float = 0.2,
     pitch_only: bool = True,
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
@@ -1436,6 +1438,17 @@ def _track_video(
     except Exception as error:
         cap.release()
         raise VideoProcessingError(f"No se pudo cargar YOLO ({yolo_model}): {error}") from error
+
+    specialist = None
+    if ball_model:
+        try:
+            from ball_detector import SoccerBallDetector
+            specialist = SoccerBallDetector(ball_model, ball_conf, device, imgsz)
+        except Exception as error:
+            cap.release()
+            raise VideoProcessingError(
+                f"No se pudo cargar el detector adicional del balón: {error}"
+            ) from error
 
     # Modelo de keypoints del campo (opcional): pitch_model con ruta lo
     # usa; None usa pitch_keypoints.pt junto a este módulo si existe;
@@ -1565,20 +1578,28 @@ def _track_video(
                                     "w": (x1 - x0) / ancho * 100.0,
                                     "h": (y1 - y0) / alto * 100.0,
                                     "pitch_x": None, "pitch_y": None})
-                        # Elegir el balón entre las candidatas. Por defecto
-                        # (ball_sel=True) por compatibilidad con la trayectoria
-                        # prevista (Kalman) + confianza + tamaño; con
-                        # ball_sel=False, la de más confianza (comportamiento
-                        # anterior, para validación A/B).
-                        if candidatos_balon:
-                            if ball_sel:
-                                hs = sorted(d["h"] for d in detecciones)
-                                h_med = hs[len(hs) // 2] if hs else None
-                                balon, balon_pred = _elegir_balon(
-                                    candidatos_balon, balon_pred, t, h_med)
-                            else:
-                                balon = max(candidatos_balon,
-                                            key=lambda c: c["conf"])
+                # Fallback only: do not compare uncalibrated model scores.
+                if specialist is not None and not candidatos_balon:
+                    try:
+                        candidatos_balon = specialist.predict(frame, flip_x, flip_y)
+                    except Exception as error:
+                        raise VideoProcessingError(
+                            f"Falló el detector adicional del balón: {error}"
+                        ) from error
+                # Elegir el balón entre las candidatas. Por defecto
+                # (ball_sel=True) por compatibilidad con la trayectoria
+                # prevista (Kalman) + confianza + tamaño; con
+                # ball_sel=False, la de más confianza (comportamiento
+                # anterior, para validación A/B).
+                if candidatos_balon:
+                    if ball_sel:
+                        hs = sorted(d["h"] for d in detecciones)
+                        h_med = hs[len(hs) // 2] if hs else None
+                        balon, balon_pred = _elegir_balon(
+                            candidatos_balon, balon_pred, t, h_med)
+                    else:
+                        balon = max(candidatos_balon,
+                                    key=lambda c: c["conf"])
                 # Keyframe del campo: recalibrar la homografía con los
                 # keypoints visibles en este fotograma (0,20 s a 320 px).
                 if (modelo_campo is not None
@@ -1677,6 +1698,8 @@ def _track_video(
                             pp if pp is not None else (None, None))
                 muestras.append({"t": t, "t_video": t_video,
                                  "people": personas, "ball": balon,
+                                 "ball_detector": (balon.get("detector", "base")
+                                                   if balon else None),
                                  "predicted_people": predicted_people,
                                  "pitch_ok": pitch_ok,
                                  "pitch_calidad": mapper.calidad if pitch_ok
@@ -3071,6 +3094,8 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                  round(float(p["uncertainty_u"]), 2)]
                 for p in pred_people
             ]
+        if m.get("ball_detector"):
+            muestra_json["bd"] = m["ball_detector"]
         if bf is not None:
             muestra_json["bf"] = bf
         if bs and bs.get("sigma") is not None:
@@ -4210,6 +4235,8 @@ def _analizar_impl(
     formation_visitante: str = "",
     device: str = "cpu",
     ball_sel: bool = False,
+    ball_model: str | None = None,
+    ball_conf: float = 0.2,
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -4252,6 +4279,7 @@ def _analizar_impl(
         kickoff_offset, fin, update, conf=conf,
         pitch_model=pitch_model,
         ball_sel=ball_sel,
+        ball_model=ball_model, ball_conf=ball_conf,
         pitch_keyframe_seconds=pitch_keyframe_seconds,
         device=device,
     )
@@ -4375,6 +4403,8 @@ def analyze_video(
     pitch_model: str | None = None,
     device: str = "cpu",
     ball_sel: bool = False,
+    ball_model: str | None = None,
+    ball_conf: float = 0.2,
 ) -> list[dict]:
     """Analiza un vídeo (solo tracking) y devuelve la lista de eventos.
 
@@ -4404,6 +4434,7 @@ def analyze_video(
         color_gk_local=color_gk_local,
         color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
         conf=conf, pitch_model=pitch_model, device=device, ball_sel=ball_sel,
+        ball_model=ball_model, ball_conf=ball_conf,
     )["results"]
 
 
@@ -4436,6 +4467,8 @@ def analyze_video_full(
     formation_visitante: str = "",
     device: str = "cpu",
     ball_sel: bool = False,
+    ball_model: str | None = None,
+    ball_conf: float = 0.2,
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -4477,6 +4510,7 @@ def analyze_video_full(
         formation_visitante=formation_visitante,
         device=device,
         ball_sel=ball_sel,
+        ball_model=ball_model, ball_conf=ball_conf,
     )
 
 
@@ -4499,6 +4533,10 @@ if __name__ == "__main__":
     parser.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
     parser.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     parser.add_argument("--yolo-model", default=DEFAULT_YOLO_MODEL)
+    parser.add_argument("--ball-model", default=None,
+                        help="YOLOv9 ball weights path, or hf to download the pinned checkpoint")
+    parser.add_argument("--ball-conf", type=float, default=0.2)
+    parser.add_argument("--device", default="cpu")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Resolución de inferencia (1280 por defecto; "
                              "640 es más rápido pero ve peor el balón)")
@@ -4534,9 +4572,11 @@ if __name__ == "__main__":
         sample_fps=args.sample_fps, max_candidates=args.max_candidates,
         min_confidence=args.min_confidence, yolo_model=args.yolo_model,
         imgsz=args.imgsz, conf=args.conf,
+        ball_model=args.ball_model, ball_conf=args.ball_conf, device=args.device,
         max_minutes=args.max_minutes,
         kickoff_offset=parse_mmss(args.kickoff), camera_mode=args.camera_mode,
         pitch_model="" if args.sin_mapa else args.pitch_model,
         progress=lambda msg, frac: print(f"[{frac:.0%}] {msg}"),
     )
     print(json.dumps(informe, ensure_ascii=False, indent=2))
+
