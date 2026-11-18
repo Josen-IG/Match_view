@@ -581,11 +581,17 @@
         </section>
         <section class="ai-review" id="aiReview" aria-label="Jugadas sugeridas por IA">
           <div class="ai-review-head">
-            <div><h2>Jugadas sugeridas</h2><p>Solo se muestran eventos con evidencia verificable. Las antiguas sugerencias geométricas se han retirado.</p></div>
+            <div><h2>Jugadas sugeridas</h2><p>Propuestas del modelo de acciones. Revisa cada fragmento antes de confirmarlo; no se suman automáticamente a las estadísticas.</p></div>
             <span class="ai-count" id="aiCount">0 sugerencias</span>
           </div>
           <div class="ai-legend"><span class="ai-key shot">●</span>Tiro posible <span class="ai-key corner">●</span>Córner posible <span class="ai-key goal">●</span>Gol posible</div>
           <div class="ai-events-list" id="aiEventsList" aria-live="polite"><p class="ai-empty">Analiza un vídeo para ver posibles jugadas.</p></div>
+        </section>
+
+        <section class="ai-review" id="gsrReview" hidden aria-label="Identidades propuestas por SoccerNet">
+          <div class="ai-review-head"><div><h2>Identidades SoccerNet</h2>
+          <p>Identidades y dorsales propuestos. Izquierda/derecha no significa local/visitante. Los IDs originales se conservan.</p></div></div>
+          <div id="gsrIdentityList"></div>
         </section>
 
         <section class="mv-measured-analysis" aria-label="Analítica observada">
@@ -1669,8 +1675,12 @@
       } catch(_err){ /* almacenamiento opcional */ }
     }
     function candidateName(ev){
-      return ev.type === 'goal' ? 'Posible gol' :
-        ev.type === 'corner' ? 'Posible córner' : 'Posible tiro';
+      var names = {goal:'Posible gol',shot:'Posible tiro',corner:'Posible córner',
+        pass:'Posible pase',drive:'Posible conducción',header:'Posible cabeceo',
+        high_pass:'Posible pase alto',out:'Posible balón fuera',cross:'Posible centro',
+        throw_in:'Posible saque de banda',block:'Posible bloqueo',
+        tackle:'Posible entrada exitosa',free_kick:'Posible tiro libre'};
+      return names[ev.type] || 'Posible acción';
     }
     function seekPointsWithSuggestions(){
       var pts = collectSeekPoints(state.annotations, state.cuts, state.events, kickoff());
@@ -1691,7 +1701,7 @@
       if (!items.length){
         var empty = document.createElement('p'); empty.className = 'ai-empty';
         empty.textContent = state.track ?
-          'No hay tiros, córneres ni goles verificados automáticamente. Se han retirado las sugerencias geométricas que confundían pases o despejes con disparos.' :
+          'No hay propuestas de jugadas en este análisis. Activa OpenSportsLab al analizar el vídeo para buscar acciones; las propuestas requieren revisión.' :
           'Analiza un vídeo para obtener sugerencias automáticas.';
         box.appendChild(empty); return;
       }
@@ -1806,6 +1816,39 @@
       }
     }
     $('mvMeasuredPeriod').addEventListener('change',renderMeasuredAnalytics);
+    function renderGameStateIdentities(){
+      var panel = $('gsrReview'), list = $('gsrIdentityList');
+      if (!panel || !list) return;
+      list.replaceChildren();
+      panel.hidden = !(state.track && state.track.integrations && state.track.integrations.gamestate);
+      if (panel.hidden) return;
+      var identities = {};
+      state.samples.forEach(function(sample){
+        (sample.gi || []).forEach(function(person){
+          var key = String(person.external_track_id);
+          var item = identities[key] || (identities[key] = {n:0, bases:{}, person:person});
+          item.n++; item.bases[person.track_id] = true;
+        });
+      });
+      var keys = Object.keys(identities).sort(function(a,b){return Number(a)-Number(b);});
+      if (!keys.length){
+        list.textContent = 'SoccerNet no pudo asociar identidades con las personas observadas.'; return;
+      }
+      var table = document.createElement('table'), header = document.createElement('tr');
+      ['ID SoccerNet','IDs del seguimiento','Dorsal propuesto','Rol','Lado'].forEach(function(label){
+        var th=document.createElement('th'); th.textContent=label; header.appendChild(th);
+      });
+      table.appendChild(header);
+      keys.forEach(function(key){
+        var item=identities[key], person=item.person, row=document.createElement('tr');
+        [key,Object.keys(item.bases).join(', '),person.jersey_number == null ? '—' : person.jersey_number,
+          person.role || '—',person.team || '—'].forEach(function(value){
+          var cell=document.createElement('td');cell.textContent=String(value);row.appendChild(cell);
+        });
+        table.appendChild(row);
+      });
+      list.appendChild(table);
+    }
     function loadTracking(data, label){
       if (!data || !Array.isArray(data.samples)) { showMsg('Ese JSON no contiene el array «samples» del tracking.'); return; }
       state.track = data;
@@ -1820,7 +1863,7 @@
       state.suggestedEvents = Array.isArray(data.suggested_events) ?
         data.suggested_events.filter(function(ev){
           return ev && ev.source !== 'ball_pitch_heuristic' &&
-            ['shot','corner','goal'].indexOf(ev.type) >= 0 &&
+            ['shot','corner','goal','pass','drive','header','high_pass','out','cross','throw_in','block','tackle','free_kick'].indexOf(ev.type) >= 0 &&
             typeof ev.t === 'number' && isFinite(ev.t) &&
             typeof ev.start_s === 'number' && typeof ev.end_s === 'number' &&
             ev.end_s > ev.start_s;
@@ -1838,6 +1881,7 @@
       buildMarkers();
       renderTimeline();
       renderSuggestedMoments();
+      renderGameStateIdentities();
       buildMeasuredPeriods();
       renderMeasuredAnalytics();
       renderPossessionPanel(true);

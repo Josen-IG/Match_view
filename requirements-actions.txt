@@ -1,0 +1,2 @@
+# Install only in an independent Python >=3.12 environment.
+opensportslib @ git+https://github.com/OpenSportsLab/opensportslib.git@b2fe8f16a35336d93b1b0eabe1741bbbbc36cd68

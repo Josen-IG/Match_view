@@ -1,0 +1,4 @@
+# Optional stage 2. Historical checkpoint loader matches the author's Base API.
+rfdetr==1.2.1
+torch>=2.6
+huggingface_hub>=0.27,<2

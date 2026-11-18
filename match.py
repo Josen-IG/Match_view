@@ -1571,6 +1571,23 @@ elif st.session_state.pagina == "video":
                 help="Se usa cuando el detector principal no encuentra balón. "
                      "La primera ejecución descarga los pesos; aumenta el tiempo de análisis.",
             )
+            usar_rfdetr = st.checkbox(
+                "Revisar detecciones con RF-DETR SoccerNet", value=False,
+                help="Revisa fotogramas sin balón tras los detectores anteriores. "
+                     "Descarga unos 1,6 GB la primera vez y aumenta el tiempo de análisis.",
+            )
+            usar_campo_32 = st.checkbox(
+                "Calibrar el campo con YOLO Football Pitch Detection", value=False,
+                help="Usa 32 puntos del terreno para calcular el radar. Requiere más tiempo de análisis.",
+            )
+            usar_acciones = st.checkbox(
+                "Proponer jugadas con OpenSportsLab", value=False,
+                help="Busca posibles pases, tiros, goles y otras acciones para revisar. Requiere el entorno de acciones.",
+            )
+            usar_gamestate = st.checkbox(
+                "Añadir identificación con SoccerNet Game State", value=False,
+                help="Añade dorsales e identidades propuestas. Requiere su entorno independiente configurado.",
+            )
             iniciar = st.form_submit_button(
                 "Analizar vídeo", type="primary", use_container_width=False,
             )
@@ -1606,12 +1623,15 @@ elif st.session_state.pagina == "video":
                         "min_confidence": 0.65,
                         "yolo_model": "modelo_propio.pt",
                         "ball_model": "hf" if usar_balon_especialista else None,
+                        "rfdetr_model": "hf" if usar_rfdetr else None,
+                        "actions_enabled": usar_acciones,
+                        "gamestate_enabled": usar_gamestate,
                         "max_minutes": 10.0 if alcance_form.startswith("Primeros") else None,
                         "kickoff_offset": saque_segundos,
                         "camera_mode": "seguimiento",
                         "formation_local": dp.get("form_local", ""),
                         "formation_visitante": dp.get("form_visitante", ""),
-                        "pitch_model": None,
+                        "pitch_model": "hf32" if usar_campo_32 else None,
                         "device": "cpu",
                     }
                     if hasattr(st, "fragment"):
@@ -1685,4 +1705,3 @@ elif st.session_state.pagina == "video":
                           "tracking_del_video", "video_analizado_path"):
                 st.session_state.pop(clave, None)
             st.rerun()
-
