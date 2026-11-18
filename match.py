@@ -170,9 +170,11 @@ def servir_video(ruta):
     ruta = str(ruta)
     if not os.path.isfile(ruta):
         return ""
+    from playback_media import media_version
+    version = media_version(ruta)
     srv = _VIDEO_SERVE.get("server")
     if srv is not None and _VIDEO_SERVE.get("path") == ruta:
-        return f"http://127.0.0.1:{_VIDEO_SERVE['port']}/video.mp4"
+        return f"http://127.0.0.1:{_VIDEO_SERVE['port']}/video.mp4?v={version}"
     _VIDEO_SERVE["path"] = ruta
     if srv is None:
         try:
@@ -186,7 +188,7 @@ def servir_video(ruta):
             _VIDEO_SERVE["server"] = None
             _VIDEO_SERVE["error"] = str(err)
             return ""
-    return f"http://127.0.0.1:{_VIDEO_SERVE['port']}/video.mp4"
+    return f"http://127.0.0.1:{_VIDEO_SERVE['port']}/video.mp4?v={version}"
 
 
 st.set_page_config(page_title="Match View - Regional Preferente Navarra", layout="wide")
@@ -1661,13 +1663,31 @@ elif st.session_state.pagina == "video":
                            if item.get("state") in ("error", "unavailable")]
                 if active:
                     st.caption("Componentes cargados: " + ", ".join(active))
-                if skipped:
-                    st.warning("Componentes omitidos: " + ", ".join(skipped) + ". El análisis usa los restantes.")
                 start_s = datos_tracking.get("analysis_start_s", datos_tracking.get("kickoff_s", 0))
                 end_s = datos_tracking.get("analysis_end_s")
                 if end_s is not None:
                     st.caption(f"Intervalo analizado del vídeo: {int(start_s//60):02d}:{int(start_s%60):02d} "
                                f"a {int(end_s//60):02d}:{int(end_s%60):02d}.")
+                with st.expander("Buscar jugadas IA", expanded=False):
+                    st.caption("Busca posibles goles y otras acciones sin repetir el seguimiento. Los tiempos corresponden al vídeo original.")
+                    scan_end = float(end_s) if end_s is not None else float(start_s) + float(datos_tracking.get("match_duration_s", 0))
+                    with st.form("mv_rescan_actions"):
+                        scan_start = st.number_input("Desde (segundos del vídeo)", min_value=float(start_s), max_value=scan_end, value=float(start_s), step=1.0)
+                        scan_stop = st.number_input("Hasta (segundos del vídeo)", min_value=float(start_s), max_value=scan_end, value=scan_end, step=1.0)
+                        scan_actions = st.form_submit_button("Buscar jugadas en este tramo")
+                    if scan_actions:
+                        try:
+                            from action_review import analyze_saved_actions
+                            with st.spinner("Buscando jugadas en el fragmento…"):
+                                proposals = analyze_saved_actions(pista, ruta_gen, scan_start, scan_stop)
+                            st.session_state["mv_actions_result"] = f"Búsqueda completada: {len(proposals)} propuestas en el tramo seleccionado."
+                            st.rerun()
+                        except Exception:
+                            import logging
+                            logging.getLogger(__name__).exception("Action rescan failed")
+                            st.error("No se pudo completar la búsqueda de jugadas. Comprueba la preparación del motor de acciones.")
+                    if st.session_state.get("mv_actions_result"):
+                        st.info(st.session_state.pop("mv_actions_result"))
                 if "suggested_events" not in datos_tracking:
                     from event_candidates import suggest_key_moments
                     datos_tracking = dict(datos_tracking)
@@ -1675,7 +1695,18 @@ elif st.session_state.pagina == "video":
                         datos_tracking.get("samples") or [],
                         kickoff_s=float(datos_tracking.get("kickoff_s") or 0),
                     )
-                url_video = servir_video(ruta_gen)
+                from playback_media import prepare_playback_clip
+                sample_times = [sample["t"] for sample in datos_tracking.get("samples", [])]
+                start_s = datos_tracking.get("analysis_start_s", datos_tracking.get("kickoff_s", 0))
+                end_s = datos_tracking.get("analysis_end_s")
+                if end_s is None:
+                    duration_s = datos_tracking.get("match_duration_s")
+                    end_s = float(start_s) + float(duration_s) if duration_s else (max(sample_times) if sample_times else None)
+                if end_s is None:
+                    raise ValueError("No se puede determinar el intervalo de reproducción.")
+                with st.spinner("Preparando el fragmento de vídeo del intervalo analizado…"):
+                    playback_path, playback_offset = prepare_playback_clip(ruta_gen, start_s, end_s)
+                url_video = servir_video(playback_path)
                 inj = ("<script>window.TRACKING_DATA = "
                        + json.dumps(datos_tracking, ensure_ascii=False,
                                     separators=(",", ":")).replace("<", "\\u003c")
@@ -1684,6 +1715,7 @@ elif st.session_state.pagina == "video":
                        + ";")
                 if url_video:
                     inj += ("window.VIDEO_URL = " + json.dumps(url_video)
+                            + "; window.VIDEO_OFFSET_S = " + json.dumps(playback_offset)
                             + "; window.VIDEO_NAME = "
                             + json.dumps(Path(ruta_gen).name, ensure_ascii=False)
                             + ";")
@@ -1692,7 +1724,7 @@ elif st.session_state.pagina == "video":
                     "<!-- TRACKING_DATA -->", inj, 1,
                 )
                 components.html(html_pantalla, height=1180, scrolling=True)
-            except (OSError, TypeError, ValueError) as error:
+            except (OSError, TypeError, ValueError, RuntimeError) as error:
                 st.error(f"No se pudo cargar el análisis: {error}")
         # Sólo este control discreto permite regresar al formulario.
         if st.button("Analizar otro vídeo", key="mv_video_new_analysis"):

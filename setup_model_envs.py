@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 
 GSR_REVISION = "1c958345067218297d221e45e1a6405f975f83e0"
 
@@ -13,19 +14,27 @@ def main():
     parser.add_argument("model", choices=["actions", "gamestate"])
     args = parser.parse_args()
     uv = shutil.which("uv")
-    if not uv:
-        raise SystemExit("Instala uv primero: python -m pip install uv")
     root = Path(__file__).resolve().parent
     base = root / ".model-envs"
     env = base / args.model
     python = env / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     run = lambda command, cwd=None: subprocess.run(command, check=True, cwd=cwd)
     if not python.is_file():
-        run([uv, "venv", "--python", "3.12" if args.model == "actions" else "3.9", str(env)])
+        if uv:
+            run([uv, "venv", "--python", "3.12" if args.model == "actions" else "3.9", str(env)])
+        elif args.model == "actions" and sys.version_info >= (3, 12):
+            run([sys.executable, "-m", "venv", str(env)])
+        else:
+            raise SystemExit("Instala uv o ejecuta este script con Python 3.12 para actions.")
     if args.model == "actions":
-        run([uv, "pip", "install", "--python", str(python), "-r", str(root / "requirements-actions.txt")])
+        install = [uv, "pip", "install", "--python", str(python)] if uv else [str(python), "-m", "pip", "install"]
+        run(install + ["-r", str(root / "requirements-actions.txt")])
+        subprocess.run([str(python), "-c", "from opensportslib.apis import LocalizationModel; import torch; import torchvision"], check=True)
+        print("Entorno de acciones preparado. Match View lo detectará automáticamente.")
         key = "MATCHVIEW_OSL_PYTHON"
     else:
+        if not uv:
+            raise SystemExit("Instala uv primero: python -m pip install uv")
         checkout = base / "sn-gamestate"
         if not checkout.exists():
             run(["git", "clone", "https://github.com/SoccerNet/sn-gamestate.git", str(checkout)])

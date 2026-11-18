@@ -72,6 +72,11 @@ def worker_python(kind):
         if not path.is_file():
             raise FileNotFoundError(f"{key} no apunta a un intérprete Python existente: {path}")
         return str(path.resolve())
+    # Environments created by setup_model_envs.py work across terminal sessions.
+    local = Path(__file__).resolve().parent / ".model-envs" / kind / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if local.is_file():
+        return str(local)
     if kind == "actions" and sys.version_info >= (3, 12):
         return sys.executable
     raise RuntimeError(
@@ -194,3 +199,4 @@ def attach_gamestate(samples, payload, offset, flip_x=False, flip_y=False):
                 matched += 1
     return {"source": "soccernet_gamestate", "matched_observations": matched,
             "external_detections": sum(map(len, frames.values()))}
+

@@ -39,10 +39,13 @@ class MinimalVideoFlowTests(unittest.TestCase):
             self.assertNotIn(forbidden, self.video)
 
     def test_video_is_passed_to_html_automatically(self):
-        self.assertIn('servir_video(ruta_gen)', self.video)
+        self.assertIn('servir_video(playback_path)', self.video)
+        self.assertIn('prepare_playback_clip(ruta_gen, start_s, end_s)', self.video)
+        self.assertIn('window.VIDEO_OFFSET_S', self.video)
         self.assertIn('window.VIDEO_URL', self.video)
         self.assertIn('window.TRACKING_DATA', self.video)
 
 
 if __name__ == "__main__":
     unittest.main()
+
