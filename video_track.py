@@ -1391,6 +1391,8 @@ def _track_video(
     ball_sel: bool = False,
     ball_model: str | None = None,
     ball_conf: float = 0.2,
+    rfdetr_model: str | None = None,
+    rfdetr_conf: float = 0.4,
     pitch_only: bool = True,
 ) -> tuple[list[dict], float, dict[int, str]]:
     """Pasa YOLO por el vídeo fotograma a fotograma con IDs persistentes.
@@ -1448,6 +1450,18 @@ def _track_video(
             cap.release()
             raise VideoProcessingError(
                 f"No se pudo cargar el detector adicional del balón: {error}"
+            ) from error
+
+    reviewer = None
+    if rfdetr_model:
+        progress("Cargando RF-DETR SoccerNet (primera descarga: unos 1,6 GB).", 0.03)
+        try:
+            from rfdetr_detector import SoccerNetDetector
+            reviewer = SoccerNetDetector(rfdetr_model, rfdetr_conf, device)
+        except Exception as error:
+            cap.release()
+            raise VideoProcessingError(
+                f"No se pudo cargar RF-DETR SoccerNet: {error}"
             ) from error
 
     # Modelo de keypoints del campo (opcional): pitch_model con ruta lo
@@ -1586,6 +1600,18 @@ def _track_video(
                         raise VideoProcessingError(
                             f"Falló el detector adicional del balón: {error}"
                         ) from error
+                # Second fallback: only review frames still missing a ball.
+                rf_review = None
+                if reviewer is not None and not candidatos_balon:
+                    try:
+                        from rfdetr_detector import review_people
+                        rf_review = reviewer.predict(frame, flip_x, flip_y)
+                        candidatos_balon = rf_review["ball"]
+                        review_people(detecciones, rf_review["people"])
+                    except Exception as error:
+                        raise VideoProcessingError(
+                            f"Falló la revisión RF-DETR SoccerNet: {error}"
+                        ) from error
                 # Elegir el balón entre las candidatas. Por defecto
                 # (ball_sel=True) por compatibilidad con la trayectoria
                 # prevista (Kalman) + confianza + tamaño; con
@@ -1666,6 +1692,7 @@ def _track_video(
                         "team": "desconocido",
                         "detection_confidence": max(0.0, min(1.0, float(det["conf"]))),
                         "color_rgb": _hsv_a_hex(det["hsv"]),
+                        "rfdetr_review": det.get("rfdetr_review"),
                     })
                     equipo_det = det["team_hint"]
                     votos_color[tid][equipo_det] += 1
@@ -1698,6 +1725,7 @@ def _track_video(
                             pp if pp is not None else (None, None))
                 muestras.append({"t": t, "t_video": t_video,
                                  "people": personas, "ball": balon,
+                                 "rfdetr_reviewed": rf_review is not None,
                                  "ball_detector": (balon.get("detector", "base")
                                                    if balon else None),
                                  "predicted_people": predicted_people,
@@ -3094,6 +3122,14 @@ def export_tracking_json(muestras: list[dict], informe: dict,
                  round(float(p["uncertainty_u"]), 2)]
                 for p in pred_people
             ]
+        if m.get("rfdetr_reviewed"):
+            muestra_json["rr"] = True
+            reviews = [
+                {"track_id": p["track_id"], **p["rfdetr_review"]}
+                for p in m.get("people", []) if p.get("rfdetr_review")
+            ]
+            if reviews:
+                muestra_json["rv"] = reviews
         if m.get("ball_detector"):
             muestra_json["bd"] = m["ball_detector"]
         if bf is not None:
@@ -4237,6 +4273,8 @@ def _analizar_impl(
     ball_sel: bool = False,
     ball_model: str | None = None,
     ball_conf: float = 0.2,
+    rfdetr_model: str | None = None,
+    rfdetr_conf: float = 0.4,
 ) -> dict:
     video_path = Path(video_path).expanduser().resolve()
     if not 1 <= sample_fps <= 10:
@@ -4280,6 +4318,7 @@ def _analizar_impl(
         pitch_model=pitch_model,
         ball_sel=ball_sel,
         ball_model=ball_model, ball_conf=ball_conf,
+        rfdetr_model=rfdetr_model, rfdetr_conf=rfdetr_conf,
         pitch_keyframe_seconds=pitch_keyframe_seconds,
         device=device,
     )
@@ -4405,6 +4444,8 @@ def analyze_video(
     ball_sel: bool = False,
     ball_model: str | None = None,
     ball_conf: float = 0.2,
+    rfdetr_model: str | None = None,
+    rfdetr_conf: float = 0.4,
 ) -> list[dict]:
     """Analiza un vídeo (solo tracking) y devuelve la lista de eventos.
 
@@ -4435,6 +4476,7 @@ def analyze_video(
         color_gk_visitante=color_gk_visitante, color_arbitro=color_arbitro,
         conf=conf, pitch_model=pitch_model, device=device, ball_sel=ball_sel,
         ball_model=ball_model, ball_conf=ball_conf,
+        rfdetr_model=rfdetr_model, rfdetr_conf=rfdetr_conf,
     )["results"]
 
 
@@ -4469,6 +4511,8 @@ def analyze_video_full(
     ball_sel: bool = False,
     ball_model: str | None = None,
     ball_conf: float = 0.2,
+    rfdetr_model: str | None = None,
+    rfdetr_conf: float = 0.4,
 ) -> dict:
     """Como analyze_video, pero devuelve el informe completo.
 
@@ -4511,6 +4555,7 @@ def analyze_video_full(
         device=device,
         ball_sel=ball_sel,
         ball_model=ball_model, ball_conf=ball_conf,
+        rfdetr_model=rfdetr_model, rfdetr_conf=rfdetr_conf,
     )
 
 
@@ -4536,6 +4581,9 @@ if __name__ == "__main__":
     parser.add_argument("--ball-model", default=None,
                         help="YOLOv9 ball weights path, or hf to download the pinned checkpoint")
     parser.add_argument("--ball-conf", type=float, default=0.2)
+    parser.add_argument("--rfdetr-model", default=None,
+                        help="SoccerNet .pth path, or hf for the pinned public checkpoint")
+    parser.add_argument("--rfdetr-conf", type=float, default=0.4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Resolución de inferencia (1280 por defecto; "
@@ -4573,10 +4621,10 @@ if __name__ == "__main__":
         min_confidence=args.min_confidence, yolo_model=args.yolo_model,
         imgsz=args.imgsz, conf=args.conf,
         ball_model=args.ball_model, ball_conf=args.ball_conf, device=args.device,
+        rfdetr_model=args.rfdetr_model, rfdetr_conf=args.rfdetr_conf,
         max_minutes=args.max_minutes,
         kickoff_offset=parse_mmss(args.kickoff), camera_mode=args.camera_mode,
         pitch_model="" if args.sin_mapa else args.pitch_model,
         progress=lambda msg, frac: print(f"[{frac:.0%}] {msg}"),
     )
     print(json.dumps(informe, ensure_ascii=False, indent=2))
-

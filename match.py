@@ -1571,6 +1571,11 @@ elif st.session_state.pagina == "video":
                 help="Se usa cuando el detector principal no encuentra balón. "
                      "La primera ejecución descarga los pesos; aumenta el tiempo de análisis.",
             )
+            usar_rfdetr = st.checkbox(
+                "Revisar detecciones con RF-DETR SoccerNet", value=False,
+                help="Revisa fotogramas sin balón tras los detectores anteriores. "
+                     "Descarga unos 1,6 GB la primera vez y aumenta el tiempo de análisis.",
+            )
             iniciar = st.form_submit_button(
                 "Analizar vídeo", type="primary", use_container_width=False,
             )
@@ -1606,6 +1611,7 @@ elif st.session_state.pagina == "video":
                         "min_confidence": 0.65,
                         "yolo_model": "modelo_propio.pt",
                         "ball_model": "hf" if usar_balon_especialista else None,
+                        "rfdetr_model": "hf" if usar_rfdetr else None,
                         "max_minutes": 10.0 if alcance_form.startswith("Primeros") else None,
                         "kickoff_offset": saque_segundos,
                         "camera_mode": "seguimiento",
@@ -1685,4 +1691,3 @@ elif st.session_state.pagina == "video":
                           "tracking_del_video", "video_analizado_path"):
                 st.session_state.pop(clave, None)
             st.rerun()
-
